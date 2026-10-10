@@ -16,6 +16,8 @@ import { kv, section, shell, statCard, type Panel } from './common';
 
 interface RouteDetail {
   dirs: { stations: string[]; load: number[]; capacity: number[] }[];
+  /** Loads are yesterday's (else today's so far). */
+  yesterday: boolean;
   ridersToday: number;
   ridersYesterday: number;
   inService: number;
@@ -61,8 +63,10 @@ function fleetLine(app: App, r: Route): HTMLElement {
       ['Trains owned', String(owned)],
     ]),
     plan.carsToBuy > 0
-      ? h('div', { class: app.game.finance.canAfford(plan.cost) ? 'warn' : 'err' }, `Needs ${plan.carsToBuy} more cars · ${fmtMoney(plan.cost)}`)
-      : null,
+      ? h('div', { class: app.game.finance.canAfford(plan.cost) ? 'warn' : 'err' }, `Needs ${plan.carsToBuy} more cars · ${fmtMoney(plan.cost)}${plan.fromSpare ? ` (plus ${plan.fromSpare} spare)` : ''}`)
+      : plan.fromSpare > 0
+        ? h('div', { class: 'warn' }, `Uses ${plan.fromSpare} spare cars from deleted routes`)
+        : null,
   );
 }
 
@@ -139,7 +143,7 @@ export function routePanel(app: App, id: number): Panel {
       h('button', {
         class: 'hw-btn small danger',
         onclick: async () => {
-          if (await app.confirm(`Delete route ${r.bullet}?`, 'Its trains are kept (and still cost maintenance) in case you make another route.', 'Delete', true)) {
+          if (await app.confirm(`Delete route ${r.bullet}?`, 'Its cars go to a spare pool (still costing maintenance) and are reused before new ones are bought.', 'Delete', true)) {
             game.routes.remove(r.id);
             game.events.emit('routes', undefined);
             game.select(null);
@@ -168,6 +172,7 @@ export function routePanel(app: App, id: number): Panel {
       charts.append(h('div', { class: 'hw-muted', style: 'font-size:12.5px' }, op.ok ? 'Load profile appears after the first morning rush.' : 'Not running yet.'));
       return;
     }
+    charts.append(h('div', { class: 'hw-muted', style: 'font-size:11.5px' }, detail.yesterday ? 'Yesterday' : 'Today so far'));
     detail.dirs.forEach((d) => {
       const terminal = d.stations[d.stations.length - 1];
       const wrap = h('div', { class: 'chart' });

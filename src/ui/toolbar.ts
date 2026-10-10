@@ -63,7 +63,11 @@ export class Toolbar {
   }
 
   private toggleOverlayMenu(force?: boolean): void {
-    const open = force ?? this.overlayMenu.style.display === 'none';
+    const wasOpen = this.overlayMenu.style.display !== 'none';
+    const open = force ?? !wasOpen;
+    // No re-render when nothing changes: rebuilding the tool options between mousedown and
+    // mouseup would swallow clicks on them.
+    if (open === wasOpen) return;
     this.overlayMenu.style.display = open ? 'flex' : 'none';
     if (open) {
       const r = this.overlayBtn.getBoundingClientRect();

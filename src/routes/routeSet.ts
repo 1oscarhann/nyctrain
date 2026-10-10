@@ -1,7 +1,7 @@
 /**
  * The player's routes, with cached paths along the track.
  */
-import { OPERATIONS, STATION, TRAINS } from '../balance';
+import { OPERATIONS, STATION, TRAINS, type TrackClass } from '../balance';
 import type { Network } from '../construction/network';
 import { findRoutePath, pathEdges } from './pathfind';
 import { PERIOD_IDS, ROUTE_COLORS, type PeriodId, type Route, type RoutePath } from './types';
@@ -9,6 +9,8 @@ import { PERIOD_IDS, ROUTE_COLORS, type PeriodId, type Route, type RoutePath } f
 export class RouteSet {
   routes = new Map<number, Route>();
   nextId = 1;
+  /** Cars left over from deleted routes, by class: reused before buying new ones. */
+  spareCars: Record<TrackClass, number> = { heavy: 0, light: 0 };
   private cache = new Map<number, { key: string; path: RoutePath }>();
   version = 0;
 
@@ -33,6 +35,8 @@ export class RouteSet {
   }
 
   remove(id: number): void {
+    const r = this.routes.get(id);
+    if (r) this.spareCars[r.cls] += r.ownedCars;
     this.routes.delete(id);
     this.invalidate();
   }
@@ -111,16 +115,24 @@ export class RouteSet {
     return '?';
   }
 
-  toData(): { routes: Route[]; nextId: number } {
-    return { routes: JSON.parse(JSON.stringify(this.list())), nextId: this.nextId };
+  toData(): RouteSetData {
+    return { routes: JSON.parse(JSON.stringify(this.list())), nextId: this.nextId, spareCars: { ...this.spareCars } };
   }
 
-  load(d: { routes: Route[]; nextId: number }): void {
+  load(d: RouteSetData): void {
     this.routes.clear();
     for (const r of d.routes) this.routes.set(r.id, { ...r, headways: { ...r.headways }, stops: [...r.stops] });
     this.nextId = d.nextId;
+    this.spareCars = { heavy: d.spareCars?.heavy ?? 0, light: d.spareCars?.light ?? 0 };
     this.invalidate();
   }
+}
+
+export interface RouteSetData {
+  routes: Route[];
+  nextId: number;
+  /** Added after save v2 shipped; missing means none. */
+  spareCars?: Record<TrackClass, number>;
 }
 
 export function routeLabel(r: Route): string {

@@ -3,7 +3,7 @@
  * Pure logic — the headless sim drives it directly.
  */
 import { ECONOMY } from '../balance';
-import { isNewMonth, monthKey, monthLabel } from '../core/calendar';
+import { isNewMonth, monthKey, monthLabel, weekdaysInMonth } from '../core/calendar';
 
 export type SpendCategory = 'construction' | 'trains';
 
@@ -51,9 +51,8 @@ export interface DayInputs {
   day: number;
   /** Boardings (for reports and goals). */
   riders: number;
-  /** Fare-paying journeys: transfers are free, so one fare per linked trip. */
-  trips: number;
-  fare: number;
+  /** Fares collected: one per linked journey (transfers are free), at the fare when it boarded. */
+  revenue: number;
   carKm: number;
   stationsOpen: number;
 }
@@ -168,11 +167,14 @@ export class Finance {
    * payments when a new month starts. Returns the closed ledger.
    */
   settleDay(inp: DayInputs): DayLedger {
+    // A day is settled once (e.g. a save taken just before midnight re-closes it on load).
+    const last = this.history[this.history.length - 1];
+    if (last && inp.day <= last.day) return last;
     const d = this.today;
     d.day = inp.day;
     d.riders = inp.riders;
     d.carKm = inp.carKm;
-    d.revenue = inp.trips * inp.fare;
+    d.revenue = inp.revenue;
     d.operating = inp.carKm * ECONOMY.operatingPerCarKm;
     d.staffing = inp.stationsOpen * ECONOMY.staffingPerStationDay;
     d.maintenance = (this.assetValue * ECONOMY.maintenanceRatePerYear) / ECONOMY.daysPerYear;
@@ -180,8 +182,12 @@ export class Finance {
     if (isNewMonth(inp.day + 1)) {
       for (const b of this.bonds) {
         if (b.balance <= 0) continue;
-        const interest = (b.balance * ECONOMY.bondRate) / 12;
-        const pay = Math.min(b.monthlyPayment, b.balance + interest);
+        // In the month a bond is issued it pays interest only, for the days it was held; level
+        // instalments start at the end of its first full month.
+        const issueMonth = monthKey(b.issuedDay) === monthKey(inp.day);
+        const held = issueMonth ? Math.min(1, (inp.day - b.issuedDay + 1) / weekdaysInMonth(inp.day)) : 1;
+        const interest = ((b.balance * ECONOMY.bondRate) / 12) * held;
+        const pay = issueMonth ? interest : Math.min(b.monthlyPayment, b.balance + interest);
         d.bondInterest += interest;
         d.bondPrincipal += pay - interest;
         b.balance = Math.max(0, b.balance - (pay - interest));

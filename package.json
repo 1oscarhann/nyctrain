@@ -15,7 +15,8 @@
     "test:unit": "vitest run --exclude tests/headless.test.ts",
     "test:headless": "vitest run tests/headless.test.ts",
     "sim": "tsx scripts/headless-sim.ts",
-    "balance": "tsx scripts/balance.ts"
+    "balance": "tsx scripts/balance.ts",
+    "perf": "tsx scripts/perf.ts"
   },
   "dependencies": {
     "@deck.gl/core": "~9.2.11",

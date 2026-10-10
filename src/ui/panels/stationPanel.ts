@@ -74,6 +74,7 @@ export function stationPanel(app: App, id: number): Panel {
   );
   const stats = h('div', { class: 'stat-grid', style: 'margin-top:8px' });
   const chartWrap = h('div', { class: 'chart' });
+  if (s.status !== 'built') chartWrap.append(h('div', { class: 'hw-muted', style: 'font-size:12.5px' }, 'Ridership appears once the station opens.'));
   const flowsWrap = h('div');
   body.append(statusLine ?? '', routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, section('Station'), kv([
     ['Level', cap(LEVEL_NAMES[level])],

@@ -453,21 +453,6 @@ export class Commuters implements PassengerHooks {
 
   /** 3 am: update mode shares from yesterday's experience, then everyone plans their day. */
   dailyModeChoice(t: number): void {
-    // Finish yesterday's observations.
-    for (let g = 0; g < this.G; g++) {
-      const n = this.todayTimeN[g];
-      if (n > 0) {
-        this.obsTime[g] = this.todayTimeSum[g] / n;
-        this.obsCrowd[g] = this.todayCrowdSum[g] / n;
-      } else {
-        // Nobody from this pair rode yesterday: fall back to the timetable.
-        this.obsTime[g] = 0;
-        this.obsCrowd[g] = 0;
-      }
-    }
-    this.todayTimeSum.fill(0);
-    this.todayTimeN.fill(0);
-    this.todayCrowdSum.fill(0);
     // New shares.
     for (let g = 0; g < this.G; g++) {
       const am = this.pathAM[g], pm = this.pathPM[g];
@@ -708,6 +693,8 @@ export class Commuters implements PassengerHooks {
       }
       this.leaveQueue(a);
       this.aState[a] = S_RIDE;
+      // One fare per journey, at the fare in force when it first boards (transfers are free).
+      if (!this.aBoarded[a]) this.day.fareRevenue += this.fare;
       this.aBoarded[a] = 1;
       (train.buckets[k] ??= []).push(a);
       train.load++;
@@ -813,6 +800,7 @@ export class Commuters implements PassengerHooks {
       day,
       riders: [...d.routeBoard.values()].reduce((s, n) => s + n, 0) * this.scale,
       fareTrips: d.transitTrips * this.scale,
+      fareRevenue: d.fareRevenue * this.scale,
       commuters: totalAgents * this.scale,
       transitShare: transitCommuters / totalAgents,
       walkShare: d.modeCount[MODE_WALK] / totalAgents,
@@ -845,7 +833,29 @@ export class Commuters implements PassengerHooks {
     this.peakLoad.fill(0);
     this.peakTrains.fill(0);
     this.day = newDayStats(day + 1);
+    this.finishObservations();
     return report;
+  }
+
+  /**
+   * Midnight: turn the day's experienced transit times into tomorrow's observations. Done at
+   * midnight (not 3 am) so the midnight autosave already holds them.
+   */
+  private finishObservations(): void {
+    for (let g = 0; g < this.G; g++) {
+      const n = this.todayTimeN[g];
+      if (n > 0) {
+        this.obsTime[g] = this.todayTimeSum[g] / n;
+        this.obsCrowd[g] = this.todayCrowdSum[g] / n;
+      } else {
+        // Nobody from this pair rode today: fall back to the timetable.
+        this.obsTime[g] = 0;
+        this.obsCrowd[g] = 0;
+      }
+    }
+    this.todayTimeSum.fill(0);
+    this.todayTimeN.fill(0);
+    this.todayCrowdSum.fill(0);
   }
 
   /** Expected transit riders per group today (agents × transit share). */
@@ -862,7 +872,7 @@ export class Commuters implements PassengerHooks {
     if (si !== undefined) {
       for (let h = 0; h < 24; h++) hourlyToday[h] = this.stationHourly[si * 24 + h];
       leftToday = this.stationLeft[si];
-      if (this.last.stationHourly.length === this.stationHourly.length) {
+      if (this.last.netVersion === net?.version && this.last.stationHourly.length === this.stationHourly.length) {
         for (let h = 0; h < 24; h++) hourlyYesterday[h] = this.last.stationHourly[si * 24 + h];
         leftYesterday = this.last.stationLeft[si];
       }
@@ -894,9 +904,17 @@ export class Commuters implements PassengerHooks {
     const net = this.net;
     if (ri === undefined || !net || !this.graph) return null;
     const r = net.routes[ri];
-    const useLast = this.last.peakLoad.length === this.peakLoad.length;
-    const src = useLast ? this.last.peakLoad : this.peakLoad;
-    const srcT = useLast ? this.last.peakTrains : this.peakTrains;
+    // Yesterday's peak loads when they describe this same network and the route carried
+    // anyone; otherwise today's so far (a new route, or the first day).
+    let ranYesterday = false;
+    if (this.last.netVersion === net.version && this.last.peakLoad.length === this.peakLoad.length) {
+      for (const d of [0, 1]) {
+        const base = this.graph.base[ri][d];
+        for (let k = 0; k < r.dirs[d].stopS.length - 1; k++) if (this.last.peakLoad[base + k] > 0) ranYesterday = true;
+      }
+    }
+    const src = ranYesterday ? this.last.peakLoad : this.peakLoad;
+    const srcT = ranYesterday ? this.last.peakTrains : this.peakTrains;
     const dirs = [0, 1].map((d) => {
       const n = r.dirs[d].stopS.length;
       const base = this.graph!.base[ri][d];
@@ -908,7 +926,7 @@ export class Commuters implements PassengerHooks {
       }
       return { stations: Array.from(r.dirs[d].stopStation, (si) => net.stations[si].name), load, capacity };
     });
-    return { dirs, ridersToday: (this.day.routeBoard.get(routeId) ?? 0) * this.scale, ridersYesterday: this.last.report?.routeRiders[routeId] ?? 0 };
+    return { dirs, yesterday: ranYesterday, ridersToday: (this.day.routeBoard.get(routeId) ?? 0) * this.scale, ridersYesterday: this.last.report?.routeRiders[routeId] ?? 0 };
   }
 
   tractDetail(tract: number) {
@@ -1019,6 +1037,7 @@ function newDayStats(day: number) {
     trips: 0,
     tripTimeSum: 0,
     transitTrips: 0,
+    fareRevenue: 0,
     modeCount: [0, 0, 0],
     leftBehind: 0,
     gaveUp: 0,

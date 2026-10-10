@@ -723,21 +723,38 @@ table.freq select {
 }
 
 /* ---------------------------------------------------------------- uPlot */
-.u-legend {
+/* Prefixed with .chart so these win over uPlot's own stylesheet, which loads later. */
+.chart .u-legend {
   font-size: 11.5px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   text-align: left !important;
   margin-top: 2px;
 }
-.u-legend .u-series th {
+.chart .u-legend .u-series th {
   font-weight: 400;
 }
-.u-legend .u-value {
+/* The x readout (hour, segment, month) gets its own line; series values sit beneath it. */
+.chart .u-legend.u-inline tr:first-child {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chart .u-legend.u-inline tr:first-child .u-marker {
+  display: none;
+}
+.chart .u-legend.u-inline .u-series {
+  padding: 1px 10px 1px 0;
+}
+.chart .u-legend.u-inline .u-series > * {
+  padding: 1px 2px;
+}
+.chart .u-legend .u-value {
   color: var(--ink);
   font-weight: 700;
 }
-.u-legend .u-marker {
+.chart .u-legend .u-marker {
   border-radius: 2px;
 }
 .u-cursor-x,

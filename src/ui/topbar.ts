@@ -37,7 +37,7 @@ export class TopBar {
     });
     const skip = h('button', { class: 'hw-btn ghost speed-btn', onclick: () => app.skipTo6am() }, svgIcon(ICONS.skip));
     attachTip(skip, app.tooltip, 'Skip to 6am', undefined, 'Fast-forward through the night');
-    const menu = h('button', { class: 'hw-btn ghost', style: 'width:38px;padding:0', onclick: () => app.openMenu() }, svgIcon(ICONS.menu));
+    const menu = h('button', { class: 'hw-btn ghost', id: 'btn-menu', style: 'width:38px;padding:0', onclick: () => app.openMenu() }, svgIcon(ICONS.menu));
     attachTip(menu, app.tooltip, 'Menu', undefined, 'Save, load, settings');
     this.el = h(
       'div',

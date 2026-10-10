@@ -45,4 +45,18 @@ export function isNewMonth(day: number): boolean {
   return day > 0 && monthKey(day) !== monthKey(day - 1);
 }
 
+/** Number of game days (weekdays) in the month containing `day`. */
+export function weekdaysInMonth(day: number): number {
+  const d = dateOfDay(day);
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth();
+  const len = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  let n = 0;
+  for (let i = 1; i <= len; i++) {
+    const w = new Date(Date.UTC(y, m, i)).getUTCDay();
+    if (w !== 0 && w !== 6) n++;
+  }
+  return n;
+}
+
 export const SECONDS_PER_DAY = DAY;

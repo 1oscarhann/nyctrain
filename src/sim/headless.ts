@@ -14,7 +14,7 @@ import { stationReport } from '../construction/validate';
 import { compileNetwork } from '../routes/compile';
 import { purchaseFleet } from '../routes/fleet';
 import { defaultHeadways } from '../routes/routeSet';
-import type { PeriodId, Route } from '../routes/types';
+import { ROUTE_COLORS, type PeriodId, type Route } from '../routes/types';
 import { Engine } from './engine';
 import type { DayReport } from './protocol';
 import type { Snap } from '../construction/types';
@@ -168,7 +168,7 @@ export function runDays(game: Game, days: number, opts: { agentScale?: number; s
     {
       dayEnd: (r) => {
         reports.push(r);
-        game.finance.settleDay({ day: r.day, riders: r.riders, trips: r.fareTrips, fare: game.fare, carKm: r.carKm, stationsOpen: r.stationsOpen });
+        game.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen });
         opts.onDay?.(r);
       },
     },
@@ -180,4 +180,42 @@ export function runDays(game: Game, days: number, opts: { agentScale?: number; s
   while (engine.time < end) engine.step(TIME.simStep);
   game.time = engine.time;
   return { engine, reports, ms: Date.now() - t0 };
+}
+
+/**
+ * Large synthetic network for performance checks (the spec's 300 stations / 25 routes / ~400
+ * trains): a grid of straight deep-tunnel lines, a station about every kilometre on land.
+ */
+export function buildPerfNetwork(game: Game, opts: { ns?: number; ew?: number; perLine?: number } = {}): { routes: Route[]; fleet: number } {
+  const ns = opts.ns ?? 17, ew = opts.ew ?? 8, perLine = opts.perLine ?? 12;
+  const net = game.network;
+  const cars = STATION.cars.heavy.default;
+  // North–south lines, then crosstown lines across them.
+  const strokes: LonLat[][] = [];
+  for (let i = 0; i < ns; i++) {
+    const lon = -74.02 + (i * 0.27) / Math.max(1, ns - 1);
+    strokes.push([[lon, 40.6], [lon + 0.01, 40.79]]);
+  }
+  for (let i = 0; i < ew; i++) {
+    const lat = 40.63 + (i * 0.14) / Math.max(1, ew - 1);
+    strokes.push([[-74.03, lat], [-73.74, lat + 0.005]]);
+  }
+  const lines: number[][] = [];
+  for (let i = 0; i < strokes.length; i++) {
+    const [edge] = drawLine(game, strokes[i], 'deep');
+    const L = net.geom(edge).length;
+    const stops: number[] = [];
+    let last = -Infinity;
+    for (let u = 300; u < L - 200 && stops.length < perLine; u += 50) {
+      if (u - last < 950 || !stationReport(net, edge, u, cars, game.terrain).ok) continue;
+      stops.push(game.editBlueprint(() => net.addStation(edge, u, cars, `L${i + 1} S${stops.length + 1}`).id));
+      last = u;
+    }
+    lines.push(stops);
+  }
+  game.build(true);
+  const routes = lines
+    .filter((s) => s.length >= 2)
+    .map((stops, i) => makeRoute(game, `Line ${i + 1}`, String(i + 1), ROUTE_COLORS[i % ROUTE_COLORS.length], stops, cars, { am: 2.5, pm: 2.5, midday: 5 }));
+  return { routes, fleet: routes.reduce((s, r) => s + Math.floor(r.ownedCars / r.cars), 0) };
 }

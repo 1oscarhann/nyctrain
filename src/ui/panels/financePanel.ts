@@ -41,7 +41,7 @@ export function financePanel(app: App): Panel {
     body.append(section('Fare (flat, transfers free)'), h('div', { style: 'display:flex;gap:10px;align-items:center' }, fare, fareVal), h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:2px' }, 'Takes effect in the next morning’s mode choice. Lower earners are most sensitive.'));
     // Bonds
     const issue = h('button', { class: 'hw-btn small', disabled: game.sandbox || f.bondRoom() < ECONOMY.bondChunk, onclick: () => app.issueBond() }, `Issue ${fmtMoney(ECONOMY.bondChunk)} bond`);
-    body.append(section(`Bonds · ${(ECONOMY.bondRate * 100).toFixed(0)}% over ${ECONOMY.bondYears} years`), h('div', { style: 'display:flex;gap:8px;align-items:center' }, issue, h('span', { class: 'hw-muted', style: 'font-size:12px' }, `Up to ${fmtMoney(ECONOMY.bondMax)} in total`)));
+    body.append(section(`Bonds · ${+(ECONOMY.bondRate * 100).toFixed(2)}% over ${ECONOMY.bondYears} years`), h('div', { style: 'display:flex;gap:8px;align-items:center' }, issue, h('span', { class: 'hw-muted', style: 'font-size:12px' }, `Up to ${fmtMoney(ECONOMY.bondMax)} in total`)));
     if (f.bonds.length) {
       body.append(kv(f.bonds.map((b) => [`Bond ${b.id}`, `${fmtMoney(b.balance)} left · ${fmtMoney(b.monthlyPayment)}/mo`] as [string, string])));
     }

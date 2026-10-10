@@ -4,7 +4,7 @@
  */
 import type { NetworkData } from '../construction/types';
 import type { FinanceData } from '../economy/finance';
-import type { Route } from '../routes/types';
+import type { RouteSetData } from '../routes/routeSet';
 import type { GoalState } from '../core/goals';
 import type { UnitSystem } from '../core/units';
 
@@ -33,7 +33,7 @@ export interface SaveFile {
     sandbox: boolean;
     fare: number;
     network: NetworkData;
-    routes: { routes: Route[]; nextId: number };
+    routes: RouteSetData;
     finance: FinanceData;
     goals: GoalState;
     /** Days of history for the top bar after loading. */

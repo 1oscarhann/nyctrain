@@ -151,6 +151,8 @@ export interface DayReport {
   riders: number;
   /** Linked, fare-paying journeys. */
   fareTrips: number;
+  /** Fares collected, each journey at the fare in force when it boarded. */
+  fareRevenue: number;
   commuters: number;
   transitShare: number;
   walkShare: number;

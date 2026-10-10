@@ -411,7 +411,10 @@ export class App implements AppContext {
 
   private onDayEnd(r: DayReport): void {
     const g = this.game;
-    g.finance.settleDay({ day: r.day, riders: r.riders, trips: r.fareTrips, fare: g.fare, carKm: r.carKm, stationsOpen: r.stationsOpen });
+    // The worker is already past midnight; move the mirrored clock too, so the autosave below
+    // can't hold a time from before the day it has settled.
+    g.setTime(Math.max(g.time, (r.day + 1) * SECONDS_PER_DAY));
+    g.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen });
     this.report = r;
     g.events.emit('money', undefined);
     this.checkGoals(r);
@@ -700,7 +703,7 @@ export class App implements AppContext {
   issueBond(): void {
     const b = this.game.finance.issueBond(this.game.day);
     if (!b) this.toast('No bond room left', `The limit is ${fmtMoney(ECONOMY.bondMax)}`, 'red');
-    else this.toast('Bond issued', `${fmtMoney(b.principal)} at ${(ECONOMY.bondRate * 100).toFixed(0)}% · ${fmtMoney(b.monthlyPayment)}/month`, 'amber');
+    else this.toast('Bond issued', `${fmtMoney(b.principal)} at ${+(ECONOMY.bondRate * 100).toFixed(2)}% · ${fmtMoney(b.monthlyPayment)}/month`, 'amber');
     this.game.events.emit('money', undefined);
   }
 
@@ -778,7 +781,9 @@ export class App implements AppContext {
     switch (e.key) {
       case ' ':
         e.preventDefault();
-        this.togglePause();
+        // A focused toolbar button would otherwise also "click" on keyup.
+        if ((e.target as HTMLElement)?.tagName === 'BUTTON') (e.target as HTMLElement).blur();
+        if (!e.repeat) this.togglePause();
         break;
       case '1':
       case '2':
