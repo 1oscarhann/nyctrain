@@ -18,7 +18,10 @@ interface StopPos {
 }
 
 /** Edges reachable from `edge` arriving at its end node in direction `dir`. */
-function successors(net: Network, edgeId: number, dir: 0 | 1): { edge: number; dir: 0 | 1 }[] {
+type Usable = (edgeId: number) => boolean;
+const ANY: Usable = () => true;
+
+function successors(net: Network, edgeId: number, dir: 0 | 1, usable: Usable): { edge: number; dir: 0 | 1 }[] {
   const e = net.edges.get(edgeId)!;
   const node = dir === 0 ? e.b : e.a;
   const [ax, ay] = net.departHeading(edgeId, node); // heading leaving node along e (backwards)
@@ -27,7 +30,7 @@ function successors(net: Network, edgeId: number, dir: 0 | 1): { edge: number; d
   for (const fid of net.incident(node)) {
     if (fid === edgeId) continue;
     const f = net.edges.get(fid)!;
-    if (f.cls !== e.cls) continue;
+    if (f.cls !== e.cls || !usable(fid)) continue;
     const [dx, dy] = net.departHeading(fid, node);
     if (arrX * dx + arrY * dy < ALIGN) continue;
     out.push({ edge: fid, dir: f.a === node ? 0 : 1 });
@@ -41,7 +44,7 @@ interface Leg {
 }
 
 /** Shortest path from stop A (leaving in direction d) to stop B, by arrival direction. */
-function legSearch(net: Network, A: StopPos, d: 0 | 1, B: StopPos): [Leg | null, Leg | null] {
+function legSearch(net: Network, A: StopPos, d: 0 | 1, B: StopPos, usable: Usable): [Leg | null, Leg | null] {
   const result: [Leg | null, Leg | null] = [null, null];
   const LA = net.geom(A.edge).length;
   // Direct on the same edge.
@@ -73,7 +76,7 @@ function legSearch(net: Network, A: StopPos, d: 0 | 1, B: StopPos): [Leg | null,
     done.add(k);
     const edge = k >> 1;
     const dir = (k & 1) as 0 | 1;
-    for (const s of successors(net, edge, dir)) {
+    for (const s of successors(net, edge, dir, usable)) {
       const sk = key(s.edge, s.dir);
       if (s.edge === B.edge) {
         // Arrive at the target stop on this edge.
@@ -125,7 +128,11 @@ function reconstruct(
   return legs;
 }
 
-export function findRoutePath(net: Network, cls: TrackClass, stops: number[]): RoutePath {
+/**
+ * `usable` restricts which edges the path may use (e.g. only built track, so a planned
+ * shortcut doesn't take a running route out of service).
+ */
+export function findRoutePath(net: Network, cls: TrackClass, stops: number[], usable: Usable = ANY): RoutePath {
   const fail = (error: string): RoutePath => ({ ok: false, error, legs: [], stopS: [], length: 0 });
   if (stops.length < 2) return fail('A route needs at least two stations');
   if (new Set(stops).size !== stops.length) return fail('A route can visit each station only once');
@@ -151,7 +158,7 @@ export function findRoutePath(net: Network, cls: TrackClass, stops: number[]): R
     for (const d of [0, 1] as const) {
       const cur = best[d];
       if (!cur) continue;
-      const res = legSearch(net, pos[i], d, pos[i + 1]);
+      const res = legSearch(net, pos[i], d, pos[i + 1], usable);
       for (const d2 of [0, 1] as const) {
         const r = res[d2];
         if (!r) continue;

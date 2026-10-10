@@ -106,6 +106,11 @@ export interface EdgeGeom {
   /** Fillet radius at each end (0 = none). */
   ra: number;
   rb: number;
+  /** Bounding box of the sampled centreline. */
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
 }
 
 /** Read-only view of the track graph needed for geometry. */
@@ -203,7 +208,14 @@ export function computeEdgeGeom(g: GraphView, e: TrackEdge): EdgeGeom {
       p.s1 *= k;
     }
   }
-  return { id: e.id, length, xs: X, ys: Y, cum, pieces, ta, tb, chord, overlap, ra: fa ? fa.r : 0, rb: fb ? fb.r : 0 };
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    if (X[i] < minX) minX = X[i];
+    if (X[i] > maxX) maxX = X[i];
+    if (Y[i] < minY) minY = Y[i];
+    if (Y[i] > maxY) maxY = Y[i];
+  }
+  return { id: e.id, length, xs: X, ys: Y, cum, pieces, ta, tb, chord, overlap, ra: fa ? fa.r : 0, rb: fb ? fb.r : 0, minX, minY, maxX, maxY };
 }
 
 /** Position and unit heading at distance s along a sampled polyline. */

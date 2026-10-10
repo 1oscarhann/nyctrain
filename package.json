@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Headway: New York — a subway builder and transit simulation set in the real five boroughs.",
+  "description": "Headway: New York \u2014 a subway builder and transit simulation set in the real five boroughs.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:unit": "vitest run --exclude tests/headless.test.ts",
     "test:headless": "vitest run tests/headless.test.ts",
-    "sim": "tsx scripts/headless-sim.ts"
+    "sim": "tsx scripts/headless-sim.ts",
+    "balance": "tsx scripts/balance.ts"
   },
   "dependencies": {
     "@deck.gl/core": "~9.2.11",

@@ -130,6 +130,7 @@ function emptyReport(day: number): DayReport {
   return {
     day,
     riders: 0,
+    fareTrips: 0,
     commuters: 0,
     transitShare: 0,
     walkShare: 0,

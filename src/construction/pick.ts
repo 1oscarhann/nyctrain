@@ -16,13 +16,9 @@ export function pickEdge(net: Network, x: number, y: number, tol: number, filter
   let best: EdgeHit | null = null;
   for (const e of net.edges.values()) {
     if (filter && !filter(e.id)) continue;
-    const a = net.nodes.get(e.a)!;
-    const b = net.nodes.get(e.b)!;
-    // Cheap bounding-box reject (fillets stay within the control polygon's hull).
-    const pad = tol + 5;
-    if (x < Math.min(a.x, b.x) - pad - 300 || x > Math.max(a.x, b.x) + pad + 300) continue;
-    if (y < Math.min(a.y, b.y) - pad - 300 || y > Math.max(a.y, b.y) + pad + 300) continue;
     const g = net.geom(e.id);
+    // Cheap reject against the centreline's bounding box.
+    if (x < g.minX - tol || x > g.maxX + tol || y < g.minY - tol || y > g.maxY + tol) continue;
     const p = projectOnPolyline(g.xs, g.ys, g.cum, x, y);
     if (p.d <= tol && (!best || p.d < best.d)) best = { edge: e.id, u: p.s, d: p.d, x: p.x, y: p.y };
   }

@@ -9,6 +9,7 @@ import { LandMask } from '../data/landMask';
 import { TractIndex, type LandCollection, type World } from '../data/world';
 import { WorldTerrain } from '../construction/terrain';
 import { pickEdge } from '../construction/pick';
+import { sampleAt } from '../construction/geometry';
 import { stationReport } from '../construction/validate';
 import { compileNetwork } from '../routes/compile';
 import { purchaseFleet } from '../routes/fleet';
@@ -58,16 +59,19 @@ export function stationNear(game: Game, p: LonLat, name: string, cars = STATION.
   if (!hit) throw new Error(`no track near station ${name}`);
   // Search this edge and neighbouring ones for the closest valid platform position.
   let best: { edge: number; u: number; d: number } | null = null;
+  let why = '';
   for (const e of net.edges.values()) {
     const g = net.geom(e.id);
     for (let u = 0; u <= g.length; u += 10) {
-      const i = Math.min(g.xs.length - 1, Math.max(0, g.cum.findIndex((c) => c >= u)));
-      const d = Math.hypot(g.xs[i] - x, g.ys[i] - y);
+      const q = sampleAt(g.xs, g.ys, g.cum, u);
+      const d = Math.hypot(q.x - x, q.y - y);
       if (d > 700 || (best && d >= best.d)) continue;
-      if (stationReport(net, e.id, u, cars, game.terrain).ok) best = { edge: e.id, u, d };
+      const rep = stationReport(net, e.id, u, cars, game.terrain);
+      if (rep.ok) best = { edge: e.id, u, d };
+      else if (!why) why = rep.errors[0];
     }
   }
-  if (!best) throw new Error(`no valid platform position near ${name}`);
+  if (!best) throw new Error(`no valid platform position near ${name}: ${why}`);
   const b = best;
   return game.editBlueprint(() => net.addStation(b.edge, b.u, cars, name).id);
 }
@@ -164,7 +168,7 @@ export function runDays(game: Game, days: number, opts: { agentScale?: number; s
     {
       dayEnd: (r) => {
         reports.push(r);
-        game.finance.settleDay({ day: r.day, riders: r.riders, fare: game.fare, carKm: r.carKm, stationsOpen: r.stationsOpen });
+        game.finance.settleDay({ day: r.day, riders: r.riders, trips: r.fareTrips, fare: game.fare, carKm: r.carKm, stationsOpen: r.stationsOpen });
         opts.onDay?.(r);
       },
     },

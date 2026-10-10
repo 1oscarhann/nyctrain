@@ -146,8 +146,11 @@ export type FromWorker =
 
 export interface DayReport {
   day: number;
-  /** Real-people counts (agents × scale). */
+  /** Real-people counts (agents × scale). Riders are boardings (unlinked trips), like
+   * transit agencies report; each linked journey pays one fare (transfers are free). */
   riders: number;
+  /** Linked, fare-paying journeys. */
+  fareTrips: number;
   commuters: number;
   transitShare: number;
   walkShare: number;

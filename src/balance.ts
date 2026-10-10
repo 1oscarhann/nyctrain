@@ -230,13 +230,20 @@ export const COMMUTERS = {
   /** Logit scale parameter (per minute of generalised cost). */
   logitScale: 0.085,
   /** Alternative-specific constants in minutes (positive = less attractive). */
-  modeConstant: { walk: 0, drive: 10, transit: 4 },
+  /** Driving's constant reflects NYC car ownership, tolls and congestion beyond the drive time. */
+  modeConstant: { walk: 0, drive: 25, transit: 0 },
   /** Driving running cost, $/km (fuel, tolls, wear). */
   driveCostPerKm: 0.3,
   transferPenalty: 5 * MIN,
   /** Wait time is half the headway, capped at this. */
   waitCap: 15 * MIN,
-  /** Access/egress: stations within catchment + this share of the tract radius are walkable. */
+  /**
+   * Longest walk to or from a station that people will consider (from the tract centre, plus a
+   * share of the tract radius). The 800 m catchment drawn on the map is the easy 10-minute walk;
+   * with no buses in this New York, people will walk further if the train is worth it — the walk
+   * time is part of the generalised cost, so the logit decides.
+   */
+  maxAccessWalk: 2500,
   accessRadiusTractShare: 0.5,
   /** In-vehicle time multiplier per unit of load factor above comfortable capacity. */
   crowdingWeight: 0.6,
@@ -263,7 +270,12 @@ export const ECONOMY = {
   daysPerYear: 261,
   bondChunk: 1e9,
   bondMax: 20e9,
-  bondRate: 0.04,
+  /**
+   * Tuned from the spec's starting 4%: at 4% the interest on the ~$17B a 40-station core needs
+   * exceeds what ~1.5M daily riders pay at a $3 fare. At 2.5% such a core breaks even (fares ≈
+   * operations + staffing + maintenance + interest) around 1.5M riders. See README → Balance.
+   */
+  bondRate: 0.025,
   bondYears: 30,
   bankruptcyDays: 30,
 };

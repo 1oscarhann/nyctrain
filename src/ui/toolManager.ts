@@ -11,7 +11,8 @@ export class ToolManager {
   private tools = new Map<ToolId, Tool>();
   active: Tool | null = null;
   private dragging = false;
-  private suppressClick = false;
+  /** Ignore the native click that follows a captured press (only right after it). */
+  private suppressUntil = 0;
   onChange: (id: ToolId) => void = () => {};
   /** Extra condition for x-ray (e.g. an underground item is selected). */
   xrayExtra: () => boolean = () => false;
@@ -35,17 +36,14 @@ export class ToolManager {
     const endDrag = (e?: MapMouseEvent) => {
       if (!this.dragging) return;
       this.dragging = false;
-      this.suppressClick = true;
+      this.suppressUntil = performance.now() + 80;
       map.dragPan.enable();
-      this.active?.up?.(e ? this.pointer(e) : (null as never));
+      this.active?.up?.(e ? this.pointer(e) : undefined);
     };
     map.on('mouseup', (e) => endDrag(e));
     window.addEventListener('mouseup', () => endDrag());
     map.on('click', (e) => {
-      if (this.suppressClick) {
-        this.suppressClick = false;
-        return;
-      }
+      if (performance.now() < this.suppressUntil) return;
       this.active?.click?.(this.pointer(e));
     });
     map.on('dblclick', (e) => {

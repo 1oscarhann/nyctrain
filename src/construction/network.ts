@@ -208,7 +208,8 @@ export class Network implements GraphView {
   /** Turn a node into an anchor whose through heading follows its existing track. */
   private makeAnchor(id: number): void {
     const n = this.nodes.get(id)!;
-    if (n.anchor) return;
+    // A junction keeps its axis; a plain track end re-derives it from the track it ends.
+    if (n.anchor && this.degree(id) >= 2) return;
     const inc = this.incident(id);
     if (inc.length > 0) {
       const [hx, hy] = this.departHeading(inc[0], id);
@@ -271,8 +272,11 @@ export class Network implements GraphView {
     // ---- start
     let startNode: number;
     let startAnchorSign = 0;
+    // Extending a plain track end must continue away from the existing track, never double back.
+    let startWasEnd = false;
     if (startSnap.kind === 'node') {
       startNode = startSnap.node;
+      startWasEnd = this.degree(startNode) === 1;
       if (this.degree(startNode) >= 1) this.makeAnchor(startNode);
     } else if (startSnap.kind === 'edge') {
       startNode = this.splitEdge(startSnap.edge, startSnap.u);
@@ -290,8 +294,10 @@ export class Network implements GraphView {
       resolvedEnd = endSnap.u < sp.u ? { kind: 'edge', edge: sp.e1, u: endSnap.u } : { kind: 'edge', edge: sp.e2, u: endSnap.u - sp.u };
     }
     let endNode: number | null = null;
+    let endWasEnd = false;
     if (resolvedEnd.kind === 'node') {
       endNode = resolvedEnd.node;
+      endWasEnd = this.degree(endNode) === 1 && endNode !== startNode;
       if (this.degree(endNode) >= 1) this.makeAnchor(endNode);
     } else if (resolvedEnd.kind === 'edge') {
       endNode = this.splitEdge(resolvedEnd.edge, resolvedEnd.u);
@@ -303,7 +309,8 @@ export class Network implements GraphView {
     // ---- lead after the start anchor
     if (isStartAnchor) {
       const target = inner[0] ?? (endNode !== null ? this.nodes.get(endNode)! : points[points.length - 1]);
-      const sign = Math.sign((target.x - S.x) * S.hx + (target.y - S.y) * S.hy) || 1;
+      // h points into the existing track at a plain end, so continuing means going along −h.
+      const sign = startWasEnd ? -1 : Math.sign((target.x - S.x) * S.hx + (target.y - S.y) * S.hy) || 1;
       startAnchorSign = sign;
       const L = leadLength(S, sign, target.x, target.y, lead);
       const ln = this.newNode(S.x + S.hx * sign * L, S.y + S.hy * sign * L, S.level, cls);
@@ -324,7 +331,7 @@ export class Network implements GraphView {
       const E = this.nodes.get(endNode)!;
       const prev = this.nodes.get(chain[chain.length - 1])!;
       if (E.anchor && this.degree(endNode) >= 1) {
-        const sign = Math.sign((prev.x - E.x) * E.hx + (prev.y - E.y) * E.hy) || 1;
+        const sign = endWasEnd ? -1 : Math.sign((prev.x - E.x) * E.hx + (prev.y - E.y) * E.hy) || 1;
         const L = leadLength(E, sign, prev.x, prev.y, lead);
         const ln = this.newNode(E.x + E.hx * sign * L, E.y + E.hy * sign * L, E.level, cls);
         ln.leadOf = E.id;
@@ -391,14 +398,21 @@ export class Network implements GraphView {
   moveNode(id: number, x: number, y: number): boolean {
     const n = this.nodes.get(id);
     if (!n || !this.nodeEditable(id) || (n.anchor && this.degree(id) > 1)) return false;
-    if (n.leadOf !== null) {
-      const A = this.nodes.get(n.leadOf);
-      if (A) {
-        const sign = Math.sign((n.x - A.x) * A.hx + (n.y - A.y) * A.hy) || 1;
-        const proj = Math.max(TRACK.leadMinLength, ((x - A.x) * A.hx + (y - A.y) * A.hy) * sign);
-        x = A.x + A.hx * sign * proj;
-        y = A.y + A.hy * sign * proj;
+    // Leads, and any vertex next to a junction, slide along the junction's axis so track always
+    // leaves junctions straight.
+    let axis: TrackNode | undefined = n.leadOf !== null ? this.nodes.get(n.leadOf) : undefined;
+    if (!axis) {
+      for (const eid of this.incident(id)) {
+        const o = this.nodes.get(otherEnd(this.edges.get(eid)!, id))!;
+        if (o.anchor && this.degree(o.id) >= 2) axis = o;
       }
+    }
+    if (axis) {
+      const A = axis;
+      const sign = Math.sign((n.x - A.x) * A.hx + (n.y - A.y) * A.hy) || 1;
+      const proj = Math.max(TRACK.leadMinLength, ((x - A.x) * A.hx + (y - A.y) * A.hy) * sign);
+      x = A.x + A.hx * sign * proj;
+      y = A.y + A.hy * sign * proj;
     }
     n.x = x;
     n.y = y;
@@ -421,21 +435,47 @@ export class Network implements GraphView {
   }
 
   /** Remove an edge and any nodes left orphaned. Stations on it are removed too. */
-  removeEdge(id: number): void {
+  /**
+   * Remove an edge and any nodes left orphaned (stations on it go too). A branch's lead stub left
+   * dangling along the trunk is removed with it. Returns every edge id removed.
+   */
+  removeEdge(id: number): number[] {
     const e = this.edges.get(id);
-    if (!e) return;
-    for (const [sid, s] of this.stations) if (s.edge === id) this.stations.delete(sid);
-    this.removeEdgeRaw(id);
-    for (const nid of [e.a, e.b]) {
-      if (this.degree(nid) === 0) this.nodes.delete(nid);
-    }
-    for (const n of this.nodes.values()) if (n.leadOf !== null && !this.nodes.has(n.leadOf)) n.leadOf = null;
-    // Vertices that lost a neighbour lose their fillet.
+    if (!e) return [];
+    const removed = [id];
+    const drop = (eid: number) => {
+      for (const [sid, s] of this.stations) if (s.edge === eid) this.stations.delete(sid);
+      this.removeEdgeRaw(eid);
+    };
+    drop(id);
     for (const nid of [e.a, e.b]) {
       const n = this.nodes.get(nid);
-      if (n && this.degree(nid) < 2) n.r = 0;
+      if (!n || n.leadOf === null) continue;
+      const other = otherEnd(e, nid);
+      if (other === n.leadOf) {
+        // The lead lost its link to the junction: it's an ordinary vertex now.
+        n.leadOf = null;
+      } else if (this.degree(nid) === 1) {
+        // The lead lost the track it led to: drop the stub lying along the trunk.
+        const stub = this.incident(nid)[0];
+        removed.push(stub);
+        const se = this.edges.get(stub)!;
+        drop(stub);
+        for (const k of [se.a, se.b]) if (this.degree(k) === 0) this.nodes.delete(k);
+      }
+    }
+    for (const nid of [e.a, e.b]) if (this.nodes.has(nid) && this.degree(nid) === 0) this.nodes.delete(nid);
+    for (const n of this.nodes.values()) if (n.leadOf !== null && !this.nodes.has(n.leadOf)) n.leadOf = null;
+    for (const n of this.nodes.values()) {
+      const deg = this.degree(n.id);
+      // Vertices that lost a neighbour lose their fillet; ends stop being anchors.
+      if (deg < 2) {
+        n.r = 0;
+        n.anchor = false;
+      }
     }
     this.touch();
+    return removed;
   }
 
   addStation(edgeId: number, u: number, cars: number, name: string, status: Status = 'blueprint'): Station {

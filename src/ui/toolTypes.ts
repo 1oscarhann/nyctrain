@@ -24,7 +24,7 @@ export interface Tool {
   /** Return true to capture a drag (map panning is suspended until mouse up). */
   down?(p: Pointer): boolean;
   drag?(p: Pointer): void;
-  up?(p: Pointer): void;
+  up?(p?: Pointer): void;
   /** Return true if the key was handled. */
   key?(e: KeyboardEvent): boolean;
   layers?(): (Layer | null | false)[];

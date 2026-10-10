@@ -48,7 +48,10 @@ export class RouteSet {
     const key = `${net.version}|${r.cls}|${r.stops.join(',')}`;
     const c = this.cache.get(r.id);
     if (c && c.key === key) return c.path;
-    const path = findRoutePath(net, r.cls, r.stops);
+    // Prefer built track: a route keeps running on what exists while a shortcut is planned or
+    // under construction, and switches over once it opens. Otherwise show the planned path.
+    const built = findRoutePath(net, r.cls, r.stops, (id) => net.edges.get(id)?.status === 'built');
+    const path = built.ok ? built : findRoutePath(net, r.cls, r.stops);
     this.cache.set(r.id, { key, path });
     return path;
   }

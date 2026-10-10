@@ -44,6 +44,8 @@ export class TrackTool implements Tool {
   private hover: SnapResult | null = null;
   private preview: Preview | null = null;
   private dragNode: number | null = null;
+  /** Press on a blueprint vertex: it only becomes a drag once the pointer moves. */
+  private press: { id: number; px: [number, number]; dragging: boolean } | null = null;
   private hoverNode: number | null = null;
   private lastPointer: Pointer | null = null;
 
@@ -193,22 +195,34 @@ export class TrackTool implements Tool {
     const net = this.ctx.game.network;
     const id = pickNode(net, p.x, p.y, this.ctx.tol(TRACK.snapPx), (nid) => net.nodeEditable(nid) && !(net.nodes.get(nid)!.anchor && net.degree(nid) > 1));
     if (id === null) return false;
-    this.dragNode = id;
-    this.ctx.game.history.record(net);
+    // Capture the press (so the map doesn't pan), but don't record history until it's a real drag.
+    this.press = { id, px: p.px, dragging: false };
     return true;
   }
 
   drag(p: Pointer): void {
-    if (this.dragNode === null) return;
+    const pr = this.press;
+    if (!pr) return;
+    if (!pr.dragging) {
+      if (Math.hypot(p.px[0] - pr.px[0], p.px[1] - pr.px[1]) < 4) return;
+      pr.dragging = true;
+      this.dragNode = pr.id;
+      this.ctx.game.history.record(this.ctx.game.network);
+    }
     const game = this.ctx.game;
-    game.network.moveNode(this.dragNode, p.x, p.y);
+    game.network.moveNode(pr.id, p.x, p.y);
     game.afterNetworkChange();
-    const eid = game.network.incident(this.dragNode)[0];
+    const eid = game.network.incident(pr.id)[0];
     if (eid !== undefined) this.ctx.tip(edgeTooltip(game, eid), p.px);
   }
 
-  up(): void {
+  up(p?: Pointer): void {
+    const pr = this.press;
+    this.press = null;
     this.dragNode = null;
+    // A press that never moved is a click (e.g. extending from a blueprint track end); the tool
+    // manager suppresses the native click after a captured press, so deliver it here.
+    if (pr && !pr.dragging && p) this.click(p);
   }
 
   key(e: KeyboardEvent): boolean {

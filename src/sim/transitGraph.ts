@@ -112,7 +112,8 @@ export class TransitGraph {
         const s2 = net.stations[st2];
         const w = transferTime(Math.hypot(s2.x - sp.x, s2.y - sp.y));
         for (const q of this.stationBoard[st2]) {
-          if (this.platRoute[q] === this.platRoute[p] && this.platDir[q] === this.platDir[p]) continue;
+          // No staying on the same route, and no U-turn onto its other direction here.
+          if (this.platRoute[q] === this.platRoute[p] && (this.platDir[q] === this.platDir[p] || st2 === st)) continue;
           to.push(q);
           walk.push(w);
         }
@@ -149,43 +150,58 @@ export class TransitGraph {
    */
   run(access: { station: number; walk: number }[]): void {
     const e = ++this.epoch;
-    const { dist, prev, stamp } = this;
+    const dist = this.dist, prev = this.prev, stamp = this.stamp;
+    const rideNext = this.rideNext, rideCost = this.rideCost, wait = this.wait;
+    const trOff = this.trOff, trTo = this.trTo, trWalk = this.trWalk;
     const P = this.P;
+    const penalty = COMMUTERS.transferPenalty;
     this.heapN = 0;
-    const relax = (node: number, c: number, from: number) => {
-      if (stamp[node] !== e || c < dist[node]) {
+    // Waiting nodes never enter the heap: reaching one immediately boards (relaxes the
+    // on-board node at the next stop), so the heap only holds on-board nodes.
+    const reachWaiting = (t: number, c: number, from: number) => {
+      if (stamp[t] === e && c >= dist[t]) return;
+      stamp[t] = e;
+      dist[t] = c;
+      prev[t] = from;
+      const q = rideNext[t];
+      if (q < 0) return;
+      const node = P + q;
+      const nc = c + rideCost[t];
+      if (stamp[node] !== e || nc < dist[node]) {
         stamp[node] = e;
-        dist[node] = c;
-        prev[node] = from;
-        this.push(c, node);
+        dist[node] = nc;
+        prev[node] = t;
+        this.push(nc, node);
       }
     };
     for (const a of access) {
       for (const p of this.stationBoard[a.station]) {
-        const c = a.walk + this.wait[p];
-        if (isFinite(c)) relax(p, c, -1);
+        const c = a.walk + wait[p];
+        if (c < Infinity) reachWaiting(p, c, -1);
       }
     }
-    const penalty = COMMUTERS.transferPenalty;
     while (this.heapN > 0) {
       const c = this.heapK[0];
       const node = this.pop();
       if (c > dist[node]) continue;
-      if (node < P) {
-        // Waiting at p: board and ride to the next stop.
-        const q = this.rideNext[node];
-        if (q >= 0) relax(P + q, c + this.rideCost[node], node);
-        continue;
-      }
       const p = node - P;
       // On board arriving at p: stay on…
-      const q = this.rideNext[p];
-      if (q >= 0) relax(P + q, c + this.rideCost[p], node);
+      const q = rideNext[p];
+      if (q >= 0) {
+        const nn = P + q;
+        const nc = c + rideCost[p];
+        if (stamp[nn] !== e || nc < dist[nn]) {
+          stamp[nn] = e;
+          dist[nn] = nc;
+          prev[nn] = node;
+          this.push(nc, nn);
+        }
+      }
       // …or get off and transfer.
-      for (let k = this.trOff[p]; k < this.trOff[p + 1]; k++) {
-        const t = this.trTo[k];
-        const nc = c + this.trWalk[k] + this.wait[t] + penalty;
-        if (isFinite(nc)) relax(t, nc, node);
+      for (let k = trOff[p]; k < trOff[p + 1]; k++) {
+        const t = trTo[k];
+        const nc = c + trWalk[k] + wait[t] + penalty;
+        if (nc < Infinity) reachWaiting(t, nc, node);
       }
     }
   }

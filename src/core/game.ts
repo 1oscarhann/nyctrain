@@ -135,11 +135,15 @@ export class Game {
       this.editBlueprint(() => this.network.removeEdge(id));
       return { ok: true, refund: 0 };
     }
-    let refund = this.finance.refund(e.cost, TRACK.bulldozeRefund);
-    for (const s of [...this.network.stations.values()]) {
-      if (s.edge === id && s.status !== 'blueprint') refund += this.finance.refund(s.cost, TRACK.bulldozeRefund);
+    // Costs before removal: removing an edge can also take a dangling lead stub with it.
+    const costs = new Map([...this.network.edges.values()].map((x) => [x.id, x.status === 'blueprint' ? 0 : x.cost]));
+    const stationCosts = [...this.network.stations.values()].map((s) => ({ edge: s.edge, cost: s.status === 'blueprint' ? 0 : s.cost }));
+    const removed = this.network.removeEdge(id);
+    let refund = 0;
+    for (const rid of removed) {
+      refund += this.finance.refund(costs.get(rid) ?? 0, TRACK.bulldozeRefund);
+      for (const s of stationCosts) if (s.edge === rid) refund += this.finance.refund(s.cost, TRACK.bulldozeRefund);
     }
-    this.network.removeEdge(id);
     this.history.clear();
     this.afterNetworkChange();
     this.events.emit('money', undefined);

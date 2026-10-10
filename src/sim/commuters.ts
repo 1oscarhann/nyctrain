@@ -344,7 +344,7 @@ export class Commuters implements PassengerHooks {
       const tracts = this.world.tracts;
       // Stations within walking distance of each tract.
       const access: { station: number; walk: number }[][] = tracts.map((tr) => {
-        const reach = 800 + COMMUTERS.accessRadiusTractShare * tr.radius;
+        const reach = COMMUTERS.maxAccessWalk + COMMUTERS.accessRadiusTractShare * tr.radius;
         const out: { station: number; walk: number }[] = [];
         net.stations.forEach((s, i) => {
           const d = Math.hypot(s.x - tr.x, s.y - tr.y);
@@ -413,34 +413,34 @@ export class Commuters implements PassengerHooks {
   lastPathMs = 0;
 
   private bestPath(graph: TransitGraph, egress: { station: number; walk: number }[]): GroupPath | null {
-    let best = Infinity;
-    let plat = -1;
-    let walkOut = 0;
+    const net = this.net!;
+    const cands: { cost: number; plat: number; station: number }[] = [];
     for (const e of egress) {
       const a = graph.bestArrival(e.station);
       if (a.plat < 0) continue;
       const c = a.cost + e.walk;
-      if (c < best) {
-        best = c;
-        plat = a.plat;
-        walkOut = e.walk;
-      }
+      if (c < Infinity) cands.push({ cost: c, plat: a.plat, station: e.station });
     }
-    if (plat < 0 || !isFinite(best)) return null;
-    const legs = graph.legsTo(plat);
-    if (!legs.length || legs.length > MAX_LEGS) return null;
-    const net = this.net!;
-    const arr = new Int32Array(legs.length * 3);
-    legs.forEach((l, i) => {
-      const r = net.routes[l.route];
-      const dir = r.dirs[l.dir];
-      arr[i * 3] = r.id;
-      arr[i * 3 + 1] = net.stations[dir.stopStation[l.board]].id;
-      arr[i * 3 + 2] = net.stations[dir.stopStation[l.alight]].id;
-    });
-    void walkOut;
-    const transfers = legs.length - 1;
-    return { legs: arr, time: best - transfers * COMMUTERS.transferPenalty, transfers };
+    cands.sort((x, y) => x.cost - y.cost);
+    for (const cand of cands) {
+      const legs = graph.legsTo(cand.plat);
+      if (!legs.length || legs.length > MAX_LEGS) continue;
+      // A trip that ends back where it boarded is a round trip, not a commute.
+      const l0 = legs[0];
+      const firstSt = net.routes[l0.route].dirs[l0.dir].stopStation[l0.board];
+      if (net.stations[firstSt].group === net.stations[cand.station].group) continue;
+      const arr = new Int32Array(legs.length * 3);
+      legs.forEach((l, i) => {
+        const r = net.routes[l.route];
+        const dir = r.dirs[l.dir];
+        arr[i * 3] = r.id;
+        arr[i * 3 + 1] = net.stations[dir.stopStation[l.board]].id;
+        arr[i * 3 + 2] = net.stations[dir.stopStation[l.alight]].id;
+      });
+      const transfers = legs.length - 1;
+      return { legs: arr, time: cand.cost - transfers * COMMUTERS.transferPenalty, transfers };
+    }
+    return null;
   }
 
   // ------------------------------------------------------------------ daily cycle
@@ -789,7 +789,9 @@ export class Commuters implements PassengerHooks {
   live(): LiveStats {
     let inSystem = 0;
     for (let p = 0; p < this.qLive.length; p++) inSystem += this.qLive[p];
-    return { ridersToday: this.day.transitTrips * this.scale, tripsInProgress: this.hN, inSystem: inSystem * this.scale };
+    let boardings = 0;
+    for (const n of this.day.routeBoard.values()) boardings += n;
+    return { ridersToday: boardings * this.scale, tripsInProgress: this.hN, inSystem: inSystem * this.scale };
   }
 
   dayReport(day: number): DayReport {
@@ -809,7 +811,8 @@ export class Commuters implements PassengerHooks {
     const transitCommuters = d.modeCount[MODE_TRANSIT];
     const report: DayReport = {
       day,
-      riders: d.transitTrips * this.scale,
+      riders: [...d.routeBoard.values()].reduce((s, n) => s + n, 0) * this.scale,
+      fareTrips: d.transitTrips * this.scale,
       commuters: totalAgents * this.scale,
       transitShare: transitCommuters / totalAgents,
       walkShare: d.modeCount[MODE_WALK] / totalAgents,

@@ -49,7 +49,10 @@ export interface Bond {
 
 export interface DayInputs {
   day: number;
+  /** Boardings (for reports and goals). */
   riders: number;
+  /** Fare-paying journeys: transfers are free, so one fare per linked trip. */
+  trips: number;
   fare: number;
   carKm: number;
   stationsOpen: number;
@@ -139,8 +142,9 @@ export class Finance {
     return this.bonds.reduce((s, b) => s + b.balance, 0);
   }
 
+  /** The $20B limit is on outstanding debt: repaying principal frees room to borrow again. */
   bondRoom(): number {
-    return Math.max(0, ECONOMY.bondMax - this.bonds.reduce((s, b) => s + b.principal, 0));
+    return Math.max(0, ECONOMY.bondMax - this.debt());
   }
 
   issueBond(day: number): Bond | null {
@@ -168,7 +172,7 @@ export class Finance {
     d.day = inp.day;
     d.riders = inp.riders;
     d.carKm = inp.carKm;
-    d.revenue = inp.riders * inp.fare;
+    d.revenue = inp.trips * inp.fare;
     d.operating = inp.carKm * ECONOMY.operatingPerCarKm;
     d.staffing = inp.stationsOpen * ECONOMY.staffingPerStationDay;
     d.maintenance = (this.assetValue * ECONOMY.maintenanceRatePerYear) / ECONOMY.daysPerYear;

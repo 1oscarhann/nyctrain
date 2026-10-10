@@ -411,7 +411,7 @@ export class App implements AppContext {
 
   private onDayEnd(r: DayReport): void {
     const g = this.game;
-    g.finance.settleDay({ day: r.day, riders: r.riders, fare: g.fare, carKm: r.carKm, stationsOpen: r.stationsOpen });
+    g.finance.settleDay({ day: r.day, riders: r.riders, trips: r.fareTrips, fare: g.fare, carKm: r.carKm, stationsOpen: r.stationsOpen });
     this.report = r;
     g.events.emit('money', undefined);
     this.checkGoals(r);

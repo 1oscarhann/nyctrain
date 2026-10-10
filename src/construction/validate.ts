@@ -76,7 +76,8 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
     }
   }
 
-  // Junction alignment: edges leave anchors straight along the through heading.
+  // Junction alignment: edges leave anchors straight along the through heading, and a junction
+  // needs track on both sides (otherwise nothing can run through it).
   for (const nid of [e.a, e.b]) {
     const n = net.nodes.get(nid)!;
     if (!n.anchor || net.degree(nid) < 2) continue;
@@ -84,6 +85,14 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
     const dot = Math.abs(hx * n.hx + hy * n.hy);
     if (dot < Math.cos((2 * Math.PI) / 180)) {
       errors.push('Track must leave the junction straight, along the existing line');
+      break;
+    }
+    const sides = net.incident(nid).map((eid) => {
+      const [x, y] = net.departHeading(eid, nid);
+      return Math.sign(x * n.hx + y * n.hy);
+    });
+    if (sides.every((sd) => sd === sides[0])) {
+      errors.push("Track can't double back at a track end — continue away from it");
       break;
     }
   }
