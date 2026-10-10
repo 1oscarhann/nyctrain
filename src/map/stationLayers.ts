@@ -81,6 +81,18 @@ export class StationLayers {
     this.version++;
   }
 
+  /** Update sizes, crowding and progress in place (cheap; called on every snapshot). */
+  refreshStats(): void {
+    for (const d of this.data) {
+      const st = this.stats.get(d.id);
+      d.radius = 5 + Math.min(7, Math.sqrt((st?.boardings ?? 0) / 2500));
+      d.crowding = st?.crowding ?? 0;
+      const s = this.game.network.stations.get(d.id);
+      if (s) d.progress = progress(s, this.game.time);
+    }
+    this.version++;
+  }
+
   layers(zoom: number, time: number): Layer[] {
     const pulse = 0.5 + 0.5 * Math.sin(time / 260);
     const showLabels = zoom >= 13.2;

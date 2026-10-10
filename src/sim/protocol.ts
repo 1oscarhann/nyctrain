@@ -91,6 +91,8 @@ export interface TrainSnap {
 
 export interface Snapshot {
   time: number;
+  /** Version of the compiled network the train indices refer to. */
+  netVersion: number;
   /** Packed train records, see TRAIN_STRIDE. */
   trains: Float64Array;
   /** Waiting people (agents) per compiled station index. */

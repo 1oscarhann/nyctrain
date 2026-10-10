@@ -94,6 +94,8 @@ export class Commuters implements PassengerHooks {
   aCrowd: Float32Array;
   aLeft: Uint8Array;
   aPM: Uint8Array;
+  /** Did this trip actually board a train? Only those count as riders (and pay a fare). */
+  aBoarded: Uint8Array;
   // Event heap
   private hT = new Float64Array(1024);
   private hV = new Int32Array(1024);
@@ -209,6 +211,7 @@ export class Commuters implements PassengerHooks {
     this.aCrowd = new Float32Array(A);
     this.aLeft = new Uint8Array(A);
     this.aPM = new Uint8Array(A);
+    this.aBoarded = new Uint8Array(A);
     for (let g = 0; g < G; g++) {
       const h = tr[this.gHome[g]], w = tr[this.gWork[g]];
       for (let a = this.gStart[g]; a < this.gStart[g + 1]; a++) {
@@ -287,17 +290,23 @@ export class Commuters implements PassengerHooks {
     this.peakLoad = new Float32Array(P);
     this.peakTrains = new Int32Array(P);
     // Re-queue people waiting on platforms; in-flight trips on vanished routes finish by cab.
+    // Two passes: collect every live waiter first (stale queue entries fail the aPlat check),
+    // then re-enqueue, so nobody can be queued twice when platform indices shift.
     if (old && oldGraph) {
+      const moving: number[] = [];
       for (let p = 0; p < oldQueues.length; p++) {
         const q = oldQueues[p];
         for (let i = 0; i < q.length; i++) {
           const a = q[i];
           if (this.aState[a] !== S_WAIT || this.aPlat[a] !== p) continue;
           this.aPlat[a] = -1;
-          const np = this.platformFor(a);
-          if (np < 0) this.finishByCab(a, t);
-          else this.enqueue(a, np);
+          moving.push(a);
         }
+      }
+      for (const a of moving) {
+        const np = this.platformFor(a);
+        if (np < 0) this.finishByCab(a, t);
+        else this.enqueue(a, np);
       }
     }
     this.recomputePaths();
@@ -322,6 +331,7 @@ export class Commuters implements PassengerHooks {
   /** For each origin tract, one Dijkstra to every destination (AM home→work, PM work→home). */
   recomputePaths(): void {
     const G = this.G;
+    const oldAM = this.pathAM;
     this.pathAM = new Array(G).fill(null);
     this.pathPM = new Array(G).fill(null);
     this.unserved.fill(0);
@@ -384,6 +394,15 @@ export class Commuters implements PassengerHooks {
       this.lastPathMs = ms;
       this.cb.busy?.(null);
     }
+    // Observed times describe the old network; drop them where the trip changed.
+    for (let g = 0; g < G; g++) {
+      const o = oldAM[g], n = this.pathAM[g];
+      // (Keep restored observations on the first network after loading a save.)
+      if (!n || (o && Math.abs(o.time - n.time) > 0.05 * o.time)) {
+        this.obsTime[g] = 0;
+        this.obsCrowd[g] = 0;
+      }
+    }
     // Unserved demand: commuters by home tract with no reasonable transit option.
     for (let g = 0; g < G; g++) {
       const p = this.pathAM[g];
@@ -426,7 +445,9 @@ export class Commuters implements PassengerHooks {
 
   // ------------------------------------------------------------------ daily cycle
   startDay(t: number): void {
-    // A new game starts mid-morning-ish (5am): schedule today's trips without re-choosing modes.
+    // Before 3am the daily mode choice will plan the day; scheduling now would plan it twice.
+    if (t - dayIndex(t) * SECONDS_PER_DAY < TIME.modeChoiceAt) return;
+    // A game started (or loaded) after 3am: schedule today's trips without re-choosing modes.
     this.drawModesAndSchedule(dayIndex(t) * SECONDS_PER_DAY, t);
   }
 
@@ -438,6 +459,10 @@ export class Commuters implements PassengerHooks {
       if (n > 0) {
         this.obsTime[g] = this.todayTimeSum[g] / n;
         this.obsCrowd[g] = this.todayCrowdSum[g] / n;
+      } else {
+        // Nobody from this pair rode yesterday: fall back to the timetable.
+        this.obsTime[g] = 0;
+        this.obsCrowd[g] = 0;
       }
     }
     this.todayTimeSum.fill(0);
@@ -566,6 +591,7 @@ export class Commuters implements PassengerHooks {
     this.aPM[a] = pm ? 1 : 0;
     this.aTripStart[a] = t;
     this.aCrowd[a] = 0;
+    this.aBoarded[a] = 0;
     this.aLeft[a] = 0;
     if (!path) {
       // Lost their transit option (network changed): drive today.
@@ -642,13 +668,13 @@ export class Commuters implements PassengerHooks {
       }
     }
     train.load -= off.length;
-    const board = this.board(train, route, stopIdx, t);
+    const board = this.board(train, route, stopIdx, t, false);
     return { alight: off.length * this.scale, board: board * this.scale };
   }
 
   depart(train: Train, route: CRoute, stopIdx: number, t: number): void {
     if (!this.graph) return;
-    this.board(train, route, stopIdx, t);
+    this.board(train, route, stopIdx, t, true);
     // Peak-hour load on the segment leaving this stop.
     const hour = Math.floor((t % SECONDS_PER_DAY) / 3600);
     if (hour === OPERATIONS.peakHour) {
@@ -658,7 +684,8 @@ export class Commuters implements PassengerHooks {
     }
   }
 
-  private board(train: Train, route: CRoute, stopIdx: number, t: number): number {
+  /** Board from the platform queue up to crush capacity. Left-behinds are counted once, as the train leaves. */
+  private board(train: Train, route: CRoute, stopIdx: number, t: number, countLeft: boolean): number {
     const graph = this.graph!;
     const p = graph.base[train.route][train.dir] + stopIdx;
     const q = this.queues[p];
@@ -681,6 +708,7 @@ export class Commuters implements PassengerHooks {
       }
       this.leaveQueue(a);
       this.aState[a] = S_RIDE;
+      this.aBoarded[a] = 1;
       (train.buckets[k] ??= []).push(a);
       train.load++;
       boarded++;
@@ -698,7 +726,7 @@ export class Commuters implements PassengerHooks {
     }
     this.qHead[p] = head;
     // Everyone still waiting has been left behind by a full train.
-    if (train.load >= capAgents) {
+    if (countLeft && train.load >= capAgents) {
       const left = this.qLive[p];
       if (left > 0) {
         this.day.leftBehind += left;
@@ -732,7 +760,8 @@ export class Commuters implements PassengerHooks {
     d.trips++;
     d.tripTimeSum += dur;
     if (transit) {
-      d.transitTrips++;
+      if (this.aBoarded[a]) d.transitTrips++;
+      // Give-ups still count towards how transit felt for this pair.
       this.todayTimeSum[g] += dur;
       this.todayCrowdSum[g] += this.aCrowd[a];
       this.todayTimeN[g]++;

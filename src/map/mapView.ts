@@ -138,6 +138,18 @@ export class MapView {
     this.invalidate();
   }
 
+  /** Snap straight to the flat view (no animation) — used when a game starts from the title. */
+  resetFlat(): void {
+    this.tiltToken++;
+    this._is3D = false;
+    this.buildingScale = 0;
+    this.map.setGlobalStateProperty(BUILDING_HEIGHT_STATE, 0);
+    this.map.setLayoutProperty(BUILDING_LAYER, 'visibility', 'none');
+    this.map.jumpTo({ pitch: 0 });
+    this.events.emit('view3d', false);
+    this.invalidate();
+  }
+
   toggleView3D(): void {
     this.setView3D(!this._is3D);
   }
@@ -147,6 +159,18 @@ export class MapView {
     if (on === this.xray) return;
     this.xray = on;
     this.map.setPaintProperty(BUILDING_LAYER, 'fill-extrusion-opacity', on ? MAP.xrayOpacity : 1);
+  }
+
+  /** Id of the deck.gl object under a client-space point (layers must be pickable). */
+  pick(clientPx: [number, number], layerIds: string[], radius = 6): number | null {
+    const r = this.map.getCanvas().getBoundingClientRect();
+    try {
+      const info = this.overlay.pickObject({ x: clientPx[0] - r.left, y: clientPx[1] - r.top, layerIds, radius });
+      const obj = info?.object as { id?: number } | undefined;
+      return obj && typeof obj.id === 'number' ? obj.id : null;
+    } catch {
+      return null;
+    }
   }
 
   /** Ground resolution: metres per screen pixel at the map centre. */

@@ -1,0 +1,140 @@
+/**
+ * Trains as small rounded capsules in the route colour (deck.gl), length scaled to car count,
+ * oriented along the track and sitting on their route's interlined line. Positions are
+ * interpolated between sim snapshots; in 3D they follow the height of elevated track.
+ */
+import { PathLayer } from '@deck.gl/layers';
+import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
+import type { Layer, PickingInfo } from '@deck.gl/core';
+import { MAP } from '../balance';
+import { toLonLat } from '../core/geo';
+import type { CompiledNetwork, CRouteDir } from '../sim/protocol';
+import type { TrainView } from '../sim/client';
+import { hexRgb } from '../map/networkLayers';
+
+export interface TrainDatum {
+  id: number;
+  path: [number, number, number][];
+  color: [number, number, number, number];
+  offset: number;
+  train: TrainView;
+}
+
+const WIDTH = 6;
+const offsetExt = new PathStyleExtension({ offset: true });
+
+export class TrainLayer {
+  data: TrainDatum[] = [];
+  selected: number | null = null;
+  private colors = new Map<number, [number, number, number, number]>();
+
+  /** Rebuild positions for this frame. */
+  update(net: CompiledNetwork | null, trains: TrainView[], offsets: Map<string, number>, is3D: boolean, scale = 1): void {
+    if (!net) {
+      this.data = [];
+      return;
+    }
+    const out: TrainDatum[] = [];
+    for (const t of trains) {
+      const r = net.routes[t.route];
+      if (!r) continue;
+      const dir = r.dirs[t.dir];
+      if (!dir) continue;
+      let col = this.colors.get(r.id);
+      if (!col) {
+        const c = hexRgb(r.color);
+        col = [c[0], c[1], c[2], 255];
+        this.colors.set(r.id, col);
+      }
+      const head = Math.min(dir.length, t.s);
+      const tail = Math.max(0, head - r.trainLength);
+      const path = samplePath(dir, tail, head, is3D);
+      if (path.length < 2) continue;
+      const el = elementAt(dir, head - r.trainLength / 2);
+      const offAB = el ? (offsets.get(`${el.edge}:${r.id}`) ?? 0) : 0;
+      const travelOffset = el && el.edgeDir === 1 ? -offAB : offAB;
+      // Right-hand running: each direction sits slightly to its own side of the line.
+      out.push({ id: t.id, path, color: col, offset: (travelOffset * scale + 1.6) / WIDTH, train: t });
+    }
+    this.data = out;
+  }
+
+  layers(zoom: number, onPick: (id: number) => void): Layer[] {
+    if (zoom < MAP.trainMinZoom || !this.data.length) return [];
+    const DEPTH = { depthCompare: 'always', depthWriteEnabled: false } as const;
+    const sel = this.selected;
+    return [
+      new PathLayer<TrainDatum, PathStyleExtensionProps<TrainDatum>>({
+        id: 'trains-casing',
+        data: this.data,
+        getPath: (d) => d.path,
+        getColor: (d) => (d.id === sel ? [255, 194, 74, 255] : [16, 20, 25, 235]),
+        getWidth: (d) => (d.id === sel ? WIDTH + 5 : WIDTH + 2.5),
+        widthUnits: 'pixels',
+        capRounded: true,
+        jointRounded: true,
+        getOffset: (d) => (d.offset * WIDTH) / (d.id === sel ? WIDTH + 5 : WIDTH + 2.5),
+        extensions: [offsetExt],
+        parameters: DEPTH,
+        updateTriggers: { getColor: sel, getWidth: sel, getOffset: sel },
+      }),
+      new PathLayer<TrainDatum, PathStyleExtensionProps<TrainDatum>>({
+        id: 'trains',
+        data: this.data,
+        getPath: (d) => d.path,
+        getColor: (d) => d.color,
+        getWidth: WIDTH,
+        widthUnits: 'pixels',
+        capRounded: true,
+        jointRounded: true,
+        getOffset: (d) => d.offset,
+        extensions: [offsetExt],
+        pickable: true,
+        onClick: (info: PickingInfo<TrainDatum>) => {
+          if (info.object) onPick(info.object.id);
+          return true;
+        },
+        parameters: DEPTH,
+      }),
+    ];
+  }
+}
+
+/** Points of a route-direction polyline between path distances s0 and s1. */
+export function samplePath(dir: CRouteDir, s0: number, s1: number, is3D: boolean): [number, number, number][] {
+  const { xs, ys, zs, cum } = dir;
+  const n = cum.length;
+  const out: [number, number, number][] = [];
+  const at = (s: number) => {
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) {
+      const m = (lo + hi) >> 1;
+      if (cum[m] <= s) lo = m;
+      else hi = m;
+    }
+    const L = cum[hi] - cum[lo] || 1;
+    const f = Math.max(0, Math.min(1, (s - cum[lo]) / L));
+    return { i: lo, x: xs[lo] + (xs[hi] - xs[lo]) * f, y: ys[lo] + (ys[hi] - ys[lo]) * f, z: zs[lo] + (zs[hi] - zs[lo]) * f };
+  };
+  const a = at(s0);
+  const b = at(s1);
+  const push = (x: number, y: number, z: number) => {
+    const [lon, lat] = toLonLat(x, y);
+    out.push([lon, lat, is3D ? Math.max(0, z) : 0]);
+  };
+  push(a.x, a.y, a.z);
+  for (let i = a.i + 1; i <= b.i; i++) push(xs[i], ys[i], zs[i]);
+  push(b.x, b.y, b.z);
+  return out;
+}
+
+export function elementAt(dir: CRouteDir, s: number) {
+  const els = dir.elems;
+  let lo = 0, hi = els.length - 1;
+  while (lo < hi) {
+    const m = (lo + hi + 1) >> 1;
+    if (els[m].s0 <= s) lo = m;
+    else hi = m - 1;
+  }
+  return els[lo];
+}

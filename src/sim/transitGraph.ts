@@ -1,7 +1,12 @@
 /**
- * Transit graph for pathfinding. Nodes are platforms (route, direction, stop). Edges:
- *   ride      platform k → k+1 on the same route and direction (scheduled time)
- *   transfer  alight platform → board platform at the same station or an interchange
+ * Transit graph for pathfinding. Nodes are platforms (route, direction, stop), each in two
+ * layers so a path can only end, or transfer, after actually riding:
+ *   waiting  p        reached by an access walk or a transfer
+ *   on board P + p    reached only by riding
+ * Edges:
+ *   board     waiting p → on board (next stop), scheduled time
+ *   ride      on board k → on board k+1 on the same route and direction
+ *   transfer  on board (alight) → waiting at the same station or an interchange
  *             (walk + half the outgoing route's headway, capped, + transfer penalty)
  * Access and egress walks connect tracts to stations.
  */
@@ -117,10 +122,10 @@ export class TransitGraph {
     this.trOff = off;
     this.trTo = new Int32Array(to);
     this.trWalk = new Float64Array(walk);
-    this.dist = new Float64Array(P);
-    this.prev = new Int32Array(P);
-    this.stamp = new Int32Array(P);
-    const cap = Math.max(16, P + to.length + 16);
+    this.dist = new Float64Array(2 * P);
+    this.prev = new Int32Array(2 * P);
+    this.stamp = new Int32Array(2 * P);
+    const cap = Math.max(16, 2 * P + to.length + 16);
     this.heapK = new Float64Array(cap);
     this.heapV = new Int32Array(cap);
   }
@@ -140,87 +145,82 @@ export class TransitGraph {
 
   /**
    * Multi-source Dijkstra from access stations [(station, walk seconds)].
-   * After the call, dist/prev are valid for platforms whose stamp equals the current epoch.
+   * After the call, dist/prev are valid for nodes whose stamp equals the current epoch.
    */
   run(access: { station: number; walk: number }[]): void {
     const e = ++this.epoch;
     const { dist, prev, stamp } = this;
+    const P = this.P;
     this.heapN = 0;
+    const relax = (node: number, c: number, from: number) => {
+      if (stamp[node] !== e || c < dist[node]) {
+        stamp[node] = e;
+        dist[node] = c;
+        prev[node] = from;
+        this.push(c, node);
+      }
+    };
     for (const a of access) {
       for (const p of this.stationBoard[a.station]) {
         const c = a.walk + this.wait[p];
-        if (!isFinite(c)) continue;
-        if (stamp[p] !== e || c < dist[p]) {
-          stamp[p] = e;
-          dist[p] = c;
-          prev[p] = -1;
-          this.push(c, p);
-        }
+        if (isFinite(c)) relax(p, c, -1);
       }
     }
     const penalty = COMMUTERS.transferPenalty;
     while (this.heapN > 0) {
       const c = this.heapK[0];
-      const p = this.pop();
-      if (c > dist[p]) continue;
-      const q = this.rideNext[p];
-      if (q >= 0) {
-        const nc = c + this.rideCost[p];
-        if (stamp[q] !== e || nc < dist[q]) {
-          stamp[q] = e;
-          dist[q] = nc;
-          prev[q] = p;
-          this.push(nc, q);
-        }
+      const node = this.pop();
+      if (c > dist[node]) continue;
+      if (node < P) {
+        // Waiting at p: board and ride to the next stop.
+        const q = this.rideNext[node];
+        if (q >= 0) relax(P + q, c + this.rideCost[node], node);
+        continue;
       }
-      if (this.canAlight[p]) {
-        for (let k = this.trOff[p]; k < this.trOff[p + 1]; k++) {
-          const t = this.trTo[k];
-          const nc = c + this.trWalk[k] + this.wait[t] + penalty;
-          if (!isFinite(nc)) continue;
-          if (stamp[t] !== e || nc < dist[t]) {
-            stamp[t] = e;
-            dist[t] = nc;
-            prev[t] = p;
-            this.push(nc, t);
-          }
-        }
+      const p = node - P;
+      // On board arriving at p: stay on…
+      const q = this.rideNext[p];
+      if (q >= 0) relax(P + q, c + this.rideCost[p], node);
+      // …or get off and transfer.
+      for (let k = this.trOff[p]; k < this.trOff[p + 1]; k++) {
+        const t = this.trTo[k];
+        const nc = c + this.trWalk[k] + this.wait[t] + penalty;
+        if (isFinite(nc)) relax(t, nc, node);
       }
     }
   }
 
-  reached(p: number): boolean {
-    return this.stamp[p] === this.epoch;
-  }
-
-  /** Best arrival (generalised seconds incl. transfer penalties) at a station, with the platform. */
+  /** Best arrival on board (generalised seconds incl. transfer penalties) at a station. */
   bestArrival(station: number): { cost: number; plat: number } {
     let best = Infinity;
     let plat = -1;
+    const P = this.P;
     for (const p of this.stationAlight[station]) {
-      if (this.stamp[p] !== this.epoch) continue;
-      if (this.dist[p] < best) {
-        best = this.dist[p];
+      const node = P + p;
+      if (this.stamp[node] !== this.epoch) continue;
+      if (this.dist[node] < best) {
+        best = this.dist[node];
         plat = p;
       }
     }
     return { cost: best, plat };
   }
 
-  /** Legs ending at platform p (after run()). */
+  /** Legs ending on board at platform p (after run()). */
   legsTo(p: number): Leg[] {
+    const P = this.P;
     const legs: Leg[] = [];
     let alight = p;
-    let cur = p;
-    while (cur >= 0) {
-      const pr = this.prev[cur];
-      const isRide = pr >= 0 && this.rideNext[pr] === cur;
-      if (!isRide) {
-        // cur is a boarding platform.
-        legs.push({ route: this.platRoute[cur], dir: this.platDir[cur], board: this.platStop[cur], alight: this.platStop[alight] });
-        alight = pr;
+    let node = P + p;
+    let guard = 0;
+    while (node >= 0 && guard++ < 10000) {
+      const pr = this.prev[node];
+      if (node < P) {
+        // Waiting node: this is where the current leg boarded.
+        legs.push({ route: this.platRoute[node], dir: this.platDir[node], board: this.platStop[node], alight: this.platStop[alight] });
+        if (pr >= 0) alight = pr - P; // transferred off this on-board platform
       }
-      cur = pr;
+      node = pr;
     }
     return legs.reverse();
   }

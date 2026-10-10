@@ -80,7 +80,8 @@ export class TrainSim {
   private nextTrainId = 1;
   day: TrainDayStats = newDayStats();
 
-  constructor(private hooks: PassengerHooks) {}
+  /** Real people per agent: train loads are counted in agents, capacities in people. */
+  constructor(private hooks: PassengerHooks, private agentScale = 1) {}
 
   // ------------------------------------------------------------------ network updates
   setNetwork(net: CompiledNetwork, t: number): void {
@@ -120,6 +121,20 @@ export class TrainSim {
       }
       // Rebuild ready queues for re-pathed trains.
       for (const tr of keep) if (!samePath && tr.state === TState.Ready && !ds.ready[tr.dir].includes(tr.id)) ds.ready[tr.dir].push(tr.id);
+      // Shrink the fleet if fewer (longer) trains fit the cars owned: idle trains go first.
+      if (keep.length > r.fleet) {
+        const order = [TState.Ready, TState.Turnaround, TState.Dwelling, TState.Running];
+        const drop = [...keep].sort((a, b) => order.indexOf(a.state) - order.indexOf(b.state)).slice(0, keep.length - r.fleet);
+        const gone = new Set(drop.map((tr) => tr.id));
+        for (const tr of drop) {
+          if (tr.load > 0) this.hooks.evacuate(tr, t);
+          this.releaseLocks(tr);
+        }
+        this.trains = this.trains.filter((tr) => !gone.has(tr.id));
+        ds.ready[0] = ds.ready[0].filter((id) => !gone.has(id));
+        ds.ready[1] = ds.ready[1].filter((id) => !gone.has(id));
+        keep.splice(0, keep.length, ...keep.filter((tr) => !gone.has(tr.id)));
+      }
       // Grow the fleet: new trains wait at alternating terminals.
       let count = keep.length;
       let k = 0;
@@ -195,8 +210,9 @@ export class TrainSim {
   step(t: number, dt: number): void {
     const net = this.net;
     if (!net) return;
-    this.runDispatch(t);
+    // Occupancy first, so dispatch sees where every train is right now.
     this.buildOccupancy();
+    this.runDispatch(t);
     const byId = this.trainIndex();
     for (const tr of this.trains) {
       switch (tr.state) {
@@ -227,8 +243,8 @@ export class TrainSim {
         // New departure slots.
         let guard = 0;
         while (t >= ds.next[d] && guard++ < 20) {
-          ds.pending[d].push(ds.next[d]);
           const hw = r.headways[periodIndex(ds.next[d])];
+          if (hw > 0) ds.pending[d].push(ds.next[d]);
           ds.next[d] = hw > 0 ? ds.next[d] + hw : this.nextServiceTime(r, ds.next[d] + 1);
         }
         // Too many missed slots: a late train still goes, but don't stack a backlog forever.
@@ -236,7 +252,9 @@ export class TrainSim {
         if (!ds.pending[d].length || !ds.ready[d].length) continue;
         const dir = r.dirs[d];
         const headS = Math.min(dir.length, dir.stopS[0] + r.trainLength / 2);
-        if (!this.regionFree(dir, headS - r.trainLength - 30, headS + 30)) continue;
+        // Clear platform, and nothing close enough behind that it couldn't stop for us.
+        const behind = OPERATIONS.safetyMargin + (r.vmax * r.vmax) / (2 * r.brake);
+        if (!this.regionFree(dir, headS - r.trainLength - behind, headS + 30)) continue;
         const slot = ds.pending[d].shift()!;
         const id = ds.ready[d].shift()!;
         const tr = this.trains.find((x) => x.id === id);
@@ -261,9 +279,11 @@ export class TrainSim {
 
   /** Is the stretch [s0, s1] of a route direction clear of other trains? */
   private regionFree(dir: CRouteDir, s0: number, s1: number): boolean {
-    for (const el of dir.elems) {
-      if (el.s1 < s0 || el.s0 > s1) continue;
-      const u0 = el.u0 + (Math.max(s0, el.s0) - el.s0);
+    for (let k = 0; k < dir.elems.length; k++) {
+      const el = dir.elems[k];
+      if ((el.s1 < s0 && k > 0) || el.s0 > s1) continue;
+      // The first element also covers track behind the path start (other routes run through).
+      const u0 = k === 0 && s0 < el.s0 ? Math.max(0, el.u0 - (el.s0 - s0)) : el.u0 + (Math.max(s0, el.s0) - el.s0);
       const u1 = el.u0 + (Math.min(s1, el.s1) - el.s0);
       for (const o of this.occ[el.track]) if (o.head >= u0 && o.tail <= u1) return false;
     }
@@ -331,6 +351,11 @@ export class TrainSim {
       const endU = el.u0 + (el.s1 - el.s0);
       for (const o of this.occ[el.track]) {
         if (o.train === me) continue;
+        if (k === tr.elem && o.tail < myU - 0.01 && o.head >= myU - 0.01) {
+          // Already overlapping (should never happen): stop rather than drive through it.
+          obs = Math.min(obs, s);
+          continue;
+        }
         if (o.tail < myU - 0.01 || o.tail > endU) continue;
         const so = el.s0 + (o.tail - el.u0);
         if (so < obs) obs = so;
@@ -383,7 +408,9 @@ export class TrainSim {
           if (this.lockHolder[l.lock] === tr.id) this.lockHolder[l.lock] = -1;
           return false;
         }
-        if (tr.v < 0.1 && tr.s < l.s0 - 1 && t - tr.stoppedSince > OPERATIONS.lockStallRelease) {
+        // A train got between us and the junction: it goes first.
+        const between = obs < l.s0;
+        if (between || (tr.v < 0.1 && tr.s < l.s0 - 1 && t - tr.stoppedSince > OPERATIONS.lockStallRelease)) {
           if (this.lockHolder[l.lock] === tr.id) this.lockHolder[l.lock] = -1;
           return false;
         }
@@ -424,11 +451,11 @@ export class TrainSim {
       rl.sum += Math.max(0, tr.late);
       rl.n++;
     }
-    const overComfort = tr.load > r.capComfort;
+    const overComfort = tr.load * this.agentScale > r.capComfort;
     const { alight, board } = this.hooks.arrive(tr, r, stopIdx, t);
     let dwell = OPERATIONS.dwellBase + ((alight + board) * OPERATIONS.dwellPerPassenger) / r.cars;
     dwell = Math.min(OPERATIONS.dwellMax, dwell);
-    if (overComfort || tr.load > r.capComfort) dwell *= OPERATIONS.dwellCrowdedFactor;
+    if (overComfort || tr.load * this.agentScale > r.capComfort) dwell *= OPERATIONS.dwellCrowdedFactor;
     if (stopIdx === 0) dwell = Math.max(dwell, OPERATIONS.dwellBase);
     tr.until = t + dwell;
   }

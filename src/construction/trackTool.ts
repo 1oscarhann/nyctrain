@@ -105,7 +105,14 @@ export class TrackTool implements Tool {
     const net = this.ctx.game.network.clone();
     const endSnap = this.hover && this.hover.snap.kind !== 'none' && this.hover.ok ? this.hover.snap : ({ kind: 'none' } as Snap);
     const pt: StrokePoint = { x: this.hover?.x ?? p.x, y: this.hover?.y ?? p.y, level: endSnap.kind === 'none' ? this.level : this.levelOfSnap(endSnap) };
-    const points = [...this.pts, pt];
+    // Hovering on the last placed point: preview what's committed so far.
+    const prevPt = this.pts[this.pts.length - 1];
+    const points = Math.hypot(pt.x - prevPt.x, pt.y - prevPt.y) < 3 ? [...this.pts] : [...this.pts, pt];
+    if (points.length < 2) {
+      this.preview = null;
+      this.ctx.tip(`<div class="hw-muted">Click the next point</div>`, p.px);
+      return;
+    }
     let edges: number[] = [];
     try {
       edges = net.addStroke(points, this.cls, this.startSnap, endSnap);

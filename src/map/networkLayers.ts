@@ -7,6 +7,7 @@
  * in a consistent order along the trunk so lines never swap sides.
  */
 import type { GeoJSONSource, Map as MLMap, LineLayerSpecification } from 'maplibre-gl';
+
 import type { Feature, FeatureCollection, LineString } from 'geojson';
 import { MAP, type TrackLevel } from '../balance';
 import type { Game, Selection } from '../core/game';
@@ -25,9 +26,23 @@ const MUTED = '#8E99A5';
 const AMBER = '#FFC24A';
 const RED = '#FF5D5D';
 
-/** Width (px) of a single line by zoom. */
-const W = (base: number): LineLayerSpecification['paint'] extends infer P ? P extends { 'line-width'?: infer X } ? X : never : never =>
-  ['interpolate', ['exponential', 1.5], ['zoom'], 10, base * 0.55, 13, base, 16, base * 1.5] as never;
+/** Line widths and offsets scale with zoom; deck.gl layers use lineScale() to match. */
+const ZOOM_SCALE: [number, number][] = [
+  [10, 0.55],
+  [13, 1],
+  [16, 1.5],
+];
+const W = (base: number) => ['interpolate', ['linear'], ['zoom'], ...ZOOM_SCALE.flatMap(([z, k]) => [z, base * k])] as never;
+
+export function lineScale(zoom: number): number {
+  if (zoom <= ZOOM_SCALE[0][0]) return ZOOM_SCALE[0][1];
+  for (let i = 0; i + 1 < ZOOM_SCALE.length; i++) {
+    const [z0, k0] = ZOOM_SCALE[i];
+    const [z1, k1] = ZOOM_SCALE[i + 1];
+    if (zoom <= z1) return k0 + ((zoom - z0) / (z1 - z0)) * (k1 - k0);
+  }
+  return ZOOM_SCALE[ZOOM_SCALE.length - 1][1];
+}
 
 interface HalfPiece {
   edge: number;
@@ -155,7 +170,7 @@ export class NetworkLayers {
       id: 'hw-hilite',
       source: HILITE_SOURCE,
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': AMBER, 'line-opacity': 0.45, 'line-width': W(14), 'line-blur': 3 },
+      paint: { 'line-color': AMBER, 'line-opacity': 0.28, 'line-width': W(11), 'line-blur': 4 },
     });
 
     // ---- built track without routes
@@ -188,7 +203,7 @@ export class NetworkLayers {
     const routeLevel = (level: TrackLevel) => ['==', ['get', 'level'], level];
     const routePaint = (extra: Record<string, unknown> = {}) => ({
       'line-color': ['get', 'color'],
-      'line-offset': ['interpolate', ['linear'], ['zoom'], 10, ['*', ['get', 'offset'], 0.55], 13, ['get', 'offset'], 16, ['*', ['get', 'offset'], 1.5]],
+      'line-offset': ['interpolate', ['linear'], ['zoom'], ...ZOOM_SCALE.flatMap(([z, k]) => [z, ['*', ['get', 'offset'], k]])],
       'line-width': W(MAP.routeLineWidthPx),
       'line-opacity': ['get', 'opacity'],
       ...extra,

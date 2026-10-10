@@ -41,6 +41,7 @@ export class Engine {
         depart: () => {},
         evacuate: () => {},
       },
+      opts.agentScale,
     );
     this.commuters?.setTrains(() => this.trains.trains);
   }
@@ -121,7 +122,7 @@ export class Engine {
     });
     const waiting = this.commuters?.waitingByStation(this.net?.stations.length ?? 0) ?? new Float64Array(this.net?.stations.length ?? 0);
     const live: LiveStats = this.commuters?.live() ?? { ridersToday: 0, tripsInProgress: 0, inSystem: 0 };
-    return { time: this.time, trains: arr, waiting, live, simRate };
+    return { time: this.time, netVersion: this.net?.version ?? -1, trains: arr, waiting, live, simRate };
   }
 }
 
