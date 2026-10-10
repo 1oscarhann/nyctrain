@@ -1,0 +1,21 @@
+/** Original line icons for the toolbar (24×24, stroke = currentColor). */
+export const ICONS = {
+  logo: '<path d="M4 18 L10 7 L14 14 L20 5" stroke="#4CD08A" stroke-width="2.6"/><circle cx="10" cy="7" r="2.2" fill="#E7EBEF" stroke="none"/><circle cx="14" cy="14" r="2.2" fill="#E7EBEF" stroke="none"/>',
+  select: '<path d="M6 4 L18 12 L12.5 13.2 L15.5 19.5 L13 20.6 L10.1 14.3 L6 18 Z"/>',
+  track: '<path d="M4 19 C 9 19, 9 5, 20 5"/><path d="M6.5 15.5 l2.6 1.3 M9.5 11 l2.8 0.6 M13 7.6 l2.4 -0.4 M17 5.4 l1.4 -1.8" stroke-width="1.5"/>',
+  station: '<circle cx="12" cy="12" r="5.5"/><path d="M3 12 H6.5 M17.5 12 H21"/>',
+  route: '<circle cx="5.5" cy="17.5" r="2.3"/><circle cx="18.5" cy="6.5" r="2.3"/><path d="M7.5 16 L11 12.5 H14 L17 8.5"/>',
+  bulldoze: '<path d="M4 16 H14 V11 H9 L7 13 H4 Z"/><circle cx="6.5" cy="18" r="1.5"/><circle cx="11.5" cy="18" r="1.5"/><path d="M14 13 L19 9 L21 15 L15.5 15.5"/>',
+  cube: '<path d="M12 3 L20 7.5 V16.5 L12 21 L4 16.5 V7.5 Z"/><path d="M4 7.5 L12 12 L20 7.5 M12 12 V21"/>',
+  layers: '<path d="M12 4 L21 9 L12 14 L3 9 Z"/><path d="M3 13.5 L12 18.5 L21 13.5"/>',
+  finance: '<path d="M4 19 V10 M9.5 19 V6 M15 19 V12 M20.5 19 V8"/>',
+  goals: '<path d="M6 21 V4"/><path d="M6 4 H18 L15.5 8 L18 12 H6"/>',
+  menu: '<path d="M4 7 H20 M4 12 H20 M4 17 H20"/>',
+  pause: '<path d="M8 5 V19 M16 5 V19" stroke-width="2.6"/>',
+  play: '<path d="M7 5 L19 12 L7 19 Z" fill="currentColor"/>',
+  skip: '<path d="M5 6 L12 12 L5 18 Z M12 6 L19 12 L12 18 Z" fill="currentColor" stroke="none"/>',
+  close: '<path d="M6 6 L18 18 M18 6 L6 18"/>',
+  undo: '<path d="M9 7 L4 12 L9 17"/><path d="M4 12 H14 A6 6 0 0 1 14 24"/>',
+  routes: '<path d="M4 6 H20 M4 12 H20 M4 18 H20" stroke-width="2.4"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5 A2.5 2.5 0 1 1 12 12 V14"/><circle cx="12" cy="17.5" r="0.6" fill="currentColor"/>',
+};
