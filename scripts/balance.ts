@@ -1,6 +1,7 @@
 /**
  * Balance tuning: build scenario networks in code, run them to near-equilibrium and report
  * ridership and daily money.  npm run balance [-- city=nyc|london scenario=core|sprawl|test days=8 scale=10]
+ * (scenario=test is New York only)
  */
 import { loadLandFromDisk, loadWorldFromDisk } from './nodeData';
 import { buildTestNetwork, createHeadlessGame, drawLine, makeRoute, runDays, stationNear } from '../src/sim/headless';
@@ -300,6 +301,7 @@ const scale = Number(args.scale ?? 10);
 // Built in sandbox so the scenario never runs out of money; the ledger still records every cost.
 const game = createHeadlessGame(loadWorldFromDisk(), loadLandFromDisk(), { sandbox: true });
 let stopsets: Record<string, number[]> = {};
+if (scenario === 'test' && cityId !== 'nyc') throw new Error('scenario=test is the New York test network; use core or sprawl for London');
 if (scenario === 'test') {
   buildTestNetwork(game);
 } else {

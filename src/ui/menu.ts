@@ -1,8 +1,9 @@
 /** In-game menu: save to slots, export/import, load, settings, exit to title. */
 import { COMMUTERS } from '../balance';
-import { fmtDate } from '../core/calendar';
-import { fmtMoney, setUnits } from '../core/units';
+import { setUnits } from '../core/units';
 import { exportFile, importFile, listSlots, readSlot, SLOTS, type SlotId } from '../save/store';
+import { saveSummary } from '../save/summary';
+import { CITIES, city } from '../cities';
 import type { App } from './app';
 import { h } from './dom';
 import { modal } from './widgets';
@@ -16,7 +17,7 @@ export async function openMenu(app: App): Promise<void> {
   const body = h('div');
   const slotRow = (slot: SlotId) => {
     const m = metas[slot];
-    const info = m ? `${fmtDate(m.day)} · ${m.sandbox ? 'Sandbox' : fmtMoney(m.cash)} · saved ${new Date(m.savedAt).toLocaleString()}` : 'Empty';
+    const info = m ? `${saveSummary(m)} · saved ${new Date(m.savedAt).toLocaleString()}` : 'Empty';
     return h(
       'div',
       { class: 'list-item', style: 'cursor:default' },
@@ -37,7 +38,8 @@ export async function openMenu(app: App): Promise<void> {
             onclick: async () => {
               const save = await readSlot(slot);
               if (!save) return app.toast('Could not read save', undefined, 'red');
-              if (!(await app.confirm(`Load ${SLOT_LABEL[slot]}?`, 'Unsaved progress since the last autosave will be lost.', 'Load'))) return;
+              const other = m.city && m.city !== city().id ? ` This save is in ${CITIES[m.city].name}; the game switches city.` : '';
+              if (!(await app.confirm(`Load ${SLOT_LABEL[slot]}?`, `Unsaved progress since the last autosave will be lost.${other}`, 'Load'))) return;
               close();
               app.opts.restart(save);
             },

@@ -6,12 +6,12 @@
 import { ECONOMY, MAP, COMMUTERS, type CityId } from '../balance';
 import { applyCity, CITIES, CITY_IDS, city, cityBalance } from '../cities';
 import { toLonLat } from '../core/geo';
-import { fmtDate } from '../core/calendar';
-import { currency, fmtCount, fmtMoney, setCurrency, setUnits } from '../core/units';
+import { currency, fmtCount, setUnits } from '../core/units';
 import { fetchLand, fetchWorld, type LandCollection, type World } from '../data/world';
 import { MapView } from '../map/mapView';
 import type { SaveFile } from '../save/format';
 import { importFile, listSlots, readSlot, SLOTS } from '../save/store';
+import { saveSummary } from '../save/summary';
 import { App } from './app';
 import { h, svgIcon } from './dom';
 import { ICONS } from './icons';
@@ -36,31 +36,36 @@ async function useCity(root: HTMLElement, id: CityId): Promise<void> {
       const [w, l] = await Promise.all([fetchWorld(base), fetchLand(base)]);
       d = { world: w, land: l };
       cache.set(id, d);
-    } finally {
+    } catch (e) {
+      // Callers fall back to the previous city (or main.ts shows "Failed to start").
       loading.remove();
+      throw e;
     }
+    loading.remove();
   }
   world = d.world;
   land = d.land;
 }
 
-/** Money in another city's currency (for save summaries on the title screen). */
-function moneyIn(id: CityId, v: number): string {
-  setCurrency(CITIES[id].currency);
-  const s = fmtMoney(v);
-  setCurrency(city().currency);
-  return s;
-}
-
-function saveSummary(m: SaveFile['meta']): string {
-  const c = m.city ?? 'nyc';
-  return `${CITIES[c].name} · ${fmtDate(m.day)} · ${m.sandbox ? 'Sandbox' : moneyIn(c, m.cash)}`;
+/** Switch to `id`, or stay in (and re-apply) `back` if its data can't be loaded. Returns an error notice or null. */
+async function useCityOr(root: HTMLElement, id: CityId, back: CityId): Promise<string | null> {
+  try {
+    await useCity(root, id);
+    storeLastCity(id);
+    return null;
+  } catch (e) {
+    console.error(e);
+    await useCity(root, back);
+    return `Couldn’t load ${CITIES[id].name}: ${(e as Error).message}`;
+  }
 }
 
 export async function bootstrap(root: HTMLElement): Promise<void> {
   await document.fonts.load('700 14px Overpass').catch(() => undefined);
-  await useCity(root, loadLastCity());
-  await showTitle(root);
+  const want = loadLastCity();
+  // New York is the fallback; if New York itself fails, main.ts reports it.
+  const notice = want === 'nyc' ? (await useCity(root, 'nyc'), null) : await useCityOr(root, want, 'nyc');
+  await showTitle(root, notice);
 }
 
 function freshMapContainer(root: HTMLElement): HTMLElement {
@@ -70,7 +75,7 @@ function freshMapContainer(root: HTMLElement): HTMLElement {
   return el;
 }
 
-async function showTitle(root: HTMLElement): Promise<void> {
+async function showTitle(root: HTMLElement, notice: string | null = null): Promise<void> {
   const view = await MapView.create(freshMapContainer(root));
   // A slow orbit over the city's centre while you decide.
   const cam = cityBalance().titleCamera;
@@ -96,11 +101,10 @@ async function showTitle(root: HTMLElement): Promise<void> {
 
   const switchCity = async (id: CityId) => {
     if (id === city().id) return;
+    const back = city().id;
     leave();
-    view.map.remove();
-    storeLastCity(id);
-    await useCity(root, id);
-    await showTitle(root);
+    view.destroy();
+    await showTitle(root, await useCityOr(root, id, back));
   };
 
   const start = async (sandbox: boolean, save: SaveFile | null, tutorial: boolean) => {
@@ -108,9 +112,10 @@ async function showTitle(root: HTMLElement): Promise<void> {
     let v = view;
     if (save && save.city !== city().id) {
       // A save from the other city: switch over first.
-      v.map.remove();
-      storeLastCity(save.city);
-      await useCity(root, save.city);
+      const back = city().id;
+      v.destroy();
+      const err = await useCityOr(root, save.city, back);
+      if (err) return showTitle(root, err);
       v = await MapView.create(freshMapContainer(root));
     } else {
       v.resetFlat();
@@ -144,6 +149,7 @@ async function showTitle(root: HTMLElement): Promise<void> {
       btn('Load game', 'Saved slots or a file', () => loadDialog()),
       btn('Settings', null, () => settingsDialog()),
     ),
+    notice ? h('div', { class: 'err', style: 'margin-top:12px' }, notice) : null,
     h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:14px;line-height:1.45' }, synthetic ? '⚠ Running on a SYNTHETIC dataset — real commuting data was unreachable when the data was built.' : `Commuting data: ${world.meta.source}. ${fmtCount(world.tracts.reduce((s, t) => s + t.residents, 0))} commuters across ${world.tracts.length.toLocaleString()} ${c.zoneWord}.`),
   );
   const overlay = h('div', { style: 'position:absolute;inset:0;display:flex;align-items:center;justify-content:flex-start;padding-left:max(16px,6vw);z-index:90;background:linear-gradient(90deg,rgba(16,20,25,.82),rgba(16,20,25,.25) 60%,rgba(16,20,25,0))' }, card);
@@ -231,17 +237,17 @@ function startGame(root: HTMLElement, view: MapView, p: { sandbox: boolean; save
     exit: () => {
       current = null;
       teardownUi(root);
-      view.map.remove();
+      view.destroy();
       showTitle(root);
     },
     restart: async (save) => {
       current?.destroy();
       current = null;
       teardownUi(root);
-      view.map.remove();
+      view.destroy();
       if (save.city !== city().id) {
-        storeLastCity(save.city);
-        await useCity(root, save.city);
+        const err = await useCityOr(root, save.city, city().id);
+        if (err) return void showTitle(root, err);
       }
       const v = await MapView.create(freshMapContainer(root));
       startGame(root, v, { sandbox: save.game.sandbox, save, tutorial: false });

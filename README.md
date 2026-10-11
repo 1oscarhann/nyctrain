@@ -57,8 +57,13 @@ March 2021, during lockdown and furlough, so its commute flows are badly distort
 London-internal flows (residence and workplace both among London's 983 MSOAs) and drops anyone
 working mainly from home, giving 2,926,149 commuters in 352,300 pairs. Positions are ONS
 population-weighted MSOA centroids; radii come from ONS MSOA boundaries. The land mask is the ONS
-borough boundaries clipped to the coastline, which cut the tidal Thames out, so the water rule
-works exactly as in New York. The census flows carry no income, so each pair is split into three
+borough boundaries clipped to the coastline, which cut the tidal Thames out. Inland water the ONS
+clip leaves in (the Docklands docks, the Thames above Teddington Lock, the reservoirs; about
+16.5 km²) is cut out using OpenStreetMap water polygons from the same OpenFreeMap tiles the map
+uses, so the water rule works exactly as in New York. Job-heavy areas (more than three jobs per
+resident, such as the City and the West End) are placed at the centre of their area rather than at
+the residents' population-weighted centroid. The City's centroid sits on the Barbican estate,
+800 m from Bank. The census flows carry no income, so each pair is split into three
 earnings bands (30/40/30 across London) with an ordered logit on the home MSOA's household
 income (ONS small-area income estimates 2011/12). Contains National Statistics data © Crown
 copyright and database right 2011/2013; contains OS data © Crown copyright and database right;
@@ -205,7 +210,7 @@ are in `CITY_BALANCE.london`:
 
 | Scenario | Network | Capital | Riders/day | Daily money |
 |---|---|---|---|---|
-| **Core** (`city=london scenario=core`) | 4 deep routes, 43 stations: Paddington–Bank–Stratford, Kentish Town–King's Cross–Elephant–Brixton, Victoria–Waterloo–Canary Wharf–North Greenwich, Hammersmith–Piccadilly–Cannon St–Shadwell | £24.2B (needs £19.2B of bonds) | 758k on day 11, 13% transit share | Operating −£0.29M/day; −£2.1M/day after bond interest |
+| **Core** (`city=london scenario=core`) | 4 deep routes, 43 stations: Paddington–Bank–Stratford, Kentish Town–King's Cross–Elephant–Brixton, Victoria–Waterloo–Canary Wharf–North Greenwich, Hammersmith–Piccadilly–Cannon St–Shadwell | £24.2B (needs £19.2B of bonds) | 761k on day 11, 13% transit share | Operating −£0.29M/day; −£2.1M/day after bond interest |
 | **Sprawl** (`scenario=sprawl`) | Elevated Dagenham–Upminster and Eltham–Bexleyheath | £3.38B | 16k | −£0.59M/day |
 
 London is the harder city. Its jobs are far less concentrated than Manhattan's, and commutes are

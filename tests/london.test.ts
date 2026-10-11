@@ -90,6 +90,34 @@ describe('London data', () => {
     expect(inZone(cbd, -0.0195, 51.5035, 'Tower Hamlets')).toBe(false); // Canary Wharf
   });
 
+  it('cuts docks and the river above Teddington out of the land, and puts the City at Bank', () => {
+    const game = createHeadlessGame(world, land);
+    expect(game.terrain.isWater(...toLocal(0.0283, 51.5066))).toBe(true); // Royal Victoria Dock
+    expect(game.terrain.isWater(...toLocal(-0.019, 51.4941))).toBe(true); // Millwall Dock
+    expect(game.terrain.isWater(...toLocal(-0.3091, 51.4118))).toBe(true); // Thames at Kingston Bridge
+    expect(game.terrain.isWater(...toLocal(-0.0195, 51.5049))).toBe(false); // One Canada Square
+    // The City's 244k jobs are centred on the City, not on the Barbican's residents.
+    const cityTract = world.tracts.find((t) => t.id === 'E02000001')!;
+    const [bx, by] = toLocal(-0.0886, 51.5133);
+    expect(Math.hypot(cityTract.x - bx, cityTract.y - by)).toBeLessThan(450);
+  });
+
+  it('measures Bank to Heathrow door to door from the goal points', () => {
+    const game = createHeadlessGame(world, land, { sandbox: true });
+    drawLine(game, [[-0.0886, 51.5133], [-0.1755, 51.5162], [-0.2800, 51.5050], [-0.3800, 51.4880], [-0.4543, 51.4700]], 'deep');
+    const stops = [
+      stationNear(game, [-0.0886, 51.5133], 'Bank'),
+      stationNear(game, [-0.1755, 51.5162], 'Paddington'),
+      stationNear(game, [-0.4543, 51.4700], 'Heathrow Central'),
+    ];
+    expect(game.build(true).ok).toBe(true);
+    makeRoute(game, 'Airport Express', 'H', '#9B5DE5', stops, 8, { am: 3, pm: 3 });
+    const run = runDays(game, 1);
+    const t = run.reports[0].goalTrip;
+    expect(t).not.toBeNull();
+    expect(t!).toBeLessThan(45);
+  });
+
   it('runs a London line across the Thames: riders, no deadlocks, the river goal', () => {
     const game = createHeadlessGame(world, land, { sandbox: true });
     drawLine(game, [[-0.1131, 51.5031], [-0.1000, 51.5100], [-0.0886, 51.5133], [-0.0823, 51.5180]], 'deep');

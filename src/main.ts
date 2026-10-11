@@ -8,6 +8,11 @@ import { bootstrap } from './ui/boot';
 
 bootstrap(document.getElementById('app')!).catch((err) => {
   console.error(err);
-  const el = document.getElementById('loading');
-  if (el) el.textContent = 'Failed to start: ' + (err as Error).message;
+  let el = document.getElementById('loading');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'loading';
+    document.getElementById('app')!.append(el);
+  }
+  el.textContent = 'Failed to start: ' + (err as Error).message;
 });

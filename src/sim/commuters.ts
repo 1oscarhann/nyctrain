@@ -9,7 +9,6 @@ import { toLocal } from '../core/geo';
 import { cityBalance, inZone } from '../cities';
 import { pointInDisc, Rng } from '../core/rng';
 import type { World } from '../data/world';
-import { TractIndex } from '../data/world';
 import {
   driveTripTime,
   generalisedCosts,
@@ -57,7 +56,6 @@ export class Commuters implements PassengerHooks {
   readonly A: number;
   readonly G: number;
   private world: World;
-  private tractIndex: TractIndex;
   // Groups (home tract, work tract, band)
   gHome: Int32Array;
   gWork: Int32Array;
@@ -133,8 +131,6 @@ export class Commuters implements PassengerHooks {
   private stationLeft = new Float32Array(0);
   unserved = new Float32Array(0);
   goalTrip: number | null = null;
-  private tripFromTract: number;
-  private tripToTract: number;
 
   constructor(world: World, opts: { agentScale: number; seed: number; fare: number; modeState?: ModeState }, cb: EngineCb = {}) {
     this.world = world;
@@ -142,7 +138,6 @@ export class Commuters implements PassengerHooks {
     this.fare = opts.fare;
     this.cb = cb;
     this.rng = new Rng(opts.seed);
-    this.tractIndex = new TractIndex(world.tracts);
     const od = world.od;
     const tr = world.tracts;
     // ---- groups (stochastic rounding of counts to agents, seeded)
@@ -256,8 +251,6 @@ export class Commuters implements PassengerHooks {
       this.obsTime.set(opts.modeState.obsTime);
       this.obsCrowd.set(opts.modeState.obsCrowd);
     }
-    this.tripFromTract = this.tractIndex.nearest(...toLocal(...GOALS.tripFrom))!.index;
-    this.tripToTract = this.tractIndex.nearest(...toLocal(...GOALS.tripTo))!.index;
     this.unserved = new Float32Array(tr.length);
   }
 
@@ -379,16 +372,22 @@ export class Commuters implements PassengerHooks {
         return cache;
       };
       graph.setPeriod(1); // AM peak
-      for (const [h, groups] of byHome) {
-        const cache = solve(h, groups, (g) => this.gWork[g], this.pathAM);
-        if (h === this.tripFromTract) {
-          const p = cache.get(this.tripToTract) ?? this.bestPath(graph, access[this.tripToTract]);
-          this.goalTrip = p ? p.time / 60 : null;
-        }
-      }
-      if (this.goalTrip === null && access[this.tripFromTract].length && access[this.tripToTract].length) {
-        graph.run(access[this.tripFromTract]);
-        const p = this.bestPath(graph, access[this.tripToTract]);
+      for (const [h, groups] of byHome) solve(h, groups, (g) => this.gWork[g], this.pathAM);
+      // The timed-trip goal, door to door from the goal points themselves (not tract centres:
+      // London's Heathrow MSOA centre is 2.4 km from the terminals).
+      const pointAccess = (p: [number, number]) => {
+        const [px, py] = toLocal(p[0], p[1]);
+        const out: { station: number; walk: number }[] = [];
+        net.stations.forEach((s, i) => {
+          const d = Math.hypot(s.x - px, s.y - py);
+          if (d <= COMMUTERS.maxAccessWalk) out.push({ station: i, walk: (d * COMMUTERS.walkDetour) / COMMUTERS.walkSpeed });
+        });
+        return out;
+      };
+      const fromAcc = pointAccess(GOALS.tripFrom), toAcc = pointAccess(GOALS.tripTo);
+      if (fromAcc.length && toAcc.length) {
+        graph.run(fromAcc);
+        const p = this.bestPath(graph, toAcc);
         this.goalTrip = p ? p.time / 60 : null;
       }
       graph.setPeriod(3); // PM peak

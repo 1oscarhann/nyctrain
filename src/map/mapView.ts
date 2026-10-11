@@ -28,6 +28,7 @@ export class MapView {
   private xray = false;
   private buildingScale = 0;
   private tiltToken = 0;
+  private destroyed = false;
 
   private constructor(map: MLMap) {
     this.map = map;
@@ -35,6 +36,7 @@ export class MapView {
     map.addControl(this.overlay);
     map.on('move', () => this.invalidate());
     const loop = () => {
+      if (this.destroyed) return;
       requestAnimationFrame(loop);
       if (this.animating > 0) this.dirty = true;
       if (this.dirty) {
@@ -120,7 +122,7 @@ export class MapView {
     let lastStep = -1;
     const stop = this.beginAnimation();
     const step = () => {
-      if (token !== this.tiltToken) return stop();
+      if (token !== this.tiltToken || this.destroyed) return stop();
       const t = Math.min(1, (performance.now() - start) / MAP.tiltDurationMs);
       // Quantised so building tiles are re-tessellated only a handful of times.
       const s = Math.round(easeInOut(t) * MAP.buildingGrowSteps);
@@ -138,6 +140,14 @@ export class MapView {
     requestAnimationFrame(step);
     this.events.emit('view3d', on);
     this.invalidate();
+  }
+
+  /** Stop the render loop and any tilt animation, then remove the map. */
+  destroy(): void {
+    this.destroyed = true;
+    this.tiltToken++;
+    this.animating = 0;
+    this.map.remove();
   }
 
   /** Snap straight to the flat view (no animation) — used when a game starts from the title. */

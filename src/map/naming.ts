@@ -84,11 +84,13 @@ export function nameStationAt(map: MLMap | null, x: number, y: number, taken: Se
         if ((streets.get(name)?.d ?? Infinity) > near.d) streets.set(name, near);
       }
       const ranked = [...streets.entries()].sort((a, b) => a[1].d - b[1].d);
-      // Neighbourhood labels on land, nearest first.
+      // Neighbourhood labels on land, nearest first. London also counts villages and hamlets
+      // (old village names are what its stations are called); New York keeps its v1 classes.
+      const classes = style === 'place' ? ['neighbourhood', 'quarter', 'suburb', 'village', 'hamlet'] : ['neighbourhood', 'quarter', 'suburb'];
       const places: { name: string; d: number }[] = [];
       for (const f of map.querySourceFeatures('openmaptiles', { sourceLayer: 'place' })) {
         const props = f.properties as Record<string, unknown>;
-        if (!['neighbourhood', 'quarter', 'suburb', 'village', 'hamlet'].includes(String(props.class))) continue;
+        if (!classes.includes(String(props.class))) continue;
         const nm = (props['name:en'] as string) || (props.name as string);
         const c = (f.geometry as { coordinates: number[] }).coordinates;
         if (!nm || !c) continue;

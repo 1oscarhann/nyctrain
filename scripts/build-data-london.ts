@@ -33,7 +33,9 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { inflateRawSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { area, booleanPointInPolygon, pointOnFeature, polygon as turfPolygon } from '@turf/turf';
+import { area, bbox, booleanPointInPolygon, centerOfMass, difference, featureCollection, pointOnFeature, polygon as turfPolygon } from '@turf/turf';
+import { VectorTile } from '@mapbox/vector-tile';
+import Pbf from 'pbf';
 import type { Feature, MultiPolygon, Point, Polygon, Position } from 'geojson';
 import { decodeOD, encodeOD } from '../src/data/odFormat';
 import type { TractRecord, TractsFile } from '../src/data/types';
@@ -95,6 +97,8 @@ const BANDS = [
 
 /** Land polygons: Douglas–Peucker tolerance on shared arcs (borders stay coincident), metres. */
 const LAND_TOLERANCE_M = 5;
+/** MSOAs with more than this many jobs per resident are placed at their area centre, not the residents' centroid. */
+const JOB_DOMINATED_RATIO = 3;
 /** Local metric frame for checks, centred on Charing Cross (the traditional centre of London). */
 const LONDON_ORIGIN: [number, number] = [-0.1276, 51.5073];
 
@@ -612,6 +616,89 @@ function enclosedWater(mask: LandMask): { components: number; cells: number; exa
 
 // ---------------------------------------------------------------------------- main
 
+// ---------------------------------------------------------------------------
+// Inland water from OpenStreetMap (via the OpenFreeMap vector tiles the game already uses). The ONS
+// boundaries are clipped at mean high water, which removes the tidal Thames but leaves the docks,
+// the Thames above Teddington Lock and the reservoirs as "land".
+const TILEJSON = 'https://tiles.openfreemap.org/planet';
+const WATER_Z = 12;
+const WATER_CLASSES = new Set(['river', 'lake', 'dock']);
+/** Ignore tiny ponds and slivers (m²). */
+const WATER_MIN_AREA = 5_000;
+
+function lonLatToTile(lon: number, lat: number, z: number): [number, number] {
+  const n = 2 ** z;
+  const x = Math.floor(((lon + 180) / 360) * n);
+  const r = (lat * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n);
+  return [x, y];
+}
+
+async function fetchWater(lads: Lad[]): Promise<Feature<Polygon | MultiPolygon>[]> {
+  const path = join(CACHE, `water_z${WATER_Z}_london.geojson`);
+  if (existsSync(path)) {
+    const fc = JSON.parse(readFileSync(path, 'utf8')) as { features: Feature<Polygon | MultiPolygon>[] };
+    return fc.features;
+  }
+  const tj = (await (await fetch(TILEJSON)).json()) as { tiles?: string[] };
+  const tmpl = tj.tiles?.[0];
+  if (!tmpl) throw new Error('OpenFreeMap TileJSON has no tile URL');
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const l of lads) {
+    const [a, b, c, d] = bbox(l.geometry);
+    w = Math.min(w, a); s = Math.min(s, b); e = Math.max(e, c); n = Math.max(n, d);
+  }
+  const [x0, y0] = lonLatToTile(w, n, WATER_Z);
+  const [x1, y1] = lonLatToTile(e, s, WATER_Z);
+  const out: Feature<Polygon | MultiPolygon>[] = [];
+  for (let x = x0; x <= x1; x++)
+    for (let y = y0; y <= y1; y++) {
+      const url = tmpl.replace('{z}', String(WATER_Z)).replace('{x}', String(x)).replace('{y}', String(y));
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`water tile ${WATER_Z}/${x}/${y}: HTTP ${res.status}`);
+      const vt = new VectorTile(new Pbf(new Uint8Array(await res.arrayBuffer())));
+      const layer = vt.layers.water;
+      if (!layer) continue;
+      for (let i = 0; i < layer.length; i++) {
+        const f = layer.feature(i);
+        const cls = String(f.properties.class ?? '');
+        if (!WATER_CLASSES.has(cls) || f.properties.intermittent === 1) continue;
+        const gj = f.toGeoJSON(x, y, WATER_Z) as Feature;
+        if (!isPolyGeometry(gj.geometry)) continue;
+        out.push({ type: 'Feature', properties: { class: cls }, geometry: gj.geometry });
+      }
+    }
+  writeFileSync(path, JSON.stringify({ type: 'FeatureCollection', features: out }));
+  return out;
+}
+
+/** Cut inland water out of the borough polygons. Returns m² removed per class. */
+function subtractWater(lads: Lad[], water: Feature<Polygon | MultiPolygon>[]): Map<string, number> {
+  const removed = new Map<string, number>();
+  const wb = water.map((f) => ({ f, b: bbox(f) }));
+  for (const lad of lads) {
+    const [a, b, c, d] = bbox(lad.geometry);
+    let g: Polygon | MultiPolygon = lad.geometry;
+    for (const { f, b: [p, q, r, t] } of wb) {
+      if (r < a || p > c || t < b || q > d) continue;
+      try {
+        const before = area(g);
+        const next = difference(featureCollection([{ type: 'Feature', properties: {}, geometry: g }, f]));
+        if (!next || !isPolyGeometry(next.geometry)) continue;
+        const cut = before - area(next.geometry);
+        if (cut < WATER_MIN_AREA) continue; // skip slivers along the already-clipped tidal river
+        g = next.geometry;
+        const cls = String(f.properties?.class ?? '');
+        removed.set(cls, (removed.get(cls) ?? 0) + cut);
+      } catch {
+        // Degenerate geometry from tile clipping: leave this piece of water out.
+      }
+    }
+    lad.geometry = g;
+  }
+  return removed;
+}
+
 async function main() {
   mkdirSync(CACHE, { recursive: true });
   mkdirSync(OUT, { recursive: true });
@@ -739,7 +826,9 @@ async function main() {
   if (msoas.size !== EXPECTED_MSOAS) fail(`MSOA boundaries: got ${msoas.size} of ${EXPECTED_MSOAS}`);
 
   // ------------------------------------------------------------------ 3. land polygons
-  log('3/6 Land polygons (topology-preserving simplification)…');
+  log('3/6 Land polygons (inland water removed, topology-preserving simplification)…');
+  const water = await fetchWater(lads);
+  const waterRemoved = subtractWater(lads, water);
   const land = simplifyLand(lads, LAND_TOLERANCE_M);
   const landFc = { type: 'FeatureCollection' as const, features: land };
   writeFileSync(join(OUT, 'land.geojson'), JSON.stringify(landFc));
@@ -786,6 +875,22 @@ async function main() {
     probeLines.push(`  ${ok ? 'ok ' : 'BAD'} ${label}: ${gotName}`);
     if (!ok && want === null) fail(`Land mask: ${label} should be water but is ${gotName}`);
   }
+  // Inland water now cut out of the mask (points inside the OSM dock and river polygons).
+  const waterProbes: [string, number, number][] = [
+    ['Royal Victoria Dock', 0.0283, 51.5066],
+    ['Royal Albert Dock', 0.0545, 51.506],
+    ['Millwall Dock', -0.019, 51.4941],
+    ['Thames at Kingston Bridge', -0.3091, 51.4118],
+  ];
+  for (const [label, lon, lat] of waterProbes) {
+    const got = codeAt(lon, lat);
+    probeLines.push(`  ${got === 0 ? 'ok ' : 'BAD'} ${label}: ${ladName(got)}`);
+    if (got !== 0) fail(`Land mask: ${label} should be water but is ${ladName(got)}`);
+  }
+  probeLines.push(
+    `  inland water removed (OSM via OpenFreeMap z${WATER_Z}, ${water.length} polygons): ` +
+      [...waterRemoved.entries()].map(([k, v]) => `${k} ${(v / 1e6).toFixed(2)} km²`).join(' · '),
+  );
 
   // ------------------------------------------------------------------ 4. internal points
   log('4/6 Internal points (population-weighted centroids, moved onto land / main part if needed)…');
@@ -936,6 +1041,21 @@ async function main() {
     homeTotal[Math.floor(key / N)] += n;
     workTotal[key % N] += n;
   }
+  // Job-dominated MSOAs (the City, the West End): one point serves both ends, and the
+  // population-weighted centroid follows the few residents (the City's sits on the Barbican estate,
+  // 800 m from Bank). Use the main part's centre of mass there instead, when it is valid land.
+  const jobMoved: string[] = [];
+  msoaIds.forEach((id, i) => {
+    if (workTotal[i] <= JOB_DOMINATED_RATIO * Math.max(1, homeTotal[i])) return;
+    const m = msoas.get(id)!;
+    const main = mainPart(m.geometry);
+    const c = centerOfMass(main).geometry.coordinates as [number, number];
+    const own = ladFeat.get(m.lad.code)!;
+    if (!booleanPointInPolygon(c, main) || !booleanPointInPolygon(c, own)) return;
+    const [lon0, lat0] = points.get(id)!;
+    points.set(id, [c[0], c[1]]);
+    jobMoved.push(`${id} ${m.name.padEnd(24)} ${fmt(workTotal[i])} jobs / ${fmt(homeTotal[i])} residents: moved ${fmt(haversine(lat0, lon0, c[1], c[0]))} m to the centre of the area`);
+  });
   // Income per home MSOA (borough median as a fallback; none are expected to be missing).
   let missingIncome = 0;
   const mu = new Float64Array(N);
@@ -1138,6 +1258,8 @@ async function main() {
   rep('');
   rep(`Internal points: ${moved.length} of ${N} population-weighted centroids were moved onto the main land part:`);
   for (const m of moved) rep(m);
+  rep(`Job-dominated areas (jobs > ${JOB_DOMINATED_RATIO}× residents) placed at their centre of area: ${jobMoved.length}`);
+  for (const m of jobMoved) rep('  ' + m);
   const radii = tracts.map((t) => t.radius).sort((a, b) => a - b);
   let areaDev = 0;
   for (const m of msoas.values())
