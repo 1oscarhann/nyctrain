@@ -2,7 +2,7 @@
  * Messages between the main thread and the simulation worker, and the compiled network format.
  * Everything here is plain data (structured-clone friendly).
  */
-import type { TrackClass } from '../balance';
+import type { CityId, TrackClass } from '../balance';
 
 export interface CStation {
   id: number;
@@ -119,7 +119,7 @@ export interface ModeState {
 }
 
 export type ToWorker =
-  | { type: 'init'; dataBase: string; agentScale: number; seed: number; time: number; fare: number; modeState?: ModeState }
+  | { type: 'init'; city: CityId; dataBase: string; agentScale: number; seed: number; time: number; fare: number; modeState?: ModeState }
   | { type: 'network'; net: CompiledNetwork }
   | { type: 'speed'; speed: number }
   | { type: 'skipTo'; time: number }
@@ -171,7 +171,7 @@ export interface DayReport {
   routeLateness: Record<number, number>;
   /** Per station id: daily boardings. */
   stationBoardings: Record<number, number>;
-  /** Transit door-to-door minutes Midtown → JFK (scheduled), or null. */
-  midtownJfk: number | null;
+  /** Transit door-to-door minutes for the timed-trip goal (GOALS.tripFrom → tripTo), or null. */
+  goalTrip: number | null;
   boroughsServed: number[];
 }

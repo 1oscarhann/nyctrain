@@ -1,4 +1,5 @@
 /** Train, tract and track panels. */
+import { city } from '../../cities';
 import { TRAINS } from '../../balance';
 import { edgeTooltip } from '../../construction/describe';
 import { fmtCount, fmtDensity, fmtSpeed } from '../../core/units';
@@ -64,7 +65,9 @@ interface TractDetail {
 
 export function tractPanel(app: App, index: number): Panel {
   const t = app.world.tracts[index];
-  const sh = shell(`Census tract ${t.id} · ${t.borough}`, `${t.borough} tract ${String(Number(t.id.slice(5)) / 100).replace(/\.0+$/, '')}`, () => app.game.select(null));
+  // London MSOAs carry names ("Camden 028"); NYC tracts are numbered within the borough.
+  const title = t.name ?? `${t.borough} tract ${String(Number(t.id.slice(5)) / 100).replace(/\.0+$/, '')}`;
+  const sh = shell(`${t.name ? 'Neighbourhood area' : 'Census tract'} ${t.id} · ${t.borough}`, title, () => app.game.select(null));
   const body = sh.body;
   const stats = h('div', { class: 'stat-grid' });
   const shares = h('div');
@@ -84,7 +87,7 @@ export function tractPanel(app: App, index: number): Panel {
             { label: 'Walk', value: d.share[0], color: SHARE_COLORS.walk },
           ])
         : h('div', { class: 'hw-muted' }, 'Loading…'),
-      h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:8px' }, `Density ${fmtDensity(t.density)} (residents + jobs). Residents and jobs count commuters who live and work in the five boroughs.`),
+      h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:8px' }, `Density ${fmtDensity(t.density)} (residents + jobs). Residents and jobs count commuters who live and work in ${city().name}.`),
     );
   };
   render(null);

@@ -1,6 +1,6 @@
 /**
  * Basemap style: OpenFreeMap Positron, loaded at runtime and recoloured to the dusk-slate palette.
- * Real-world rapid transit is hidden — in this New York nobody ever built a subway.
+ * Real-world rapid transit is hidden — in these cities nobody ever built a metro.
  */
 import type {
   ExpressionSpecification,

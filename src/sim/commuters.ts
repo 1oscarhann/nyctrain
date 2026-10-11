@@ -6,6 +6,7 @@
 import { COMMUTERS, GOALS, OPERATIONS, TIME } from '../balance';
 import { SECONDS_PER_DAY, dayIndex } from '../core/calendar';
 import { toLocal } from '../core/geo';
+import { cityBalance, inZone } from '../cities';
 import { pointInDisc, Rng } from '../core/rng';
 import type { World } from '../data/world';
 import { TractIndex } from '../data/world';
@@ -131,9 +132,9 @@ export class Commuters implements PassengerHooks {
   } = { report: null, stationHourly: new Float32Array(0), stationLeft: new Float32Array(0), peakLoad: new Float32Array(0), peakTrains: new Int32Array(0), netVersion: -1 };
   private stationLeft = new Float32Array(0);
   unserved = new Float32Array(0);
-  midtownJfk: number | null = null;
-  private midtownTract: number;
-  private jfkTract: number;
+  goalTrip: number | null = null;
+  private tripFromTract: number;
+  private tripToTract: number;
 
   constructor(world: World, opts: { agentScale: number; seed: number; fare: number; modeState?: ModeState }, cb: EngineCb = {}) {
     this.world = world;
@@ -173,6 +174,9 @@ export class Commuters implements PassengerHooks {
     this.A = A;
     this.key = `${world.meta.source}|${world.tracts.length}|${od.pairCount}|${this.scale}|${opts.seed}|${A}|${G}`;
     // ---- pair geometry and walk/drive times
+    const zones = cityBalance();
+    const core = new Set(zones.coreRegions);
+    const cbd = tr.map((t) => inZone(zones.cbd, t.lon, t.lat, t.borough));
     this.gWalk = new Float32Array(G);
     this.gDrive = new Float32Array(G);
     this.gDriveHome = new Float32Array(G);
@@ -182,10 +186,10 @@ export class Commuters implements PassengerHooks {
       const d = h.index === w.index ? Math.max(200, h.radius * 0.6) : Math.hypot(h.x - w.x, h.y - w.y);
       const geom: PairGeometry = {
         distance: d,
-        homeManhattan: h.borough === 'Manhattan',
-        workManhattan: w.borough === 'Manhattan',
-        workCbd: w.borough === 'Manhattan' && w.lat < COMMUTERS.cbdLat,
-        homeCbd: h.borough === 'Manhattan' && h.lat < COMMUTERS.cbdLat,
+        homeCore: core.has(h.borough),
+        workCore: core.has(w.borough),
+        workCbd: cbd[w.index],
+        homeCbd: cbd[h.index],
       };
       this.gGeom[g] = geom;
       this.gWalk[g] = walkTime(d);
@@ -252,8 +256,8 @@ export class Commuters implements PassengerHooks {
       this.obsTime.set(opts.modeState.obsTime);
       this.obsCrowd.set(opts.modeState.obsCrowd);
     }
-    this.midtownTract = this.tractIndex.nearest(...toLocal(...GOALS.midtown))!.index;
-    this.jfkTract = this.tractIndex.nearest(...toLocal(...GOALS.jfk))!.index;
+    this.tripFromTract = this.tractIndex.nearest(...toLocal(...GOALS.tripFrom))!.index;
+    this.tripToTract = this.tractIndex.nearest(...toLocal(...GOALS.tripTo))!.index;
     this.unserved = new Float32Array(tr.length);
   }
 
@@ -335,7 +339,7 @@ export class Commuters implements PassengerHooks {
     this.pathAM = new Array(G).fill(null);
     this.pathPM = new Array(G).fill(null);
     this.unserved.fill(0);
-    this.midtownJfk = null;
+    this.goalTrip = null;
     const graph = this.graph;
     const net = this.net;
     if (graph && net) {
@@ -377,15 +381,15 @@ export class Commuters implements PassengerHooks {
       graph.setPeriod(1); // AM peak
       for (const [h, groups] of byHome) {
         const cache = solve(h, groups, (g) => this.gWork[g], this.pathAM);
-        if (h === this.midtownTract) {
-          const p = cache.get(this.jfkTract) ?? this.bestPath(graph, access[this.jfkTract]);
-          this.midtownJfk = p ? p.time / 60 : null;
+        if (h === this.tripFromTract) {
+          const p = cache.get(this.tripToTract) ?? this.bestPath(graph, access[this.tripToTract]);
+          this.goalTrip = p ? p.time / 60 : null;
         }
       }
-      if (this.midtownJfk === null && access[this.midtownTract].length && access[this.jfkTract].length) {
-        graph.run(access[this.midtownTract]);
-        const p = this.bestPath(graph, access[this.jfkTract]);
-        this.midtownJfk = p ? p.time / 60 : null;
+      if (this.goalTrip === null && access[this.tripFromTract].length && access[this.tripToTract].length) {
+        graph.run(access[this.tripFromTract]);
+        const p = this.bestPath(graph, access[this.tripToTract]);
+        this.goalTrip = p ? p.time / 60 : null;
       }
       graph.setPeriod(3); // PM peak
       for (const [w, groups] of byWork) solve(w, groups, (g) => this.gHome[g], this.pathPM);
@@ -816,7 +820,7 @@ export class Commuters implements PassengerHooks {
       routeRiders,
       routeLateness: {},
       stationBoardings,
-      midtownJfk: this.midtownJfk,
+      goalTrip: this.goalTrip,
       boroughsServed: [],
     };
     // Keep yesterday's detail for panels, then reset.

@@ -118,7 +118,7 @@ describe('transit pathfinding (Dijkstra on the platform graph)', () => {
 });
 
 describe('logit mode split', () => {
-  const geom = (d: number, workCbd = false): PairGeometry => ({ distance: d, homeManhattan: workCbd, workManhattan: workCbd, workCbd, homeCbd: false });
+  const geom = (d: number, workCbd = false): PairGeometry => ({ distance: d, homeCore: workCbd, workCore: workCbd, workCbd, homeCbd: false });
 
   it('splits equal costs evenly and favours the cheaper mode', () => {
     expect(logitShares([10, 10, 10])).toEqual([1 / 3, 1 / 3, 1 / 3]);

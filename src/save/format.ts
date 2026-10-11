@@ -7,6 +7,7 @@ import type { FinanceData } from '../economy/finance';
 import type { RouteSetData } from '../routes/routeSet';
 import type { GoalState } from '../core/goals';
 import type { UnitSystem } from '../core/units';
+import type { CityId } from '../balance';
 
 export const SAVE_VERSION = 2;
 
@@ -27,7 +28,9 @@ export interface SavedModeState {
 export interface SaveFile {
   format: 'headway-ny';
   version: number;
-  meta: { name: string; savedAt: string; day: number; time: number; sandbox: boolean; cash: number; riders: number };
+  /** Which city this game is in. Saves from before London existed are New York. */
+  city: CityId;
+  meta: { name: string; savedAt: string; day: number; time: number; sandbox: boolean; cash: number; riders: number; city?: CityId };
   game: {
     time: number;
     sandbox: boolean;

@@ -1,7 +1,7 @@
 /** Monthly report and the bankruptcy game-over screen. */
 import { fmtCount, fmtMoney } from '../core/units';
 import type { MonthReport } from '../economy/finance';
-import { GOAL_DEFS } from '../core/goals';
+import { goalDefs } from '../core/goals';
 import type { App } from './app';
 import { h } from './dom';
 import { modal } from './widgets';
@@ -36,14 +36,15 @@ export function showMonthReport(app: App, m: MonthReport): void {
 export function showGameOver(app: App): void {
   const g = app.game;
   const peak = Math.max(0, ...g.finance.history.map((d) => d.riders));
-  const done = GOAL_DEFS.filter((d) => app.goals[d.id] !== null).length;
+  const defs = goalDefs();
+  const done = defs.filter((d) => app.goals[d.id] !== null).length;
   const stats: [string, string][] = [
     ['Days survived', String(g.day)],
     ['Peak daily riders', fmtCount(peak)],
     ['Stations', String([...g.network.stations.values()].filter((s) => s.status === 'built').length)],
     ['Routes', String(g.routes.list().length)],
     ['Debt', fmtMoney(g.finance.debt())],
-    ['Goals', `${done} / ${GOAL_DEFS.length}`],
+    ['Goals', `${done} / ${defs.length}`],
   ];
   const grid = h('div', { class: 'stat-grid', style: 'margin:12px 0' });
   for (const [k, v] of stats) grid.append(h('div', { class: 'stat-card' }, h('div', { class: 'label' }, k), h('div', { class: 'value' }, v)));

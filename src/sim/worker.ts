@@ -4,6 +4,7 @@
  * decoupled from rendering and posts compact snapshots ~10× per second.
  */
 import { TIME } from '../balance';
+import { applyCity } from '../cities';
 import { fetchWorld } from '../data/world';
 import { Engine } from './engine';
 import type { FromWorker, ToWorker } from './protocol';
@@ -25,6 +26,8 @@ function post(msg: FromWorker, transfer: Transferable[] = []) {
 }
 
 async function init(msg: Extract<ToWorker, { type: 'init' }>) {
+  // Before any data is built: the city's balance values, projection origin and currency.
+  applyCity(msg.city);
   const world = await fetchWorld(msg.dataBase);
   engine = new Engine(
     world,

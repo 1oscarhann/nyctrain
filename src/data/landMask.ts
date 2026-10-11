@@ -1,6 +1,6 @@
 /**
  * Raster land mask built from the borough land polygons with a scanline fill.
- * Each cell stores the NYC borough code (1–5) or 0 for water. Lookups are O(1),
+ * Each cell stores the region code from land.geojson (NYC 1–5, London 1–33) or 0 for water. Lookups are O(1),
  * which lets the track tools test every few metres of a segment for water while dragging.
  */
 import { toLocal } from '../core/geo';
@@ -91,7 +91,7 @@ export class LandMask {
     }
   }
 
-  /** Borough code at a local point (0 = water / outside NYC). */
+  /** Region code at a local point (0 = water / outside the city). */
   codeAt(x: number, y: number): number {
     const c = Math.floor((x - this.x0) / this.cell);
     const r = Math.floor((y - this.y0) / this.cell);

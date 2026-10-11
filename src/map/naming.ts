@@ -1,9 +1,11 @@
 /**
- * Station auto-naming from the vector tiles: the two nearest named streets that cross
- * ("Nostrand Av & Fulton St"), falling back to the nearest neighbourhood label.
+ * Station auto-naming from the vector tiles. New York: the two nearest named streets that cross
+ * ("Nostrand Av & Fulton St"). London: the neighbourhood you're in, else the street ("Old Street").
+ * Both fall back to the nearest neighbourhood label.
  */
 import type { Map as MLMap } from 'maplibre-gl';
 import { STATION } from '../balance';
+import { city } from '../cities';
 import { toLocal } from '../core/geo';
 import { pointSegment } from '../core/geo';
 
@@ -66,6 +68,7 @@ function nearestOnGeometry(px: number, py: number, geom: { type: string; coordin
 const MIN_CROSSING_SIN = Math.sin((35 * Math.PI) / 180);
 
 export function nameStationAt(map: MLMap | null, x: number, y: number, taken: Set<string>, onLand?: (x: number, y: number) => boolean): string {
+  const style = city().naming;
   if (map) {
     try {
       // Nearest point (and direction there) of each named street in whatever tiles are loaded.
@@ -76,39 +79,49 @@ export function nameStationAt(map: MLMap | null, x: number, y: number, taken: Se
         if (!raw || props.class === 'path' || props.class === 'service' || props.class === 'ferry' || /tunnel|bridge|greenway|esplanade/i.test(raw)) continue;
         const near = nearestOnGeometry(x, y, f.geometry as never);
         if (near.d > STATION.nameSearchRadius * 3) continue;
-        const name = abbreviateStreet(raw);
+        // London names keep the full street ("Old Street"); New York abbreviates ("W 42nd St").
+        const name = style === 'cross-streets' ? abbreviateStreet(raw) : raw.trim();
         if ((streets.get(name)?.d ?? Infinity) > near.d) streets.set(name, near);
       }
       const ranked = [...streets.entries()].sort((a, b) => a[1].d - b[1].d);
-      // Two streets that actually cross, nearest first. Zoomed-out tiles drop minor street
-      // names, so widen the search before giving up.
-      for (const radius of [STATION.nameSearchRadius, STATION.nameSearchRadius * 2, STATION.nameSearchRadius * 3]) {
-        const near = ranked.filter(([, v]) => v.d <= radius);
-        for (let i = 0; i < near.length; i++)
-          for (let j = i + 1; j < near.length; j++) {
-            const a = near[i][1], b = near[j][1];
-            if (Math.abs(a.dx * b.dy - a.dy * b.dx) < MIN_CROSSING_SIN) continue;
-            const n = `${near[i][0]} & ${near[j][0]}`;
-            if (!taken.has(n)) return n;
-          }
-      }
-      // Neighbourhood fallback: real neighbourhood labels on NYC land, nearest first.
-      let bestP: string | null = null;
-      let bestD = Infinity;
+      // Neighbourhood labels on land, nearest first.
+      const places: { name: string; d: number }[] = [];
       for (const f of map.querySourceFeatures('openmaptiles', { sourceLayer: 'place' })) {
         const props = f.properties as Record<string, unknown>;
-        if (!['neighbourhood', 'quarter', 'suburb'].includes(String(props.class))) continue;
+        if (!['neighbourhood', 'quarter', 'suburb', 'village', 'hamlet'].includes(String(props.class))) continue;
         const nm = (props['name:en'] as string) || (props.name as string);
         const c = (f.geometry as { coordinates: number[] }).coordinates;
         if (!nm || !c) continue;
         const [px, py] = toLocal(c[0], c[1]);
         if (onLand && !onLand(px, py)) continue;
         const d = Math.hypot(px - x, py - y);
-        if (d < bestD && d < 2500) {
-          bestD = d;
-          bestP = nm;
+        if (d < 2500 && !places.some((q) => q.name === nm && q.d <= d)) places.push({ name: nm, d });
+      }
+      places.sort((a, b) => a.d - b.d);
+      if (style === 'cross-streets') {
+        // Two streets that actually cross, nearest first. Zoomed-out tiles drop minor street
+        // names, so widen the search before giving up.
+        for (const radius of [STATION.nameSearchRadius, STATION.nameSearchRadius * 2, STATION.nameSearchRadius * 3]) {
+          const near = ranked.filter(([, v]) => v.d <= radius);
+          for (let i = 0; i < near.length; i++)
+            for (let j = i + 1; j < near.length; j++) {
+              const a = near[i][1], b = near[j][1];
+              if (Math.abs(a.dx * b.dy - a.dy * b.dx) < MIN_CROSSING_SIN) continue;
+              const n = `${near[i][0]} & ${near[j][0]}`;
+              if (!taken.has(n)) return n;
+            }
+        }
+      } else {
+        // Like real London stations: the place you're in ("Camden Town"), else the street
+        // you're on ("Old Street").
+        const place = places.find((p) => p.d <= STATION.placeNameRadius && !taken.has(p.name));
+        if (place) return place.name;
+        for (const radius of [STATION.nameSearchRadius, STATION.nameSearchRadius * 2]) {
+          const st = ranked.find(([n, v]) => v.d <= radius && !taken.has(n));
+          if (st) return st[0];
         }
       }
+      const bestP = places[0]?.name ?? null;
       const nearest = ranked[0]?.[0];
       if (bestP) {
         if (!taken.has(bestP)) return bestP;

@@ -26,7 +26,7 @@ const run = runDays(game, days, {
         ` · commute ${r.avgCommute.toFixed(1)} min (baseline ${r.baselineCommute.toFixed(1)})` +
         ` · car-km ${Math.round(r.carKm).toLocaleString()} · late ${r.avgLateness.toFixed(0)} s · left behind ${Math.round(r.leftBehind)} · gave up ${Math.round(r.gaveUp)} · deadlocks ${r.deadlocks}` +
         `\n        revenue ${fmtMoney(f.revenue)} · operating ${fmtMoney(f.operating)} · staffing ${fmtMoney(f.staffing)} · maintenance ${fmtMoney(f.maintenance)} · cash ${fmtMoney(f.cash)}` +
-        `\n        route riders ${JSON.stringify(r.routeRiders)} · Midtown→JFK ${r.midtownJfk?.toFixed(0) ?? '—'}`,
+        `\n        route riders ${JSON.stringify(r.routeRiders)} · goal trip ${r.goalTrip?.toFixed(0) ?? '—'}`,
     );
   },
 });

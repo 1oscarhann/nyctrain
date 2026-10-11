@@ -1,4 +1,6 @@
-/** Shared data-file types. Used by the build script, the main thread and the sim worker. */
+/** Shared data-file types. Used by the build scripts, the main thread and the sim worker. */
+
+// ---- New York (used by scripts/build-data.ts)
 
 export type BoroughName = 'Manhattan' | 'Brooklyn' | 'Queens' | 'Bronx' | 'Staten Island';
 
@@ -24,14 +26,17 @@ export const BOROUGH_CODE: Record<BoroughName, number> = {
 
 export interface TractRecord {
   id: string;
-  borough: BoroughName;
+  /** Region (NYC borough, London borough) — one of the city's CityConfig.regions names. */
+  borough: string;
+  /** Display name where the data has one (London MSOAs: "Camden 028"). */
+  name?: string;
   lat: number;
   lon: number;
   /** Approximate radius in metres: sqrt(land area / π). Used to scatter people inside the tract. */
   radius: number;
-  /** Commuters living here who work in NYC. */
+  /** Commuters living here who work in the city. */
   residents: number;
-  /** NYC-resident commuters working here. */
+  /** City-resident commuters working here. */
   jobs: number;
 }
 

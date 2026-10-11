@@ -4,7 +4,7 @@
  */
 import { ECONOMY } from '../../balance';
 import { monthKey } from '../../core/calendar';
-import { fmtMoney } from '../../core/units';
+import { fmtFare, fmtMoney } from '../../core/units';
 import type { App } from '../app';
 import { financeChart } from '../charts';
 import { h } from '../dom';
@@ -32,10 +32,10 @@ export function financePanel(app: App): Panel {
       h('div', { class: 'stat-grid' }, statCard('Cash', game.sandbox ? '∞' : fmtMoney(f.cash), f.cash < 0 ? 'red' : undefined), statCard('Debt', fmtMoney(debt)), statCard('Bond room', fmtMoney(f.bondRoom())), statCard('Assets', fmtMoney(f.assetValue))),
     );
     // Fare
-    const fareVal = h('b', { class: 'num' }, `$${game.fare.toFixed(2)}`);
+    const fareVal = h('b', { class: 'num' }, fmtFare(game.fare));
     const fare = h('input', { type: 'range', min: String(ECONOMY.fareMin), max: String(ECONOMY.fareMax), step: String(ECONOMY.fareStep), value: String(game.fare), style: 'flex:1' }) as HTMLInputElement;
     fare.addEventListener('input', () => {
-      fareVal.textContent = `$${Number(fare.value).toFixed(2)}`;
+      fareVal.textContent = fmtFare(Number(fare.value));
     });
     fare.addEventListener('change', () => app.setFare(Number(fare.value)));
     body.append(section('Fare (flat, transfers free)'), h('div', { style: 'display:flex;gap:10px;align-items:center' }, fare, fareVal), h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:2px' }, 'Takes effect in the next morning’s mode choice. Lower earners are most sensitive.'));

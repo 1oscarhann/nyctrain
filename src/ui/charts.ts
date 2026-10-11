@@ -5,6 +5,7 @@
  */
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
+import { currency } from '../core/units';
 
 export const CHART_TEAL = '#00A3B0';
 export const CHART_ORANGE = '#D8731C';
@@ -78,7 +79,7 @@ export function loadChart(el: HTMLElement, load: number[], capacity: number[], c
 /** Monthly revenue vs operating costs (two lines, legend + hover readout). */
 export function financeChart(el: HTMLElement, labels: string[], revenue: number[], costs: number[], width = 330, height = 170): uPlot {
   const xs = labels.map((_, i) => i);
-  const fmt = (v: number | null) => (v == null ? '—' : '$' + compact(v));
+  const fmt = (v: number | null) => (v == null ? '—' : currency() + compact(v));
   return new uPlot(
     {
       width,
@@ -87,7 +88,7 @@ export function financeChart(el: HTMLElement, labels: string[], revenue: number[
       legend: { show: true, live: true },
       cursor: { points: { size: 8 }, drag: { x: false, y: false } },
       scales: { x: { time: false, range: () => [-0.3, xs.length - 1 + 0.3] }, y: { range: (_u, _a, b) => [0, Math.max(1, b) * 1.12] } },
-      axes: [axis({ splits: () => xs.filter((i) => i % Math.max(1, Math.ceil(xs.length / 8)) === 0), values: (_u, vals) => vals.map((v) => labels[v]?.slice(0, 3) ?? ''), size: 22 }), axis({ values: (_u, vals) => vals.map((v) => '$' + compact(v)), size: 46 })],
+      axes: [axis({ splits: () => xs.filter((i) => i % Math.max(1, Math.ceil(xs.length / 8)) === 0), values: (_u, vals) => vals.map((v) => labels[v]?.slice(0, 3) ?? ''), size: 22 }), axis({ values: (_u, vals) => vals.map((v) => currency() + compact(v)), size: 46 })],
       series: [
         { label: 'Month', value: (_u, v) => (v == null ? '—' : labels[v] ?? '') },
         { label: 'Revenue', stroke: CHART_TEAL, width: 2, points: { show: labels.length < 3, size: 8, fill: CHART_TEAL }, value: (_u, v) => fmt(v) },

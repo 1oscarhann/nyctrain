@@ -1,24 +1,25 @@
 /**
  * Skippable 8-step tutorial. Each step advances when its condition is met (or on Next).
  */
+import { city } from '../cities';
 import type { App } from './app';
 import { h } from './dom';
 
 interface Step {
   title: string;
-  body: string;
+  body: string | (() => string);
   done?: (app: App) => boolean;
 }
 
 const STEPS: Step[] = [
   {
     title: 'Where do people work?',
-    body: 'Open Overlays (the layers button on the left) and choose Jobs density. Midtown and Lower Manhattan light up — that’s where your trains need to go.',
+    body: () => city().tutorial.jobs,
     done: (a) => a.overlays.mode === 'jobs',
   },
   {
     title: 'Draw some track',
-    body: 'Press T for the track tool. Deep tunnel is the sensible level under Manhattan. Click points from Lower Manhattan up towards Midtown, then double-click to finish. Red segments tell you what to fix.',
+    body: () => `${city().tutorial.track} Red segments tell you what to fix.`,
     done: (a) => a.game.network.edges.size > 0,
   },
   {
@@ -94,7 +95,7 @@ export class Tutorial {
     this.el.replaceChildren(
       h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:4px' }, h('span', { class: 'hw-amber', style: 'font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:700' }, `Tutorial · ${this.step + 1} of ${STEPS.length}`), h('button', { class: 'hw-btn ghost small', onclick: () => this.close() }, 'Skip tutorial')),
       h('div', { style: 'font-weight:800;font-size:15px;margin-bottom:4px' }, s.title),
-      h('div', { class: 'hw-muted', style: 'line-height:1.5' }, s.body),
+      h('div', { class: 'hw-muted', style: 'line-height:1.5' }, typeof s.body === 'function' ? s.body() : s.body),
       h('div', { style: 'display:flex;justify-content:flex-end;margin-top:8px' }, h('button', { class: s.done ? 'hw-btn small' : 'hw-btn primary small', onclick: () => this.next() }, s.done ? 'Skip step' : 'Next')),
     );
   }

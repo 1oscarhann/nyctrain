@@ -10,7 +10,7 @@ import { COMMUTERS, ECONOMY, TIME, type TrackLevel } from '../balance';
 import { Game, type Selection } from '../core/game';
 import { toLonLat } from '../core/geo';
 import { dayIndex, isNewMonth, SECONDS_PER_DAY, timeOfDay } from '../core/calendar';
-import { fmtDensity, fmtMoney, setUnits } from '../core/units';
+import { fmtDensity, fmtFare, fmtMoney, setUnits } from '../core/units';
 import { checkGoals, emptyGoals, goalTitle, type GoalState } from '../core/goals';
 import { LandMask } from '../data/landMask';
 import { TractIndex, type LandCollection, type World } from '../data/world';
@@ -696,7 +696,7 @@ export class App implements AppContext {
   setFare(f: number): void {
     this.game.fare = Math.max(ECONOMY.fareMin, Math.min(ECONOMY.fareMax, Math.round(f / ECONOMY.fareStep) * ECONOMY.fareStep));
     this.sim.setFare(this.game.fare);
-    this.toast('Fare changed', `$${this.game.fare.toFixed(2)} — commuters reconsider at 3 am`, 'amber');
+    this.toast('Fare changed', `${fmtFare(this.game.fare)} — commuters reconsider at 3 am`, 'amber');
     this.refreshPanel();
   }
 

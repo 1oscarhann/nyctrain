@@ -1,6 +1,9 @@
 /**
  * Every tunable number in the game lives here.
- * Internal units are SI: metres, seconds, metres per second, dollars.
+ * Internal units are SI: metres, seconds, metres per second, and money in the city's currency.
+ *
+ * The sections below hold New York's values. Each city's differences are in CITY_BALANCE at
+ * the bottom; src/cities/index.ts applyCity() restores these defaults and applies them.
  */
 
 const KMH = 1 / 3.6;
@@ -35,7 +38,7 @@ export const TIME = {
 export const MAP = {
   startCenter: [-74.006, 40.7075] as [number, number], // Lower Manhattan
   startZoom: 12,
-  /** NYC bbox plus margin [w, s, e, n]. */
+  /** City bbox plus margin [w, s, e, n]. */
   bounds: [-74.42, 40.42, -73.58, 41.0] as [number, number, number, number],
   minZoom: 9.5,
   maxZoom: 18,
@@ -128,6 +131,8 @@ export const STATION = {
   platformMargin: 10,
   /** Street-name search radius for auto-naming, metres. */
   nameSearchRadius: 220,
+  /** London-style names use a neighbourhood label this close to the station. */
+  placeNameRadius: 450,
 };
 
 // ---------------------------------------------------------------------------
@@ -218,21 +223,21 @@ export const COMMUTERS = {
   walkDetour: 1.3,
   walkMaxDistance: 2500,
   driveDetour: 1.35,
-  driveSpeedManhattan: 14 * KMH,
+  /** Driving speed when either end is in the city's core regions (CITY_BALANCE.coreRegions). */
+  driveSpeedCore: 14 * KMH,
   driveSpeedOther: 24 * KMH,
-  /** Manhattan below 60th St. */
-  cbdLat: 40.7644,
+  /** Parking time and cost for jobs in the CBD (CITY_BALANCE.cbd). */
   parkingCbdTime: 20 * MIN,
   parkingCbdCost: 20,
   parkingOtherTime: 5 * MIN,
-  /** Value of time by earnings band, $/hour. */
+  /** Value of time by earnings band, money per hour. */
   valueOfTime: [10, 20, 40],
   /** Logit scale parameter (per minute of generalised cost). */
   logitScale: 0.085,
   /** Alternative-specific constants in minutes (positive = less attractive). */
   /** Driving's constant reflects NYC car ownership, tolls and congestion beyond the drive time. */
   modeConstant: { walk: 0, drive: 25, transit: 0 },
-  /** Driving running cost, $/km (fuel, tolls, wear). */
+  /** Driving running cost per km (fuel, tolls, wear). */
   driveCostPerKm: 0.3,
   transferPenalty: 5 * MIN,
   /** Wait time is half the headway, capped at this. */
@@ -286,10 +291,90 @@ export const GOALS = {
   riderMilestones: [500_000, 1_000_000, 2_000_000, 3_000_000],
   modeShareTarget: 0.5,
   commuteSavingMinutes: 10,
-  jfkMinutes: 45,
-  /** Midtown (Bryant Park) and JFK terminal area. */
-  midtown: [-73.9832, 40.7536] as [number, number],
-  jfk: [-73.7781, 40.6413] as [number, number],
+  /** The timed-trip goal: door to door by transit from tripFrom to tripTo in under tripMinutes. */
+  tripMinutes: 45,
+  /** New York: Midtown (Bryant Park) to the JFK terminal area. */
+  tripFrom: [-73.9832, 40.7536] as [number, number],
+  tripTo: [-73.7781, 40.6413] as [number, number],
 };
 
 export const UNITS = { KMH, MIN, HOUR };
+
+// ---------------------------------------------------------------------------
+// Cities
+export type CityId = 'nyc' | 'london';
+type LL = [number, number];
+
+/** Where a job counts as being in the CBD (parking penalty). */
+export type ZoneRule =
+  | { kind: 'region-south-of'; region: string; lat: number }
+  | { kind: 'polygon'; ring: LL[] };
+
+export interface CityBalance {
+  /** Local projection origin (lon, lat). */
+  origin: LL;
+  map: { startCenter: LL; startZoom: number; bounds: [number, number, number, number] };
+  /** Camera behind the title screen (slow 3D orbit). */
+  titleCamera: { center: LL; zoom: number; bearing: number };
+  /** Regions (boroughs) with slow, congested driving. */
+  coreRegions: string[];
+  cbd: ZoneRule;
+  commuters: Partial<Pick<typeof COMMUTERS, 'driveSpeedCore' | 'driveSpeedOther' | 'parkingCbdTime' | 'parkingCbdCost' | 'parkingOtherTime' | 'valueOfTime' | 'driveCostPerKm' | 'modeConstant'>>;
+  economy: Partial<Pick<typeof ECONOMY, 'startingCash' | 'fareDefault' | 'fareMin' | 'fareMax' | 'fareStep'>>;
+  goals: Partial<typeof GOALS>;
+}
+
+export const CITY_BALANCE: Record<CityId, CityBalance> = {
+  nyc: {
+    origin: [-74.006, 40.7128], // City Hall
+    map: { startCenter: MAP.startCenter, startZoom: MAP.startZoom, bounds: MAP.bounds },
+    titleCamera: { center: [-73.985, 40.752], zoom: 14.2, bearing: 20 }, // Midtown
+    coreRegions: ['Manhattan'],
+    cbd: { kind: 'region-south-of', region: 'Manhattan', lat: 40.7644 }, // below 60th St
+    commuters: {},
+    economy: {},
+    goals: {},
+  },
+  london: {
+    origin: [-0.1276, 51.5073], // Charing Cross, the traditional centre of London
+    map: { startCenter: [-0.1, 51.512], startZoom: 12, bounds: [-0.62, 51.2, 0.42, 51.76] },
+    titleCamera: { center: [-0.083, 51.5135], zoom: 14.6, bearing: -25 }, // the City's towers
+    /** Inner London (ONS statistical definition): congested streets, slow driving. */
+    coreRegions: ['City of London', 'Camden', 'Hackney', 'Hammersmith and Fulham', 'Haringey', 'Islington', 'Kensington and Chelsea', 'Lambeth', 'Lewisham', 'Newham', 'Southwark', 'Tower Hamlets', 'Wandsworth', 'Westminster'],
+    /** Roughly the central congestion-charge zone, inside the inner ring road. */
+    cbd: {
+      kind: 'polygon',
+      ring: [
+        [-0.1627, 51.5185], [-0.159, 51.5225], [-0.146, 51.524], [-0.134, 51.5265], [-0.123, 51.531], [-0.105, 51.532],
+        [-0.0876, 51.526], [-0.0745, 51.5225], [-0.0715, 51.5105], [-0.076, 51.504], [-0.088, 51.4985], [-0.1003, 51.4946],
+        [-0.114, 51.49], [-0.127, 51.4875], [-0.144, 51.496], [-0.153, 51.501], [-0.1525, 51.507], [-0.1586, 51.5131],
+      ],
+    },
+    commuters: {
+      driveSpeedCore: 13 * KMH,
+      driveSpeedOther: 24 * KMH,
+      parkingCbdTime: 20 * MIN,
+      /** £15 daily congestion charge plus about £10 of central parking. */
+      parkingCbdCost: 25,
+      parkingOtherTime: 5 * MIN,
+      /** £/hour by modelled income band (UK commuting values of time, low/middle/high). */
+      valueOfTime: [8, 14, 26],
+      driveCostPerKm: 0.25,
+      /** Fewer London households own a car (inner London ~40%), so driving carries a bigger penalty. */
+      modeConstant: { walk: 0, drive: 35, transit: 0 },
+    },
+    economy: {
+      startingCash: 5e9,
+      fareDefault: 2.8,
+      fareMin: 0,
+      fareMax: 5,
+      fareStep: 0.1,
+    },
+    goals: {
+      tripMinutes: 45,
+      /** Bank junction to the Heathrow central terminal area. */
+      tripFrom: [-0.0886, 51.5133],
+      tripTo: [-0.4543, 51.47],
+    },
+  },
+};

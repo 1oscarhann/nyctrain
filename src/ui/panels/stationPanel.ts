@@ -2,7 +2,7 @@
  * Station panel: daily boardings, boardings by hour, routes served, where riders come from and
  * go to (also drawn as flow lines on the map), crowding and left-behind counts.
  */
-import { BOROUGHS } from '../../data/types';
+import { city } from '../../cities';
 import { cap } from '../../construction/describe';
 import { LEVEL_NAMES } from '../../construction/validate';
 import { progress } from '../../construction/blueprint';
@@ -22,7 +22,6 @@ interface StationDetail {
   to: { tract: number; count: number }[];
 }
 
-const BOROUGH_COLORS = ['#00A3B0', '#D8731C', '#8E99A5', '#B04FCF', '#A3D14B'];
 
 export function stationPanel(app: App, id: number): Panel {
   const game = app.game;
@@ -113,9 +112,13 @@ export function stationPanel(app: App, id: number): Panel {
     chart = barChart(chartWrap, ys.map((_, i) => i), ys, '#00A3B0', (x) => `${String(x).padStart(2, '0')}h`, 'Boardings');
     // Where riders come from / go to, by borough; flow lines on the map.
     const byBorough = (list: { tract: number; count: number }[]) => {
-      const sums = BOROUGHS.map(() => 0);
-      for (const f of list) sums[app.world.tracts[f.tract].boroughIndex] += f.count;
-      return BOROUGHS.map((b, i) => ({ label: b, value: sums[i], color: BOROUGH_COLORS[i] })).filter((p) => p.value > 0);
+      const c = city();
+      const sums = c.areas.map(() => 0);
+      for (const f of list) {
+        const a = app.world.tracts[f.tract].areaIndex;
+        if (a >= 0) sums[a] += f.count;
+      }
+      return c.areas.map((b, i) => ({ label: b, value: sums[i], color: c.areaColors[i] })).filter((p) => p.value > 0);
     };
     flowsWrap.replaceChildren();
     if (detail.from.length) {

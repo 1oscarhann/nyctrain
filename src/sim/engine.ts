@@ -147,7 +147,7 @@ function emptyReport(day: number): DayReport {
     routeRiders: {},
     routeLateness: {},
     stationBoardings: {},
-    midtownJfk: null,
+    goalTrip: null,
     boroughsServed: [],
   };
 }

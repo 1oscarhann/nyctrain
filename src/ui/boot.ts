@@ -1,10 +1,13 @@
 /**
- * Startup: load the data, show the title screen (over a slowly turning 3D skyline), start games.
+ * Startup: pick a city, load its data, show the title screen (over a slowly turning 3D skyline),
+ * start games. Switching city re-applies the city's balance, origin and currency (cities/index.ts)
+ * and reloads its data (cached per city).
  */
-import { MAP } from '../balance';
+import { ECONOMY, MAP, COMMUTERS, type CityId } from '../balance';
+import { applyCity, CITIES, CITY_IDS, city, cityBalance } from '../cities';
 import { toLonLat } from '../core/geo';
 import { fmtDate } from '../core/calendar';
-import { fmtCount, fmtMoney, setUnits } from '../core/units';
+import { currency, fmtCount, fmtMoney, setCurrency, setUnits } from '../core/units';
 import { fetchLand, fetchWorld, type LandCollection, type World } from '../data/world';
 import { MapView } from '../map/mapView';
 import type { SaveFile } from '../save/format';
@@ -12,20 +15,51 @@ import { importFile, listSlots, readSlot, SLOTS } from '../save/store';
 import { App } from './app';
 import { h, svgIcon } from './dom';
 import { ICONS } from './icons';
-import { loadSettings, storeSettings } from './settings';
+import { loadLastCity, loadSettings, storeLastCity, storeSettings } from './settings';
 import { modal } from './widgets';
-import { COMMUTERS } from '../balance';
 
 let world: World;
 let land: LandCollection;
 let current: App | null = null;
+const cache = new Map<CityId, { world: World; land: LandCollection }>();
+
+/** Make `id` the current city: balance overrides, origin, currency, then its (cached) data. */
+async function useCity(root: HTMLElement, id: CityId): Promise<void> {
+  applyCity(id);
+  document.title = `Headway: ${city().name}`;
+  let d = cache.get(id);
+  if (!d) {
+    const loading = h('div', { id: 'loading' }, h('div', { class: 'spinner', style: 'width:22px;height:22px' }), `Loading ${city().name}…`);
+    root.append(loading);
+    try {
+      const base = new URL(city().dataPath, document.baseURI).href;
+      const [w, l] = await Promise.all([fetchWorld(base), fetchLand(base)]);
+      d = { world: w, land: l };
+      cache.set(id, d);
+    } finally {
+      loading.remove();
+    }
+  }
+  world = d.world;
+  land = d.land;
+}
+
+/** Money in another city's currency (for save summaries on the title screen). */
+function moneyIn(id: CityId, v: number): string {
+  setCurrency(CITIES[id].currency);
+  const s = fmtMoney(v);
+  setCurrency(city().currency);
+  return s;
+}
+
+function saveSummary(m: SaveFile['meta']): string {
+  const c = m.city ?? 'nyc';
+  return `${CITIES[c].name} · ${fmtDate(m.day)} · ${m.sandbox ? 'Sandbox' : moneyIn(c, m.cash)}`;
+}
 
 export async function bootstrap(root: HTMLElement): Promise<void> {
-  const loading = h('div', { id: 'loading' }, h('div', { class: 'spinner', style: 'width:22px;height:22px' }), 'Loading New York…');
-  root.append(loading);
   await document.fonts.load('700 14px Overpass').catch(() => undefined);
-  [world, land] = await Promise.all([fetchWorld(), fetchLand()]);
-  loading.remove();
+  await useCity(root, loadLastCity());
   await showTitle(root);
 }
 
@@ -38,8 +72,9 @@ function freshMapContainer(root: HTMLElement): HTMLElement {
 
 async function showTitle(root: HTMLElement): Promise<void> {
   const view = await MapView.create(freshMapContainer(root));
-  // A slow orbit over Midtown while you decide.
-  view.map.jumpTo({ center: [-73.985, 40.752], zoom: 14.2, bearing: 20 });
+  // A slow orbit over the city's centre while you decide.
+  const cam = cityBalance().titleCamera;
+  view.map.jumpTo({ center: cam.center, zoom: cam.zoom, bearing: cam.bearing });
   view.setView3D(true);
   let spinning = true;
   const spin = () => {
@@ -54,33 +89,62 @@ async function showTitle(root: HTMLElement): Promise<void> {
   const metas = await listSlots().catch(() => null);
   const auto = metas?.autosave ?? null;
 
-  const start = (sandbox: boolean, save: SaveFile | null, tutorial: boolean) => {
+  const leave = () => {
     spinning = false;
     overlay.remove();
-    view.resetFlat();
-    view.map.jumpTo({ center: MAP.startCenter, zoom: MAP.startZoom, bearing: 0 });
-    startGame(root, view, { sandbox: save ? save.game.sandbox : sandbox, save, tutorial });
+  };
+
+  const switchCity = async (id: CityId) => {
+    if (id === city().id) return;
+    leave();
+    view.map.remove();
+    storeLastCity(id);
+    await useCity(root, id);
+    await showTitle(root);
+  };
+
+  const start = async (sandbox: boolean, save: SaveFile | null, tutorial: boolean) => {
+    leave();
+    let v = view;
+    if (save && save.city !== city().id) {
+      // A save from the other city: switch over first.
+      v.map.remove();
+      storeLastCity(save.city);
+      await useCity(root, save.city);
+      v = await MapView.create(freshMapContainer(root));
+    } else {
+      v.resetFlat();
+    }
+    v.map.jumpTo({ center: MAP.startCenter, zoom: MAP.startZoom, bearing: 0 });
+    startGame(root, v, { sandbox: save ? save.game.sandbox : sandbox, save, tutorial });
   };
 
   const btn = (label: string, sub: string | null, onclick: () => void, primary = false) =>
     h('button', { class: `hw-btn ${primary ? 'primary' : ''}`, style: 'height:auto;padding:10px 14px;flex-direction:column;align-items:flex-start;gap:2px;width:100%', onclick }, h('span', { style: 'font-weight:800' }, label), sub ? h('span', { style: `font-size:12px;${primary ? '' : 'color:var(--muted)'};font-weight:400` }, sub) : null);
 
+  const c = city();
   const synthetic = world.meta.synthetic;
+  const cityPicker = h(
+    'div',
+    { class: 'seg', style: 'margin:16px 0 0;width:100%;display:flex' },
+    ...CITY_IDS.map((id) => h('button', { class: id === c.id ? 'on' : '', style: 'flex:1', onclick: () => switchCity(id), title: `Play in ${CITIES[id].name}` }, CITIES[id].name)),
+  );
   const card = h(
     'div',
     { class: 'hw-panel', style: 'width:min(440px,calc(100vw - 32px));padding:26px 26px 20px' },
-    h('div', { style: 'display:flex;align-items:center;gap:12px' }, h('span', { style: 'width:44px;height:44px;display:inline-flex' }, svgIcon(ICONS.logo)), h('div', null, h('div', { style: 'font-size:30px;font-weight:800;letter-spacing:.01em;line-height:1' }, 'Headway'), h('div', { class: 'hw-muted', style: 'font-size:15px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;margin-top:4px' }, 'New York'))),
-    h('p', { style: 'line-height:1.55;margin:16px 0 18px' }, 'New York, but nobody ever built the subway. You get the real city, real commuting data for the five boroughs and a few billion dollars. Draw the lines — millions of New Yorkers decide whether they’re worth taking.'),
+    h('div', { style: 'display:flex;align-items:center;gap:12px' }, h('span', { style: 'width:44px;height:44px;display:inline-flex' }, svgIcon(ICONS.logo)), h('div', null, h('div', { style: 'font-size:30px;font-weight:800;letter-spacing:.01em;line-height:1' }, 'Headway'), h('div', { class: 'hw-muted', style: 'font-size:15px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;margin-top:4px' }, c.name))),
+    cityPicker,
+    h('p', { style: 'line-height:1.55;margin:14px 0 18px' }, c.blurb),
     h(
       'div',
       { style: 'display:flex;flex-direction:column;gap:8px' },
-      auto ? btn('Continue', `${fmtDate(auto.day)} · ${auto.sandbox ? 'Sandbox' : fmtMoney(auto.cash)} · ${fmtCount(auto.riders)} riders`, async () => { const s = await readSlot('autosave'); if (s) start(s.game.sandbox, s, false); }, true) : null,
-      btn('New game', `$6B to start · bonds available · goals to chase`, () => chooseTutorial(false), !auto),
+      auto ? btn('Continue', `${saveSummary(auto)} · ${fmtCount(auto.riders)} riders`, async () => { const s = await readSlot('autosave'); if (s) start(s.game.sandbox, s, false); }, true) : null,
+      btn('New game', `${currency()}${+(ECONOMY.startingCash / 1e9).toFixed(1)}B to start · bonds available · goals to chase`, () => chooseTutorial(false), !auto),
       btn('Sandbox', 'Unlimited money, instant construction', () => chooseTutorial(true)),
       btn('Load game', 'Saved slots or a file', () => loadDialog()),
       btn('Settings', null, () => settingsDialog()),
     ),
-    h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:14px;line-height:1.45' }, synthetic ? '⚠ Running on a SYNTHETIC dataset — real LODES data was unreachable when the data was built.' : `Commuting data: ${world.meta.source}. ${fmtCount(world.tracts.reduce((s, t) => s + t.residents, 0))} commuters across ${world.tracts.length.toLocaleString()} census tracts.`),
+    h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:14px;line-height:1.45' }, synthetic ? '⚠ Running on a SYNTHETIC dataset — real commuting data was unreachable when the data was built.' : `Commuting data: ${world.meta.source}. ${fmtCount(world.tracts.reduce((s, t) => s + t.residents, 0))} commuters across ${world.tracts.length.toLocaleString()} ${c.zoneWord}.`),
   );
   const overlay = h('div', { style: 'position:absolute;inset:0;display:flex;align-items:center;justify-content:flex-start;padding-left:max(16px,6vw);z-index:90;background:linear-gradient(90deg,rgba(16,20,25,.82),rgba(16,20,25,.25) 60%,rgba(16,20,25,0))' }, card);
   root.append(overlay);
@@ -109,7 +173,7 @@ async function showTitle(root: HTMLElement): Promise<void> {
         h(
           'div',
           { class: 'list-item', style: meta ? '' : 'opacity:.5;cursor:default', onclick: async () => { if (!meta) return; const s = await readSlot(slot); if (s) { close(); start(s.game.sandbox, s, false); } } },
-          h('span', { class: 'grow' }, h('b', null, slot === 'autosave' ? 'Autosave' : `Slot ${slot.slice(-1)}`), h('div', { class: 'hw-muted', style: 'font-size:12px' }, meta ? `${fmtDate(meta.day)} · ${meta.sandbox ? 'Sandbox' : fmtMoney(meta.cash)} · ${new Date(meta.savedAt).toLocaleString()}` : 'Empty')),
+          h('span', { class: 'grow' }, h('b', null, slot === 'autosave' ? 'Autosave' : `Slot ${slot.slice(-1)}`), h('div', { class: 'hw-muted', style: 'font-size:12px' }, meta ? `${saveSummary(meta)} · ${new Date(meta.savedAt).toLocaleString()}` : 'Empty')),
         ),
       );
     }
@@ -175,6 +239,10 @@ function startGame(root: HTMLElement, view: MapView, p: { sandbox: boolean; save
       current = null;
       teardownUi(root);
       view.map.remove();
+      if (save.city !== city().id) {
+        storeLastCity(save.city);
+        await useCity(root, save.city);
+      }
       const v = await MapView.create(freshMapContainer(root));
       startGame(root, v, { sandbox: save.game.sandbox, save, tutorial: false });
     },

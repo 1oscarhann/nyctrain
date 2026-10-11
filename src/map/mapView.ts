@@ -6,6 +6,7 @@ import maplibregl, { type Map as MLMap } from 'maplibre-gl';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import type { Layer } from '@deck.gl/core';
 import { MAP } from '../balance';
+import { city } from '../cities';
 import { Emitter } from '../core/emitter';
 import { BUILDING_HEIGHT_STATE, BUILDING_LAYER, loadStyle } from './style';
 
@@ -56,8 +57,9 @@ export class MapView {
       maxZoom: MAP.maxZoom,
       maxBounds: MAP.bounds,
       maxPitch: 70,
-      // Attribution comes from the OpenFreeMap TileJSON (OpenFreeMap © OpenMapTiles, OpenStreetMap).
-      attributionControl: { compact: false },
+      // Map attribution comes from the OpenFreeMap TileJSON (OpenFreeMap © OpenMapTiles,
+      // OpenStreetMap); some cities' data licences add a line (London: ONS, OGL v3.0).
+      attributionControl: { compact: false, ...(city().attribution ? { customAttribution: city().attribution } : {}) },
       canvasContextAttributes: { antialias: true },
       fadeDuration: 150,
     });

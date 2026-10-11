@@ -4,15 +4,16 @@
  */
 import { toLocal } from '../core/geo';
 import { decodeOD, type ODTable } from './odFormat';
-import type { BoroughName, TractRecord, TractsFile } from './types';
-import { BOROUGHS } from './types';
+import { regionArea } from '../cities';
+import type { TractRecord, TractsFile } from './types';
 import type { FeatureCollection, MultiPolygon, Polygon } from 'geojson';
 
 export interface Tract extends TractRecord {
   index: number;
   x: number;
   y: number;
-  boroughIndex: number;
+  /** Index into the city's chart areas (CityConfig.areas). */
+  areaIndex: number;
   /** Land area, km². */
   areaKm2: number;
   /** Residents + jobs per km². */
@@ -36,7 +37,7 @@ export function buildWorld(file: TractsFile, odBuffer: ArrayBuffer): World {
       index,
       x,
       y,
-      boroughIndex: BOROUGHS.indexOf(t.borough as BoroughName),
+      areaIndex: regionArea(t.borough),
       areaKm2,
       density: (t.residents + t.jobs) / Math.max(areaKm2, 0.01),
     };
@@ -46,7 +47,7 @@ export function buildWorld(file: TractsFile, odBuffer: ArrayBuffer): World {
   return { meta, tracts, od: decodeOD(odBuffer) };
 }
 
-export async function fetchWorld(base = '/data/'): Promise<World> {
+export async function fetchWorld(base: string): Promise<World> {
   const [tractsFile, odBuf] = await Promise.all([
     fetch(base + 'tracts.json').then((r) => {
       if (!r.ok) throw new Error('tracts.json: HTTP ' + r.status);
@@ -60,7 +61,7 @@ export async function fetchWorld(base = '/data/'): Promise<World> {
   return buildWorld(tractsFile, odBuf);
 }
 
-export async function fetchLand(base = '/data/'): Promise<LandCollection> {
+export async function fetchLand(base: string): Promise<LandCollection> {
   const r = await fetch(base + 'land.geojson');
   if (!r.ok) throw new Error('land.geojson: HTTP ' + r.status);
   return r.json();

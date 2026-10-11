@@ -9,7 +9,7 @@ export const MODE_WALK = 0;
 export const MODE_DRIVE = 1;
 export const MODE_TRANSIT = 2;
 
-/** Dollars → minutes for an earnings band (0, 1, 2). */
+/** Money → minutes for an earnings band (0, 1, 2). */
 export function moneyToMinutes(dollars: number, band: number): number {
   return (dollars / COMMUTERS.valueOfTime[band]) * 60;
 }
@@ -17,9 +17,10 @@ export function moneyToMinutes(dollars: number, band: number): number {
 export interface PairGeometry {
   /** Straight-line distance between home and work, metres. */
   distance: number;
-  homeManhattan: boolean;
-  workManhattan: boolean;
-  /** Work is in Manhattan below 60th St. */
+  /** Either end in the city's congested core regions (Manhattan; inner London). */
+  homeCore: boolean;
+  workCore: boolean;
+  /** Work is in the CBD (Manhattan below 60th St; central London's charging zone). */
   workCbd: boolean;
   homeCbd: boolean;
 }
@@ -33,11 +34,11 @@ export function walkTime(d: number): number {
 /** One-way drive time in seconds (door to door, including parking) and money cost. */
 export function driveTripTime(g: PairGeometry): number {
   const road = g.distance * COMMUTERS.driveDetour;
-  const vM = COMMUTERS.driveSpeedManhattan;
+  const vM = COMMUTERS.driveSpeedCore;
   const vO = COMMUTERS.driveSpeedOther;
   let t: number;
-  if (g.homeManhattan && g.workManhattan) t = road / vM;
-  else if (g.homeManhattan || g.workManhattan) t = road * (0.5 / vM + 0.5 / vO);
+  if (g.homeCore && g.workCore) t = road / vM;
+  else if (g.homeCore || g.workCore) t = road * (0.5 / vM + 0.5 / vO);
   else t = road / vO;
   return t + (g.workCbd ? COMMUTERS.parkingCbdTime : COMMUTERS.parkingOtherTime);
 }

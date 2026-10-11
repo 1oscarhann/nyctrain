@@ -1,6 +1,6 @@
 /**
  * Balance tuning: build scenario networks in code, run them to near-equilibrium and report
- * ridership and daily money.  npm run balance [-- scenario=core|sprawl|test days=8 scale=10]
+ * ridership and daily money.  npm run balance [-- city=nyc|london scenario=core|sprawl|test days=8 scale=10]
  */
 import { loadLandFromDisk, loadWorldFromDisk } from './nodeData';
 import { buildTestNetwork, createHeadlessGame, drawLine, makeRoute, runDays, stationNear } from '../src/sim/headless';
@@ -9,6 +9,7 @@ import { COMMUTERS, ECONOMY, type TrackLevel } from '../src/balance';
 import { annuityPayment } from '../src/economy/finance';
 import { edgeReport } from '../src/construction/validate';
 import { fmtMoney } from '../src/core/units';
+import { applyCity, isCityId } from '../src/cities';
 
 type LL = [number, number];
 
@@ -172,7 +173,121 @@ export function buildSprawlNetwork(game: Game) {
   return { E, F };
 }
 
+/**
+ * London core, ~43 stations on four deep lines: an east–west crosstown (Paddington–Bank–Stratford),
+ * a north–south line under the Thames (Kentish Town–King's Cross–Elephant–Brixton), a West End to
+ * Canary Wharf line along the South Bank, and Hammersmith–West End–City–Shadwell.
+ */
+export function buildLondonCoreNetwork(game: Game) {
+  const A = line(
+    game,
+    [[-0.1780, 51.5168], [-0.1585, 51.5136], [-0.1300, 51.5166], [-0.0975, 51.5146], [-0.0886, 51.5133], [-0.0600, 51.5195], [-0.0333, 51.5252], [-0.0030, 51.5420]],
+    'deep',
+    [
+      [[-0.1755, 51.5162], 'Paddington'],
+      [[-0.1585, 51.5136], 'Marble Arch'],
+      [[-0.1415, 51.5152], 'Oxford Circus'],
+      [[-0.1308, 51.5165], 'Tottenham Court Road'],
+      [[-0.1200, 51.5163], 'Holborn'],
+      [[-0.0975, 51.5146], "St Paul's"],
+      [[-0.0886, 51.5133], 'Bank'],
+      [[-0.0726, 51.5165], 'Aldgate East'],
+      [[-0.0597, 51.5194], 'Whitechapel'],
+      [[-0.0333, 51.5252], 'Mile End'],
+      [[-0.0040, 51.5415], 'Stratford'],
+    ],
+  );
+  const B = line(
+    game,
+    [[-0.1405, 51.5502], [-0.1430, 51.5390], [-0.1240, 51.5300], [-0.1050, 51.5200], [-0.1040, 51.5040], [-0.1000, 51.4945], [-0.1130, 51.4815], [-0.1145, 51.4627]],
+    'deep',
+    [
+      [[-0.1408, 51.5495], 'Kentish Town'],
+      [[-0.1428, 51.5395], 'Camden Town'],
+      [[-0.1335, 51.5345], 'Mornington Crescent'],
+      [[-0.1240, 51.5300], "King's Cross"],
+      [[-0.1150, 51.5248], 'Exmouth Market'],
+      [[-0.1050, 51.5200], 'Farringdon'],
+      [[-0.1045, 51.5118], 'Blackfriars'],
+      [[-0.1041, 51.5045], 'Southwark Street'],
+      [[-0.1000, 51.4948], 'Elephant & Castle'],
+      [[-0.1060, 51.4882], 'Kennington'],
+      [[-0.1128, 51.4818], 'Oval'],
+      [[-0.1142, 51.4640], 'Brixton'],
+    ],
+  );
+  const C = line(
+    game,
+    [[-0.1450, 51.4960], [-0.1250, 51.5005], [-0.1130, 51.5032], [-0.0865, 51.5050], [-0.0638, 51.4980], [-0.0497, 51.4982], [-0.0195, 51.5035], [0.0050, 51.5005]],
+    'deep',
+    [
+      [[-0.1440, 51.4962], 'Victoria'],
+      [[-0.1340, 51.4985], "St James's Park"],
+      [[-0.1252, 51.5004], 'Westminster'],
+      [[-0.1132, 51.5032], 'Waterloo'],
+      [[-0.0865, 51.5050], 'London Bridge'],
+      [[-0.0638, 51.4980], 'Bermondsey'],
+      [[-0.0497, 51.4982], 'Canada Water'],
+      [[-0.0195, 51.5035], 'Canary Wharf'],
+      [[0.0045, 51.5007], 'North Greenwich'],
+    ],
+  );
+  const D = line(
+    game,
+    [[-0.2246, 51.4936], [-0.1947, 51.4920], [-0.1738, 51.4941], [-0.1527, 51.5027], [-0.1340, 51.5100], [-0.1243, 51.5129], [-0.1143, 51.5111], [-0.0906, 51.5113], [-0.0763, 51.5098], [-0.0569, 51.5112]],
+    'deep',
+    [
+      [[-0.2240, 51.4936], 'Hammersmith'],
+      [[-0.1947, 51.4920], "Earl's Court"],
+      [[-0.1738, 51.4941], 'South Kensington'],
+      [[-0.1607, 51.4990], 'Knightsbridge'],
+      [[-0.1527, 51.5027], 'Hyde Park Corner'],
+      [[-0.1340, 51.5100], 'Piccadilly Circus'],
+      [[-0.1243, 51.5129], 'Covent Garden'],
+      [[-0.1143, 51.5111], 'Temple'],
+      [[-0.0906, 51.5113], 'Cannon Street'],
+      [[-0.0763, 51.5098], 'Tower Hill'],
+      [[-0.0575, 51.5112], 'Shadwell'],
+    ],
+  );
+  return { A, B, C, D };
+}
+
+/** London sprawl: elevated lines through low-density Havering and Bexley. */
+export function buildLondonSprawlNetwork(game: Game) {
+  const E = line(
+    game,
+    [[0.1450, 51.5430], [0.2000, 51.5490], [0.2520, 51.5590]],
+    'elevated',
+    [
+      [[0.1480, 51.5433], 'Dagenham Heathway'],
+      [[0.1700, 51.5452], 'Dagenham East'],
+      [[0.1980, 51.5488], 'Elm Park'],
+      [[0.2190, 51.5530], 'Hornchurch'],
+      [[0.2500, 51.5585], 'Upminster'],
+    ],
+  );
+  const F = line(
+    game,
+    [[0.0500, 51.4560], [0.1050, 51.4650], [0.1500, 51.4630], [0.1850, 51.4530]],
+    'elevated',
+    [
+      [[0.0530, 51.4562], 'Eltham'],
+      [[0.0790, 51.4600], 'Falconwood'],
+      [[0.1060, 51.4650], 'Welling'],
+      [[0.1300, 51.4645], 'Upper Bexleyheath'],
+      [[0.1490, 51.4630], 'Bexleyheath'],
+      [[0.1820, 51.4540], 'Crayford Road'],
+    ],
+  );
+  return { E, F };
+}
+
 const args = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=')));
+const cityId = args.city ?? 'nyc';
+if (!isCityId(cityId)) throw new Error(`Unknown city ${cityId}`);
+// First: the city's balance values and projection, before any data loads or overrides.
+applyCity(cityId);
 // Optional overrides for parameter sweeps (these are the balance.ts COMMUTERS values).
 if (args.ascDrive) COMMUTERS.modeConstant.drive = Number(args.ascDrive);
 if (args.ascTransit) COMMUTERS.modeConstant.transit = Number(args.ascTransit);
@@ -188,7 +303,10 @@ let stopsets: Record<string, number[]> = {};
 if (scenario === 'test') {
   buildTestNetwork(game);
 } else {
-  stopsets = scenario === 'sprawl' ? buildSprawlNetwork(game) : buildCoreNetwork(game);
+  stopsets =
+    cityId === 'london'
+      ? scenario === 'sprawl' ? buildLondonSprawlNetwork(game) : buildLondonCoreNetwork(game)
+      : scenario === 'sprawl' ? buildSprawlNetwork(game) : buildCoreNetwork(game);
   const bad = [...game.network.edges.values()].map((e) => edgeReport(game.network, e.id, game.terrain)).filter((r) => !r.ok);
   if (bad.length) console.log('INVALID EDGES:', bad.map((b) => b.errors[0]));
   fund(game, 3e9);
@@ -220,7 +338,7 @@ const trackCost = [...game.network.edges.values()].reduce((s, e) => s + e.cost, 
 const stationCost = [...game.network.stations.values()].reduce((s, st) => s + st.cost, 0);
 // Debt a real player would need: everything above the starting cash, at bond terms.
 const debtNeeded = Math.max(0, built - ECONOMY.startingCash);
-console.log(`${scenario}: ${stationsN} stations, ${game.routes.list().length} routes · capital ${fmtMoney(built)} (track ${fmtMoney(trackCost)}, stations ${fmtMoney(stationCost)}, trains ${fmtMoney(built - trackCost - stationCost)}) · debt needed ${fmtMoney(debtNeeded)}${debtNeeded > ECONOMY.bondMax ? ' (over the bond cap!)' : ''}`);
+console.log(`${cityId} ${scenario}: ${stationsN} stations, ${game.routes.list().length} routes · capital ${fmtMoney(built)} (track ${fmtMoney(trackCost)}, stations ${fmtMoney(stationCost)}, trains ${fmtMoney(built - trackCost - stationCost)}) · debt needed ${fmtMoney(debtNeeded)}${debtNeeded > ECONOMY.bondMax ? ' (over the bond cap!)' : ''}`);
 const run = runDays(game, days, { agentScale: scale });
 const last = run.reports[run.reports.length - 1];
 const f = game.finance.history[game.finance.history.length - 1];
@@ -230,7 +348,7 @@ for (const r of run.reports) console.log(`  day ${r.day}: riders ${Math.round(r.
 const opCost = f.operating + f.staffing + f.maintenance;
 console.log(`last day: revenue ${fmtMoney(f.revenue)} · operating ${fmtMoney(f.operating)} (${Math.round(f.carKm).toLocaleString()} car-km) · staffing ${fmtMoney(f.staffing)} · maintenance ${fmtMoney(f.maintenance)}`);
 console.log(`  operating result ${fmtMoney(f.revenue - opCost, { sign: true })}/day · after bond interest ${fmtMoney(f.revenue - opCost - interest, { sign: true })}/day · after full debt service ${fmtMoney(f.revenue - opCost - debtService, { sign: true })}/day`);
-console.log(`  route riders ${JSON.stringify(last.routeRiders)} · Midtown→JFK ${last.midtownJfk?.toFixed(0) ?? '—'} · ${run.ms} ms`);
+console.log(`  route riders ${JSON.stringify(last.routeRiders)} · goal trip ${last.goalTrip?.toFixed(0) ?? '—'} · ${run.ms} ms`);
 
 // ---- demand diagnostics: coverage vs choice
 {

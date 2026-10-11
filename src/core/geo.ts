@@ -1,14 +1,22 @@
 /**
- * Local metric projection for NYC. All game geometry is stored in metres on a plane
- * centred on City Hall; over the five boroughs the scale error is well under 0.5%.
+ * Local metric projection. All game geometry is stored in metres on a plane centred on the
+ * city's origin (City Hall in New York, Charing Cross in London); over a city the scale error
+ * is well under 0.5%. The origin is set per city by cities/applyCity() before any data loads.
  */
-export const ORIGIN_LON = -74.006;
-export const ORIGIN_LAT = 40.7128;
-
-const phi = (ORIGIN_LAT * Math.PI) / 180;
+export let ORIGIN_LON = -74.006;
+export let ORIGIN_LAT = 40.7128;
 /** Metres per degree of latitude / longitude at the origin. */
-export const M_PER_DEG_LAT = 111132.954 - 559.822 * Math.cos(2 * phi) + 1.175 * Math.cos(4 * phi);
-export const M_PER_DEG_LON = 111412.84 * Math.cos(phi) - 93.5 * Math.cos(3 * phi);
+export let M_PER_DEG_LAT = 0;
+export let M_PER_DEG_LON = 0;
+
+export function setOrigin(lon: number, lat: number): void {
+  ORIGIN_LON = lon;
+  ORIGIN_LAT = lat;
+  const phi = (lat * Math.PI) / 180;
+  M_PER_DEG_LAT = 111132.954 - 559.822 * Math.cos(2 * phi) + 1.175 * Math.cos(4 * phi);
+  M_PER_DEG_LON = 111412.84 * Math.cos(phi) - 93.5 * Math.cos(3 * phi);
+}
+setOrigin(ORIGIN_LON, ORIGIN_LAT);
 
 export type XY = [number, number];
 export type LonLat = [number, number];

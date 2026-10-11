@@ -89,11 +89,11 @@ export class TopBar {
     if (r) {
       const d = r.avgCommute - r.baselineCommute;
       this.commute.textContent = `${r.avgCommute.toFixed(1)} min`;
-      this.commuteSub.textContent = `${d <= 0 ? '−' : '+'}${Math.abs(d).toFixed(1)} vs no subway`;
+      this.commuteSub.textContent = `${d <= 0 ? '−' : '+'}${Math.abs(d).toFixed(1)} vs no transit`;
       this.commuteSub.className = 'sub num ' + (d < -0.05 ? 'hw-green' : d > 0.05 ? 'hw-red' : '');
     } else {
       this.commute.textContent = app.baseline ? `${app.baseline.toFixed(1)} min` : '—';
-      this.commuteSub.textContent = 'no-subway baseline';
+      this.commuteSub.textContent = 'no-transit baseline';
       this.commuteSub.className = 'sub num';
     }
   }

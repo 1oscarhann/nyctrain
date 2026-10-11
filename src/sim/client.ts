@@ -2,6 +2,7 @@
  * Main-thread side of the simulation worker: commands, snapshots, queries, and interpolation of
  * train positions between snapshots.
  */
+import { city } from '../cities';
 import { Emitter } from '../core/emitter';
 import type { CompiledNetwork, DayReport, FromWorker, ModeState, Query, Snapshot, ToWorker } from './protocol';
 import { TRAIN_STRIDE } from './protocol';
@@ -49,7 +50,8 @@ export class SimClient {
   }
 
   init(opts: { agentScale: number; seed: number; time: number; fare: number; modeState?: ModeState }): void {
-    this.send({ type: 'init', dataBase: new URL('data/', document.baseURI).href, ...opts });
+    const c = city();
+    this.send({ type: 'init', city: c.id, dataBase: new URL(c.dataPath, document.baseURI).href, ...opts });
   }
 
   setNetwork(net: CompiledNetwork): void {

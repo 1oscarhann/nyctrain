@@ -1,9 +1,10 @@
-# Headway: New York
+# Headway
 
-A subway builder set in the real five boroughs. You get the actual streets, shoreline and
-buildings, real commuting data for New York City, and a few billion dollars. You design track,
-stations and routes. Then about 2.85 million simulated commuters decide each morning whether
-your network beats walking or driving.
+A metro builder set in real cities where nobody ever built one. Pick **New York** (the five
+boroughs) or **London** (all 33 boroughs) on the title screen. You get the actual streets,
+shoreline and buildings, real commuting data and a few billion dollars or pounds. You design
+track, stations and routes. Then about 2.9 million simulated commuters decide each morning
+whether your network beats walking or driving.
 
 Everything runs in the browser: Vite + TypeScript (strict), MapLibre GL JS with deck.gl in
 interleaved mode, Turf and uPlot. The simulation runs in a Web Worker; the main thread only
@@ -19,9 +20,11 @@ npm run build        # strict typecheck + production bundle in dist/
 npm run preview      # serve dist/
 ```
 
-From the title screen: **New game** (career, $6B), **Sandbox** (unlimited money, instant
-construction), **Load game**, **Settings** (units, agent scale) and **Continue** (the autosave).
-A new game offers an 8-step tutorial.
+From the title screen: pick the city (New York / London; remembered), then **New game**
+(career, $6B in New York, £5B in London), **Sandbox** (unlimited money, instant construction),
+**Load game**, **Settings** (units, agent scale) and **Continue** (the autosave). Saves remember
+their city, so loading a London save from the New York title screen switches over. A new game
+offers an 8-step tutorial.
 
 ### Data
 
@@ -48,6 +51,19 @@ boundaries are kept as the land mask. Output:
 The sanity report prints the total number of commuters, the top job tracts and the borough
 shares. If a download fails, the script falls back to synthetic data and says so.
 
+**London** (`npm run data:london`, `scripts/build-data-london.ts` → `public/data/london/`) uses the
+**2011 Census** travel-to-work flows (Nomis WU03EW, MSOA level). The 2021 census was taken in
+March 2021, during lockdown and furlough, so its commute flows are badly distorted. It keeps
+London-internal flows (residence and workplace both among London's 983 MSOAs) and drops anyone
+working mainly from home, giving 2,926,149 commuters in 352,300 pairs. Positions are ONS
+population-weighted MSOA centroids; radii come from ONS MSOA boundaries. The land mask is the ONS
+borough boundaries clipped to the coastline, which cut the tidal Thames out, so the water rule
+works exactly as in New York. The census flows carry no income, so each pair is split into three
+earnings bands (30/40/30 across London) with an ordered logit on the home MSOA's household
+income (ONS small-area income estimates 2011/12). Contains National Statistics data © Crown
+copyright and database right 2011/2013; contains OS data © Crown copyright and database right;
+Open Government Licence v3.0.
+
 ## Controls
 
 | Key | Action |
@@ -68,7 +84,8 @@ All toolbar buttons have tooltips that show their shortcut.
 
 ```
 src/
-  balance.ts      every tunable number (SI units inside; the UI shows miles/mph or km)
+  balance.ts      every tunable number (SI units inside; the UI shows miles/mph or km), per-city overrides in CITY_BALANCE
+  cities/         New York and London: regions, goals, copy, naming style; applyCity() switches everything
   core/           geo (local metres around City Hall), calendar (weekdays only), units, game state, goals
   data/           world loading, tract index, land mask
   map/            MapLibre style recolouring, network/station/elevated layers, overlays, naming
@@ -83,6 +100,12 @@ scripts/          data pipeline, headless sim, balance tuning, performance check
 tests/            Vitest unit tests and the headless simulation test
 ```
 
+Each city is a `CityConfig` (`src/cities/`: regions, chart areas, goals, tutorial copy, naming
+style, currency, data path) plus a `CITY_BALANCE` entry in `balance.ts` (projection origin, map
+view, core and CBD zones, driving and parking, values of time, fares, starting cash, the
+timed-trip goal). `applyCity()` restores New York's defaults and applies the city on each thread:
+at game start on the main thread, at init in the worker, and first thing in scripts and tests.
+
 The worker steps a fixed 2 s game timestep in 14 ms slices and posts compact snapshots about
 10 times per second: train positions and loads, platform queues and live counters. The main
 thread interpolates train positions between snapshots. Agents are never saved. A save stores
@@ -92,12 +115,13 @@ commuters are rebuilt from the data when the save is loaded.
 ## Testing each part
 
 ```bash
-npm test                 # all 36 tests (unit + headless)
+npm test                 # all 42 tests (unit + headless, both cities)
 npm run test:unit        # geometry, costs, ramps, water, pathfinding, logit, kinematics, economy
 npm run test:headless    # 3 days on the test network: plausible numbers, no deadlocks, finite money
 npm run sim -- days=3    # headless run of the test network, with a daily summary
 npm run balance -- scenario=core days=12     # ~40-station core: ridership and daily money
 npm run balance -- scenario=sprawl days=8    # low-density sprawl: should lose money
+npm run balance -- city=london scenario=core days=12   # the same for London (43 stations)
 npm run perf             # 300 stations / 25 routes / ~430 trains: times one peak game-hour
 ```
 
@@ -167,6 +191,29 @@ So the core covers its operating costs and interest at about 1.45–1.5M riders.
 principal as well needs more ridership or a higher fare. The sprawl network loses money every
 day.
 
+### London
+
+London uses the same construction, train and operating numbers (read as pounds). Its own values
+are in `CITY_BALANCE.london`:
+
+| Area | London |
+|---|---|
+| Money | £5B start; fare £2.80 (£0–5, step £0.10); values of time £8/£14/£26 per hour |
+| Driving | 13 km/h in inner London (the 14 ONS inner boroughs), 24 km/h outside; £0.25/km; drive constant +35 min (fewer London households own a car) |
+| CBD | inside the inner ring road (approximately the congestion-charge zone): 20 min and £25 (£15 charge plus parking) |
+| Goals | Cross the Thames; reach every borough (stretch); Bank to Heathrow in under 45 minutes; plus the shared milestones |
+
+| Scenario | Network | Capital | Riders/day | Daily money |
+|---|---|---|---|---|
+| **Core** (`city=london scenario=core`) | 4 deep routes, 43 stations: Paddington–Bank–Stratford, Kentish Town–King's Cross–Elephant–Brixton, Victoria–Waterloo–Canary Wharf–North Greenwich, Hammersmith–Piccadilly–Cannon St–Shadwell | £24.2B (needs £19.2B of bonds) | 758k on day 11, 13% transit share | Operating −£0.29M/day; −£2.1M/day after bond interest |
+| **Sprawl** (`scenario=sprawl`) | Elevated Dagenham–Upminster and Eltham–Bexleyheath | £3.38B | 16k | −£0.59M/day |
+
+London is the harder city. Its jobs are far less concentrated than Manhattan's, and commutes are
+longer (7.6 km on average, centroid to centroid), so the same ~40 central stations reach only 20%
+of commuters, against 30% in New York. Of those they reach, the network wins 65%. Revenue per
+rider is the same as in New York (about £2.75), so break-even including interest still sits near
+1.5M riders. In London that takes a bigger network reaching further out.
+
 ### Performance (`npm run perf`)
 
 The perf network is a grid of 25 deep routes with 300 stations and 431 trains, at agent scale 10.
@@ -176,6 +223,9 @@ worker holds a sim rate of 3600 game seconds per real second (60×). Per-frame m
 (train interpolation and layer rebuild) is about 1 ms.
 
 ## Known issues
+
+- London uses 2011 census flows, because the 2021 census was taken in lockdown. Its commuter
+  totals are 2011's, and its earnings bands are modelled from area income rather than measured.
 
 - I could not measure frame rate in this environment, which has no GPU (only software WebGL).
   The 60 fps target needs checking on real hardware. Per-frame JS cost is small, so any

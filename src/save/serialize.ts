@@ -1,4 +1,5 @@
 /** Game state ⇄ save file. */
+import { city } from '../cities';
 import type { Game } from '../core/game';
 import type { GoalState } from '../core/goals';
 import { Finance } from '../economy/finance';
@@ -13,7 +14,9 @@ export function buildSave(
   return {
     format: 'headway-ny',
     version: SAVE_VERSION,
+    city: city().id,
     meta: {
+      city: city().id,
       name: extra.name,
       savedAt: new Date().toISOString(),
       day: game.day,

@@ -289,10 +289,10 @@ function fixWaterPoints(
       }
     }
     const inMain = !main || booleanPointInPolygon([t.lon, t.lat], main);
-    if (onLand(t.lon, t.lat, t.borough) && inMain) continue;
+    if (onLand(t.lon, t.lat, t.borough as BoroughName) && inMain) continue;
     if (!main) continue;
     let pt = centroid(main).geometry.coordinates;
-    if (!booleanPointInPolygon(pt, main) || !onLand(pt[0], pt[1], t.borough)) pt = pointOnFeature(main).geometry.coordinates;
+    if (!booleanPointInPolygon(pt, main) || !onLand(pt[0], pt[1], t.borough as BoroughName)) pt = pointOnFeature(main).geometry.coordinates;
     const before = [t.lat, t.lon];
     t.lon = +pt[0].toFixed(6);
     t.lat = +pt[1].toFixed(6);

@@ -1,4 +1,4 @@
-import { GOAL_DEFS } from '../../core/goals';
+import { goalDefs } from '../../core/goals';
 import { fmtDate } from '../../core/calendar';
 import type { App } from '../app';
 import { h } from '../dom';
@@ -6,10 +6,11 @@ import { shell, type Panel } from './common';
 
 export function goalsPanel(app: App): Panel {
   const sh = shell('Progress', 'Goals', () => app.game.select(null));
-  const done = GOAL_DEFS.filter((g) => app.goals[g.id] !== null).length;
-  sh.body.append(h('div', { class: 'hw-muted', style: 'margin-bottom:8px' }, `${done} of ${GOAL_DEFS.length} complete. There's no hard win — keep moving more people, faster.`));
+  const defs = goalDefs();
+  const done = defs.filter((g) => app.goals[g.id] !== null).length;
+  sh.body.append(h('div', { class: 'hw-muted', style: 'margin-bottom:8px' }, `${done} of ${defs.length} complete. There's no hard win — keep moving more people, faster.`));
   const list = h('div', { class: 'list' });
-  for (const g of GOAL_DEFS) {
+  for (const g of defs) {
     const day = app.goals[g.id];
     const ok = day !== null && day !== undefined;
     list.append(

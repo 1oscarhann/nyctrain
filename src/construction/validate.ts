@@ -8,7 +8,7 @@ import { platformLength, type Network } from './network';
 
 /** Everything construction needs to know about the ground. */
 export interface Terrain {
-  /** True over water (or outside NYC's land). */
+  /** True over water (or outside the city's land). */
   isWater(x: number, y: number): boolean;
   /** Residents + jobs per km² of the tract underneath. */
   density(x: number, y: number): number;

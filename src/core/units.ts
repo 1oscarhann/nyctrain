@@ -41,15 +41,31 @@ export function fmtPerDistance(dollarsPerM: number): string {
   return `${fmtMoney(dollarsPerM * 1000)}/km`;
 }
 
+let CUR = '$';
+
+/** Currency symbol of the current city (set by cities/applyCity). */
+export function setCurrency(symbol: string): void {
+  CUR = symbol;
+}
+
+export function currency(): string {
+  return CUR;
+}
+
 export function fmtMoney(d: number, opts: { sign?: boolean; precise?: boolean } = {}): string {
   const sign = d < 0 ? '−' : opts.sign ? '+' : '';
   const a = Math.abs(d);
   let s: string;
-  if (a >= 1e9) s = `$${(a / 1e9).toFixed(a >= 1e10 ? 1 : 2)}B`;
-  else if (a >= 1e6) s = `$${(a / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M`;
-  else if (a >= 1e4 && !opts.precise) s = `$${(a / 1e3).toFixed(0)}k`;
-  else s = `$${a.toLocaleString(undefined, { maximumFractionDigits: a < 10 ? 2 : 0, minimumFractionDigits: a < 10 && a % 1 ? 2 : 0 })}`;
+  if (a >= 1e9) s = `${CUR}${(a / 1e9).toFixed(a >= 1e10 ? 1 : 2)}B`;
+  else if (a >= 1e6) s = `${CUR}${(a / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M`;
+  else if (a >= 1e4 && !opts.precise) s = `${CUR}${(a / 1e3).toFixed(0)}k`;
+  else s = `${CUR}${a.toLocaleString(undefined, { maximumFractionDigits: a < 10 ? 2 : 0, minimumFractionDigits: a < 10 && a % 1 ? 2 : 0 })}`;
   return sign + s;
+}
+
+/** A fare-sized amount with pence/cents, e.g. "$3.00", "£2.80". */
+export function fmtFare(v: number): string {
+  return `${CUR}${v.toFixed(2)}`;
 }
 
 export function fmtCount(n: number): string {
