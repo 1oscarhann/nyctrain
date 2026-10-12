@@ -1,9 +1,10 @@
 /** Game state ⇄ save file. */
+import { CHAOS, type ChaosLevel } from '../balance';
 import { city } from '../cities';
-import type { Game } from '../core/game';
+import type { ChaosSettings, Game } from '../core/game';
 import type { GoalState } from '../core/goals';
 import { Finance } from '../economy/finance';
-import type { DayReport, ModeState } from '../sim/protocol';
+import type { DayReport, ModeState, ServiceOverride } from '../sim/protocol';
 import { b64ToF32, f32ToB64, SAVE_VERSION, type SaveFile, type SaveSettings } from './format';
 
 export function buildSave(
@@ -35,6 +36,8 @@ export function buildSave(
       goals: { ...extra.goals },
       lastReport: extra.lastReport ? JSON.parse(JSON.stringify(extra.lastReport)) : null,
       tutorialDone: extra.tutorialDone,
+      // Event service that has already ended is not saved.
+      chaos: { ...game.chaos, service: game.chaos.service.filter((o) => o.to > game.time).map((o) => ({ ...o })) },
     },
     settings: { ...extra.settings },
     modeState: ms ? { key: ms.key, shares: f32ToB64(ms.shares), obsTime: f32ToB64(ms.obsTime), obsCrowd: f32ToB64(ms.obsCrowd) } : null,
@@ -50,6 +53,7 @@ export function applySave(game: Game, save: SaveFile): { goals: GoalState; lastR
   game.network.load(g.network);
   game.routes.load(g.routes);
   game.finance = Finance.fromData(g.finance);
+  game.chaos = sanitizeChaos(g.chaos, g.time);
   const ms = save.modeState;
   return {
     goals: { ...g.goals },
@@ -57,4 +61,22 @@ export function applySave(game: Game, save: SaveFile): { goals: GoalState; lastR
     modeState: ms ? { key: ms.key, shares: b64ToF32(ms.shares), obsTime: b64ToF32(ms.obsTime), obsCrowd: b64ToF32(ms.obsCrowd) } : undefined,
     tutorialDone: g.tutorialDone,
   };
+}
+
+/**
+ * Chaos settings from a save, made safe: an unknown level becomes Normal, a bad seed the default,
+ * malformed or finished event service is dropped, and the next id follows the largest one kept.
+ */
+export function sanitizeChaos(raw: unknown, time: number): ChaosSettings {
+  const c = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof ChaosSettings, unknown>>;
+  const level: ChaosLevel = CHAOS.levels.includes(c.level as ChaosLevel) ? (c.level as ChaosLevel) : 'normal';
+  const seedNum = Number(c.seed);
+  const seed = typeof c.seed === 'number' && Number.isFinite(seedNum) ? seedNum >>> 0 : CHAOS.defaultSeed;
+  const fin = (x: unknown) => typeof x === 'number' && Number.isFinite(x);
+  const service: ServiceOverride[] = (Array.isArray(c.service) ? c.service : [])
+    .filter((o): o is ServiceOverride => !!o && typeof o === 'object' && fin(o.id) && fin(o.routeId) && fin(o.from) && fin(o.to) && fin(o.headwayMin) && o.headwayMin > 0)
+    .filter((o) => o.to > time && o.to > o.from)
+    .map((o) => ({ id: o.id, routeId: o.routeId, from: o.from, to: o.to, headwayMin: o.headwayMin, eventId: fin(o.eventId) ? o.eventId : 0 }));
+  const nextServiceId = service.reduce((m, o) => Math.max(m, o.id + 1), 1);
+  return { level, seed, service, nextServiceId };
 }

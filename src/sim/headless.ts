@@ -2,7 +2,9 @@
  * Headless game harness (no rendering, no worker): used by the headless test and the balance
  * tuning script. Builds networks in code, runs the engine at full speed and settles finances.
  */
-import { ECONOMY, STATION, TIME, type TrackClass, type TrackLevel } from '../balance';
+import { ECONOMY, EVENTS, STATION, TIME, type ChaosLevel, type TrackClass, type TrackLevel } from '../balance';
+import { cityBalance } from '../cities';
+import { MAX_VENUES, type CityEvent } from '../core/cityCalendar';
 import { Game } from '../core/game';
 import { toLocal } from '../core/geo';
 import { LandMask } from '../data/landMask';
@@ -15,14 +17,18 @@ import { compileNetwork } from '../routes/compile';
 import { purchaseFleet } from '../routes/fleet';
 import { defaultHeadways } from '../routes/routeSet';
 import { ROUTE_COLORS, type PeriodId, type Route } from '../routes/types';
-import { Engine } from './engine';
+import { Engine, type EngineCallbacks } from './engine';
 import type { DayReport } from './protocol';
 import type { Snap } from '../construction/types';
 import { edgeReport } from '../construction/validate';
 
-export function createHeadlessGame(world: World, land: LandCollection, opts: { sandbox?: boolean; fare?: number } = {}): Game {
+/**
+ * A game for headless runs. City chaos defaults to Off here (unlike a new game in the browser),
+ * so the tests and the README balance numbers reproduce v1 exactly; the seed is CHAOS.defaultSeed.
+ */
+export function createHeadlessGame(world: World, land: LandCollection, opts: { sandbox?: boolean; fare?: number; chaos?: ChaosLevel; chaosSeed?: number } = {}): Game {
   const terrain = new WorldTerrain(new LandMask(land), new TractIndex(world.tracts));
-  return new Game(world, terrain, { sandbox: opts.sandbox ?? false, fare: opts.fare ?? ECONOMY.fareDefault });
+  return new Game(world, terrain, { sandbox: opts.sandbox ?? false, fare: opts.fare ?? ECONOMY.fareDefault, chaos: opts.chaos ?? 'off', chaosSeed: opts.chaosSeed });
 }
 
 type LonLat = [number, number];
@@ -159,27 +165,78 @@ export interface HeadlessRun {
   ms: number;
 }
 
-/** Run whole days at full speed, settling finances each midnight. */
-export function runDays(game: Game, days: number, opts: { agentScale?: number; seed?: number; onDay?: (r: DayReport) => void } = {}): HeadlessRun {
-  const reports: DayReport[] = [];
+export interface EngineRunOptions {
+  agentScale?: number;
+  seed?: number;
+  /** Each closed day (after the finances settle). */
+  onDay?: (r: DayReport) => void;
+  /** City chaos callbacks. */
+  alert?: EngineCallbacks['alert'];
+  dayChaos?: EngineCallbacks['dayChaos'];
+}
+
+/**
+ * An engine for the game at its current time, with the game's chaos settings and the compiled
+ * network in place. Each midnight it settles the game's finances.
+ */
+export function startEngine(game: Game, opts: EngineRunOptions & { reports?: DayReport[] } = {}): Engine {
   const engine = new Engine(
     game.world,
-    { agentScale: opts.agentScale ?? 10, seed: opts.seed ?? 1885, time: game.time, fare: game.fare },
+    {
+      agentScale: opts.agentScale ?? 10,
+      seed: opts.seed ?? 1885,
+      time: game.time,
+      fare: game.fare,
+      chaos: { level: game.chaos.level, seed: game.chaos.seed },
+      service: game.chaos.service,
+    },
     {
       dayEnd: (r) => {
-        reports.push(r);
+        opts.reports?.push(r);
         game.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen });
         opts.onDay?.(r);
       },
+      alert: opts.alert,
+      dayChaos: opts.dayChaos,
     },
   );
-  const compiled = compileNetwork(game);
-  engine.setNetwork(compiled.net);
+  engine.setNetwork(compileNetwork(game).net);
+  return engine;
+}
+
+/** Step the engine at the fixed timestep until its clock reaches t. */
+export function stepUntil(engine: Engine, t: number): void {
+  while (engine.time + TIME.simStep <= t) engine.step(TIME.simStep);
+}
+
+/** Run whole days at full speed, settling finances each midnight. */
+export function runDays(game: Game, days: number, opts: EngineRunOptions = {}): HeadlessRun {
+  const reports: DayReport[] = [];
+  const engine = startEngine(game, { ...opts, reports });
   const t0 = Date.now();
   const end = (Math.floor(game.time / 86400) + days) * 86400 + 60;
   while (engine.time < end) engine.step(TIME.simStep);
   game.time = engine.time;
   return { engine, reports, ms: Date.now() - t0 };
+}
+
+/**
+ * Test fixture: a city event at one of the current city's venues (by key), the first kind held
+ * there unless a label is given, with the given attendance and start hour.
+ */
+export function venueEvent(venueKey: string, day: number, attendance: number, startHour: number, label?: string): CityEvent {
+  const cc = cityBalance().chaos;
+  const venue = cc.venues.findIndex((v) => v.key === venueKey);
+  if (venue < 0) throw new Error(`no venue ${venueKey}`);
+  const kind = cc.kinds.findIndex((k) => k.venue === venueKey && (label === undefined || k.label === label));
+  if (kind < 0) throw new Error(`no event kind at ${venueKey}`);
+  const start = Math.round(startHour * 3600);
+  return { id: day * MAX_VENUES + venue, day, venue, kind, label: cc.kinds[kind].label, attendance, start, end: start + cc.kinds[kind].duration, announced: day - EVENTS.announceDays };
+}
+
+/** Test fixture: a Midtown arena concert (New York). */
+export function midtownArenaEvent(day: number, attendance: number, startHour: number): CityEvent {
+  return venueEvent('midtown-arena', day, attendance, startHour, 'Midtown arena concert');
 }
 
 /**

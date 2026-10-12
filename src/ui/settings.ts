@@ -1,5 +1,5 @@
-/** Per-viewer settings (units, agent scale) remembered in localStorage when available. */
-import { COMMUTERS, type CityId } from '../balance';
+/** Per-viewer settings (units, agent scale, last city and new-game chaos level) remembered in localStorage when available. */
+import { CHAOS, COMMUTERS, type ChaosLevel, type CityId } from '../balance';
 import { isCityId } from '../cities';
 import type { UnitSystem } from '../core/units';
 import type { SaveSettings } from '../save/format';
@@ -45,6 +45,26 @@ export function loadLastCity(): CityId {
 export function storeLastCity(id: CityId): void {
   try {
     localStorage.setItem(CITY_KEY, id);
+  } catch {
+    /* not persisted */
+  }
+}
+
+const CHAOS_KEY = 'headway-chaos-level';
+
+/** The city chaos level picked last for a new game (Normal by default). */
+export function loadChaosLevel(): ChaosLevel {
+  try {
+    const v = localStorage.getItem(CHAOS_KEY) as ChaosLevel | null;
+    return v && CHAOS.levels.includes(v) ? v : CHAOS.defaultLevel;
+  } catch {
+    return CHAOS.defaultLevel;
+  }
+}
+
+export function storeChaosLevel(l: ChaosLevel): void {
+  try {
+    localStorage.setItem(CHAOS_KEY, l);
   } catch {
     /* not persisted */
   }

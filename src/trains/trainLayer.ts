@@ -26,6 +26,9 @@ const offsetExt = new PathStyleExtension({ offset: true });
 export class TrainLayer {
   data: TrainDatum[] = [];
   selected: number | null = null;
+  /** Trains stalled or held by an incident (red casing). */
+  alerted = new Set<number>();
+  private alertedVersion = 0;
   private colors = new Map<number, [number, number, number, number]>();
 
   /** Rebuild positions for this frame. */
@@ -59,24 +62,49 @@ export class TrainLayer {
     this.data = out;
   }
 
+  /** Replace the alerted set (from the active alerts). */
+  setAlerted(ids: Set<number>): void {
+    if (ids.size === this.alerted.size && [...ids].every((id) => this.alerted.has(id))) return;
+    this.alerted = ids;
+    this.alertedVersion++;
+  }
+
   layers(zoom: number, onPick: (id: number) => void): Layer[] {
     if (zoom < MAP.trainMinZoom || !this.data.length) return [];
     const DEPTH = { depthCompare: 'always', depthWriteEnabled: false } as const;
     const sel = this.selected;
+    const al = this.alerted;
+    const casing = (d: TrainDatum) => (d.id === sel || al.has(d.id) ? WIDTH + 5 : WIDTH + 2.5);
+    // Stalled or held trains: a white rim outside the red casing, so it reads on red routes too.
+    const halo = al.size ? this.data.filter((d) => al.has(d.id) && d.id !== sel) : [];
     return [
+      halo.length > 0 &&
+        new PathLayer<TrainDatum, PathStyleExtensionProps<TrainDatum>>({
+          id: 'trains-alert-rim',
+          data: halo,
+          getPath: (d) => d.path,
+          getColor: [255, 255, 255, 235],
+          getWidth: WIDTH + 8.5,
+          widthUnits: 'pixels',
+          capRounded: true,
+          jointRounded: true,
+          getOffset: (d) => (d.offset * WIDTH) / (WIDTH + 8.5),
+          extensions: [offsetExt],
+          parameters: DEPTH,
+        }),
       new PathLayer<TrainDatum, PathStyleExtensionProps<TrainDatum>>({
         id: 'trains-casing',
         data: this.data,
         getPath: (d) => d.path,
-        getColor: (d) => (d.id === sel ? [255, 194, 74, 255] : [16, 20, 25, 235]),
-        getWidth: (d) => (d.id === sel ? WIDTH + 5 : WIDTH + 2.5),
+        getColor: (d) => (d.id === sel ? [255, 194, 74, 255] : al.has(d.id) ? [255, 93, 93, 255] : [16, 20, 25, 235]),
+        getWidth: casing,
         widthUnits: 'pixels',
         capRounded: true,
         jointRounded: true,
-        getOffset: (d) => (d.offset * WIDTH) / (d.id === sel ? WIDTH + 5 : WIDTH + 2.5),
+        getOffset: (d) => (d.offset * WIDTH) / casing(d),
         extensions: [offsetExt],
         parameters: DEPTH,
-        updateTriggers: { getColor: sel, getWidth: sel, getOffset: sel },
+        updateTriggers: { getColor: [sel, this.alertedVersion], getWidth: [sel, this.alertedVersion], getOffset: [sel, this.alertedVersion] },
       }),
       new PathLayer<TrainDatum, PathStyleExtensionProps<TrainDatum>>({
         id: 'trains',
@@ -96,7 +124,7 @@ export class TrainLayer {
         },
         parameters: DEPTH,
       }),
-    ];
+    ].filter(Boolean) as Layer[];
   }
 }
 

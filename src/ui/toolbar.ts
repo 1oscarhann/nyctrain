@@ -26,6 +26,8 @@ export class Toolbar {
   private viewBtn: HTMLElement;
   private overlayBtn: HTMLElement;
   private overlayMenu: HTMLElement;
+  private alertsBtn: HTMLElement;
+  private badge = h('span', { class: 'badge num', style: 'display:none' });
 
   constructor(private app: App) {
     const btns: HTMLElement[] = [];
@@ -45,6 +47,8 @@ export class Toolbar {
     attachTip(fin, app.tooltip, 'Finances', undefined, 'Income, costs, bonds and fare');
     const goals = h('button', { class: 'hw-btn ghost tool-btn', onclick: () => app.game.select({ kind: 'goals' }) }, svgIcon(ICONS.goals));
     attachTip(goals, app.tooltip, 'Goals', undefined, 'Milestones to aim for');
+    this.alertsBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-alerts', onclick: () => app.toggleAlerts() }, svgIcon(ICONS.alert), this.badge);
+    attachTip(this.alertsBtn, app.tooltip, 'Service alerts', 'A', 'Incidents, weather, events and event service');
     const help = h('button', { class: 'hw-btn ghost tool-btn', onclick: () => app.startTutorial() }, svgIcon(ICONS.help));
     attachTip(help, app.tooltip, 'Tutorial', undefined, 'A quick walkthrough of the basics');
     this.overlayMenu = h('div', { class: 'hw-panel', style: 'position:absolute;left:66px;display:none;flex-direction:column;padding:6px;gap:2px;z-index:25;min-width:200px' });
@@ -53,7 +57,7 @@ export class Toolbar {
         h('button', { class: 'hw-btn ghost', 'data-overlay': m, style: 'justify-content:flex-start', onclick: () => { app.setOverlay(m); this.toggleOverlayMenu(false); } }, OVERLAY_LABELS[m]),
       );
     }
-    this.el = h('div', { id: 'toolbar', class: 'hw-panel' }, ...btns, h('div', { class: 'tool-sep' }), this.viewBtn, this.overlayBtn, h('div', { class: 'tool-sep' }), routes, fin, goals, help);
+    this.el = h('div', { id: 'toolbar', class: 'hw-panel' }, ...btns, h('div', { class: 'tool-sep' }), this.viewBtn, this.overlayBtn, h('div', { class: 'tool-sep' }), routes, fin, goals, this.alertsBtn, help);
     this.options = h('div', { id: 'tool-options', class: 'hw-panel' });
     app.root.append(this.overlayMenu);
     app.view.events.on('view3d', () => this.update());
@@ -82,9 +86,18 @@ export class Toolbar {
     this.viewBtn.classList.toggle('active', this.app.view.is3D);
     this.overlayBtn.classList.toggle('active', this.app.overlays.mode !== 'none');
     for (const b of this.overlayMenu.querySelectorAll<HTMLElement>('[data-overlay]')) b.classList.toggle('active', b.dataset.overlay === this.app.overlays.mode);
+    this.updateAlerts();
     const content = this.app.tools.active?.options?.() ?? null;
     this.options.replaceChildren();
     if (content) this.options.append(content);
     this.options.classList.toggle('open', !!content);
+  }
+
+  /** Bell state: open when Service alerts shows; the badge counts active incidents. */
+  updateAlerts(): void {
+    const n = this.app.feed.activeCount();
+    this.badge.textContent = n > 9 ? '9+' : String(n);
+    this.badge.style.display = n > 0 ? '' : 'none';
+    this.alertsBtn.classList.toggle('active', this.app.game.selection?.kind === 'alerts');
   }
 }

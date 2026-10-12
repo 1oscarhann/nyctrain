@@ -1,11 +1,13 @@
 /**
  * Performance check for the spec's target (300 stations, 25 routes, ~400 trains):
- *   npm run perf [-- scale=10 ns=17 ew=8 stations=12]
+ *   npm run perf [-- scale=10 ns=17 ew=8 stations=12 chaos=off|calm|normal|wild weather=clear|rain|snow|heat outdoor=1]
+ * chaos= turns city chaos on (incidents, events), weather= forces day 1's weather at full
+ * severity, and outdoor=1 marks every route fully outdoor (the worst case for snow and heat).
  * Builds a large synthetic network (a grid of deep-tunnel lines across Brooklyn, Manhattan and
  * Queens), runs the sim to the morning peak and times one game-hour. At the top speed (60×) the
  * worker must simulate one game-hour per real second, so the budget is 1000 ms.
  */
-import { TIME } from '../src/balance';
+import { CHAOS, TIME, type ChaosLevel, type WeatherKind } from '../src/balance';
 import { compileNetwork } from '../src/routes/compile';
 import { buildPerfNetwork, createHeadlessGame } from '../src/sim/headless';
 import { Engine } from '../src/sim/engine';
@@ -17,6 +19,10 @@ const scale = Number(args.scale ?? 10);
 const NS = Number(args.ns ?? 17);
 const EW = Number(args.ew ?? 8);
 const PER_LINE = Number(args.stations ?? 12);
+const chaos = (args.chaos ?? 'off') as ChaosLevel;
+const weather = args.weather as WeatherKind | undefined;
+const outdoor = args.outdoor === '1';
+const chaosArgs = chaos !== 'off' || weather !== undefined || outdoor;
 
 const world = loadWorldFromDisk();
 const game = createHeadlessGame(world, loadLandFromDisk(), { sandbox: true });
@@ -26,8 +32,19 @@ const net = game.network;
 console.log(`network: ${net.stations.size} stations, ${routes.length} routes, ${fleet} trains, ${net.edges.size} edges · built in ${Date.now() - t0} ms`);
 
 t0 = Date.now();
-const engine = new Engine(world, { agentScale: scale, seed: 1885, time: game.time, fare: game.fare }, {});
-engine.setNetwork(compileNetwork(game).net);
+let incidents = 0;
+const engine = new Engine(world, { agentScale: scale, seed: 1885, time: game.time, fare: game.fare, chaos: { level: chaos, seed: CHAOS.defaultSeed } }, {
+  alert: (a) => {
+    if (a.status === 'active') incidents++;
+  },
+});
+const compiled = compileNetwork(game).net;
+if (outdoor) for (const r of compiled.routes) for (const d of r.dirs) {
+  d.outS0 = new Float64Array([0]);
+  d.outS1 = new Float64Array([d.length]);
+}
+if (weather) engine.chaos.forceWeather(1, { kind: weather, severity: weather === 'clear' ? 0 : 1, carried: false });
+engine.setNetwork(compiled);
 console.log(`engine init ${Date.now() - t0} ms (${engine.commuters!.A.toLocaleString()} agents)`);
 
 // Run through the first night's 3 am mode choice to 7 am on day 1.
@@ -37,6 +54,7 @@ while (engine.time < peakStart) engine.step(TIME.simStep);
 console.log(`warm-up to day 1 07:00: ${Date.now() - t0} ms (pathfinding ${engine.commuters!.lastPathMs} ms)`);
 
 const steps = 3600 / TIME.simStep;
+incidents = 0;
 let worst = 0;
 let maxRunning = 0;
 t0 = performance.now();
@@ -52,3 +70,7 @@ console.log(
   `07:00–08:00 peak hour: ${ms.toFixed(0)} ms (budget at 60× is 1000 ms → ${(1000 / ms).toFixed(1)}× headroom) · worst step ${worst.toFixed(1)} ms` +
     ` · up to ${maxRunning} trains running · ${Math.round(live.ridersToday).toLocaleString()} boardings so far · ${Math.round(live.inSystem).toLocaleString()} waiting`,
 );
+if (chaosArgs) {
+  const w = engine.chaos.todayWeather();
+  console.log(`chaos ${chaos} · day 1 weather ${w.weather.kind} (${w.weather.severity.toFixed(2)}) · outdoor ${outdoor ? 'all track' : 'as built'} · ${incidents} incidents started in the timed hour · ${engine.commuters!.eventAgentCount().toLocaleString()} event agents today`);
+}

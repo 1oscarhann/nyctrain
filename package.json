@@ -13,8 +13,8 @@
     "data:synthetic": "tsx scripts/build-data.ts --synthetic",
     "data:london": "tsx scripts/build-data-london.ts",
     "test": "vitest run",
-    "test:unit": "vitest run --exclude tests/headless.test.ts",
-    "test:headless": "vitest run tests/headless.test.ts",
+    "test:unit": "vitest run --exclude 'tests/*headless*.test.ts'",
+    "test:headless": "vitest run tests/headless.test.ts tests/chaos.headless.test.ts",
     "sim": "tsx scripts/headless-sim.ts",
     "balance": "tsx scripts/balance.ts",
     "perf": "tsx scripts/perf.ts"

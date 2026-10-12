@@ -2,7 +2,7 @@
  * Game state on the main thread: the network design, routes, money and the clock mirror.
  * The sim worker owns the moving parts (trains, commuters); this owns what the player builds.
  */
-import { TIME, TRACK } from '../balance';
+import { CHAOS, TIME, TRACK, type ChaosLevel } from '../balance';
 import { Network } from '../construction/network';
 import {
   advanceConstruction,
@@ -17,6 +17,23 @@ import type { World } from '../data/world';
 import { Emitter } from './emitter';
 import { dayIndex } from './calendar';
 import { RouteSet } from '../routes/routeSet';
+import type { ServiceOverride } from '../sim/protocol';
+
+/** City chaos settings (saved). The calendar, weather and incident plan all derive from the seed. */
+export interface ChaosSettings {
+  level: ChaosLevel;
+  seed: number;
+  /** Planned event service (temporary headway overrides). */
+  service: ServiceOverride[];
+  nextServiceId: number;
+}
+
+/** A fresh chaos seed for a new game (main thread only; the sim never draws its own). */
+export function newChaosSeed(): number {
+  const a = new Uint32Array(1);
+  globalThis.crypto.getRandomValues(a);
+  return a[0] || 1;
+}
 
 export interface GameEvents extends Record<string, unknown> {
   /** Track/stations changed (design or construction status). */
@@ -28,6 +45,8 @@ export interface GameEvents extends Record<string, unknown> {
   time: number;
   toast: { title: string; body?: string; tone?: 'green' | 'amber' | 'red' };
   select: Selection | null;
+  /** City chaos settings changed (level or event service). */
+  chaos: void;
 }
 
 export type Selection =
@@ -38,7 +57,9 @@ export type Selection =
   | { kind: 'tract'; index: number }
   | { kind: 'finance' }
   | { kind: 'goals' }
-  | { kind: 'routes' };
+  | { kind: 'routes' }
+  /** Service alerts panel, optionally focused on an alert (alert id) or a city event (event id). */
+  | { kind: 'alerts'; focus?: number; event?: number };
 
 export class Game {
   readonly events = new Emitter<GameEvents>();
@@ -50,15 +71,50 @@ export class Game {
   fare: number;
   sandbox: boolean;
   selection: Selection | null = null;
+  /** City chaos: level (default Normal for new games), seed and planned event service. */
+  chaos: ChaosSettings;
 
   constructor(
     readonly world: World,
     readonly terrain: Terrain,
-    opts: { sandbox: boolean; fare: number },
+    opts: { sandbox: boolean; fare: number; chaos?: ChaosLevel; chaosSeed?: number },
   ) {
     this.sandbox = opts.sandbox;
     this.fare = opts.fare;
     this.finance = new Finance(opts.sandbox, dayIndex(this.time));
+    this.chaos = { level: opts.chaos ?? CHAOS.defaultLevel, seed: (opts.chaosSeed ?? CHAOS.defaultSeed) >>> 0, service: [], nextServiceId: 1 };
+  }
+
+  // ------------------------------------------------------------------ city chaos
+  /** The sim applies a new level from the next 3 am. */
+  setChaosLevel(level: ChaosLevel): void {
+    this.chaos.level = level;
+    this.events.emit('chaos', undefined);
+  }
+
+  /** Plan event service (one override per route and window). */
+  addService(o: Omit<ServiceOverride, 'id'>): ServiceOverride {
+    const s: ServiceOverride = { ...o, id: this.chaos.nextServiceId++ };
+    this.chaos.service.push(s);
+    this.events.emit('chaos', undefined);
+    return s;
+  }
+
+  removeService(id: number): boolean {
+    const n = this.chaos.service.length;
+    this.chaos.service = this.chaos.service.filter((o) => o.id !== id);
+    if (this.chaos.service.length === n) return false;
+    this.events.emit('chaos', undefined);
+    return true;
+  }
+
+  /** Drop event service that has ended (at midnight and on save). Returns how many were dropped. */
+  pruneService(now: number): number {
+    const n = this.chaos.service.length;
+    this.chaos.service = this.chaos.service.filter((o) => o.to > now);
+    const dropped = n - this.chaos.service.length;
+    if (dropped) this.events.emit('chaos', undefined);
+    return dropped;
   }
 
   get day(): number {

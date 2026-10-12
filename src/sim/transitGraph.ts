@@ -140,6 +140,14 @@ export class TransitGraph {
     }
   }
 
+  /** Lower the expected wait (s) on every platform of a route (event service planned for this period). */
+  capWait(routeIdx: number, wait: number): void {
+    const b = this.base[routeIdx];
+    if (!b) return;
+    const end = b[1] + this.net.routes[routeIdx].dirs[1].stopS.length;
+    for (let p = b[0]; p < end; p++) if (wait < this.wait[p]) this.wait[p] = wait;
+  }
+
   waitAt(p: number): number {
     return this.wait[p];
   }

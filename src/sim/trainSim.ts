@@ -6,7 +6,7 @@
  * train's head is at s and its tail at s − trainLength.
  */
 import { OPERATIONS, TIME } from '../balance';
-import type { CompiledNetwork, CRoute, CRouteDir } from './protocol';
+import type { CompiledNetwork, CRoute, CRouteDir, ServiceOverride } from './protocol';
 
 export const enum TState {
   Ready = 0, // waiting off-track at a terminal for its next departure slot
@@ -37,6 +37,28 @@ export interface Train {
   locks: { lock: number; release: number; s0: number; since: number }[];
   stoppedSince: number;
   lastS: number;
+  /** City chaos: broken down (stalled) until this time. */
+  holdUntil: number;
+  /** City chaos: sick passenger; extra seconds to hold at the next open, non-terminal stop. */
+  holdNext: number;
+  /** Id of the incident (alert) affecting this train, or 0. */
+  incident: number;
+  /** Outdoor-stretch cursor (like lim for curve limits). */
+  out: number;
+}
+
+/** A temporary speed restriction (signal problem) on a directed track, in track coordinates. */
+export interface TrackRestriction {
+  id: number;
+  edge: number;
+  edgeDir: 0 | 1;
+  u0: number;
+  u1: number;
+  /** Crawl speed, m/s. */
+  v: number;
+  until: number;
+  /** Dense track index in the current network (filled by setRestrictions; −1 if the track is gone). */
+  track: number;
 }
 
 /** Callbacks into the passenger model. */
@@ -47,13 +69,19 @@ export interface PassengerHooks {
   depart(train: Train, route: CRoute, stopIdx: number, t: number): void;
   /** Train removed with people on board (route changed or deadlock): deliver them. */
   evacuate(train: Train, t: number): void;
+  /** Train runs through a closed stop: riders for it ride on to the next stop. */
+  pass(train: Train, route: CRoute, stopIdx: number, t: number): void;
 }
 
 interface DispatchState {
   next: [number, number];
   pending: [number[], number[]];
   ready: [number[], number[]];
+  /** Last departure slot per direction (event service pulls the next slot in from it). */
+  last: [number, number];
 }
+
+const NO_OVERRIDES: ServiceOverride[] = [];
 
 interface OccEntry {
   train: number;
@@ -79,6 +107,19 @@ export class TrainSim {
   private lockHolder = new Int32Array(0);
   private nextTrainId = 1;
   day: TrainDayStats = newDayStats();
+  // ---- city chaos (all inert at their defaults)
+  /** Closed stations by compiled station index (game time they reopen); trains run through. */
+  closedUntil: Float64Array = new Float64Array(0);
+  /** The deadlock watchdog ignores stall time before this (incidents in progress). */
+  graceUntil = -Infinity;
+  /** A sick-passenger hold has started at a station (compiled index). */
+  onHold: ((tr: Train, stationIdx: number, t: number) => void) | null = null;
+  private outdoorFactor = 1;
+  private dwellFactor = 1;
+  private restr: TrackRestriction[] = [];
+  private restrOnTrack = new Uint8Array(0);
+  private overrides: ServiceOverride[] = [];
+  private ovByRoute: (ServiceOverride[] | undefined)[] = [];
 
   /** Real people per agent: train loads are counted in agents, capacities in people. */
   constructor(private hooks: PassengerHooks, private agentScale = 1) {}
@@ -92,6 +133,8 @@ export class TrainSim {
     this.dispatch = [];
     this.occ = Array.from({ length: net.trackCount }, () => []);
     this.lockHolder = new Int32Array(net.lockCount).fill(-1);
+    this.resolveOverrides();
+    this.setRestrictions(this.restr);
     const newById = new Map<number, DispatchState>();
     const oldByRoute = new Map<number, Train[]>();
     for (const tr of oldTrains) {
@@ -102,7 +145,7 @@ export class TrainSim {
     net.routes.forEach((r, ri) => {
       const prev = old?.routes.find((o) => o.id === r.id) ?? null;
       const samePath = prev !== null && samePaths(prev, r);
-      const ds: DispatchState = { next: [0, 0], pending: [[], []], ready: [[], []] };
+      const ds: DispatchState = { next: [0, 0], pending: [[], []], ready: [[], []], last: [-Infinity, -Infinity] };
       this.dispatch.push(ds);
       const keep = oldByRoute.get(r.id) ?? [];
       oldByRoute.delete(r.id);
@@ -149,10 +192,11 @@ export class TrainSim {
       const pds = samePath ? this.dispatchById.get(r.id) : undefined;
       for (const d of [0, 1] as const) {
         if (pds) {
-          const hw = r.headways[periodIndex(t)] || 600;
-          ds.next[d] = Math.min(pds.next[d], this.nextServiceTime(r, t + hw));
+          const hw = this.headwayAt(ri, r, t) || 600;
+          ds.next[d] = Math.min(pds.next[d], this.nextServiceTime(ri, r, t + hw));
           ds.pending[d] = pds.pending[d].slice(-2);
-        } else ds.next[d] = this.nextServiceTime(r, t + (d === 1 ? 30 : 0));
+          ds.last[d] = pds.last[d];
+        } else ds.next[d] = this.nextServiceTime(ri, r, t + (d === 1 ? 30 : 0));
       }
       newById.set(r.id, ds);
     });
@@ -181,6 +225,10 @@ export class TrainSim {
       locks: [],
       stoppedSince: 0,
       lastS: 0,
+      holdUntil: 0,
+      holdNext: 0,
+      incident: 0,
+      out: 0,
     };
   }
 
@@ -192,18 +240,79 @@ export class TrainSim {
     tr.s = 0;
     tr.stop = 0;
     tr.load = 0;
+    tr.holdUntil = 0;
+    tr.holdNext = 0;
+    tr.incident = 0;
+    tr.out = 0;
     const r = this.net!.routes[tr.route];
     tr.buckets = Array.from(r.dirs[dir].stopS, () => []);
     this.dispatch[tr.route].ready[dir].push(tr.id);
   }
 
-  /** Earliest time ≥ t when the route has service. */
-  nextServiceTime(r: CRoute, t: number): number {
+  /** Earliest time ≥ t when the route has service (its own or event service). */
+  nextServiceTime(ri: number, r: CRoute, t: number): number {
     for (let k = 0; k < 48 * 6; k++) {
       const tt = t + k * 600;
-      if (r.headways[periodIndex(tt)] > 0) return k === 0 ? t : Math.floor(tt / 600) * 600;
+      if (this.headwayAt(ri, r, tt) > 0) return k === 0 ? t : Math.floor(tt / 600) * 600;
     }
     return Infinity;
+  }
+
+  // ------------------------------------------------------------------ city chaos
+  /** Today's weather: speed cap on outdoor track (factor of top speed) and the dwell factor. */
+  setWeather(outdoor: number, dwell: number): void {
+    this.outdoorFactor = outdoor;
+    this.dwellFactor = dwell;
+  }
+
+  /** Replace the temporary speed restrictions; fills their track indices from the current network. */
+  setRestrictions(list: TrackRestriction[]): void {
+    this.restr = list;
+    const net = this.net;
+    this.restrOnTrack = new Uint8Array(net?.trackCount ?? 0);
+    if (!net) return;
+    for (const q of list) {
+      q.track = -1;
+      for (const r of net.routes) {
+        for (const dir of r.dirs) {
+          const el = dir.elems.find((e) => e.edge === q.edge && e.edgeDir === q.edgeDir);
+          if (el) q.track = el.track;
+        }
+        if (q.track >= 0) break;
+      }
+      if (q.track >= 0) this.restrOnTrack[q.track] = 1;
+    }
+  }
+
+  restrictions(): readonly TrackRestriction[] {
+    return this.restr;
+  }
+
+  /** Event service: temporary headway overrides (the full list). */
+  setOverrides(list: ServiceOverride[]): void {
+    this.overrides = list.slice();
+    this.resolveOverrides();
+  }
+
+  private resolveOverrides(): void {
+    const net = this.net;
+    this.ovByRoute = net ? net.routes.map((r) => {
+      const l = this.overrides.filter((o) => o.routeId === r.id);
+      return l.length ? l : undefined;
+    }) : [];
+  }
+
+  /** Headway (s) at time tt: the route's own, shortened (or started, where it has none) by event service. */
+  headwayAt(ri: number, r: CRoute, tt: number): number {
+    const base = r.headways[periodIndex(tt)];
+    const ovs = this.ovByRoute[ri];
+    if (ovs) for (const o of ovs) if (tt >= o.from && tt < o.to) return base > 0 ? Math.min(base, o.headwayMin * 60) : o.headwayMin * 60;
+    return base;
+  }
+
+  private activeOverride(ri: number, t: number): ServiceOverride | null {
+    for (const o of this.ovByRoute[ri] ?? NO_OVERRIDES) if (t >= o.from && t < o.to) return o;
+    return null;
   }
 
   // ------------------------------------------------------------------ stepping
@@ -243,9 +352,19 @@ export class TrainSim {
         // New departure slots.
         let guard = 0;
         while (t >= ds.next[d] && guard++ < 20) {
-          const hw = r.headways[periodIndex(ds.next[d])];
-          if (hw > 0) ds.pending[d].push(ds.next[d]);
-          ds.next[d] = hw > 0 ? ds.next[d] + hw : this.nextServiceTime(r, ds.next[d] + 1);
+          const hw = this.headwayAt(ri, r, ds.next[d]);
+          if (hw > 0) {
+            ds.pending[d].push(ds.next[d]);
+            ds.last[d] = ds.next[d];
+          }
+          ds.next[d] = hw > 0 ? ds.next[d] + hw : this.nextServiceTime(ri, r, ds.next[d] + 1);
+        }
+        // Event service starting: pull the next slot in (only while an override is active, so
+        // ordinary period changes behave exactly as before).
+        if (this.ovByRoute[ri] && this.activeOverride(ri, t)) {
+          const h = this.headwayAt(ri, r, t);
+          const pulled = Math.max(t, ds.last[d] + h);
+          if (ds.next[d] > pulled) ds.next[d] = pulled;
         }
         // Too many missed slots: a late train still goes, but don't stack a backlog forever.
         while (ds.pending[d].length > 2) ds.pending[d].shift();
@@ -266,6 +385,7 @@ export class TrainSim {
         tr.stop = 0;
         tr.elem = 0;
         tr.lim = 0;
+        tr.out = 0;
         tr.schedStart = slot;
         tr.late = Math.max(0, t - slot);
         tr.stoppedSince = t;
@@ -328,12 +448,50 @@ export class TrainSim {
     let vAllow = r.vmax;
     let hard = dir.length; // never move past this
 
+    // City chaos: closed stations are run through (never the first or last stop).
+    const cu = this.closedUntil;
+    if (cu.length) {
+      const last = dir.stopS.length - 1;
+      while (tr.stop > 0 && tr.stop < last && cu[dir.stopStation[tr.stop]] > t) {
+        this.hooks.pass(tr, r, tr.stop, t);
+        tr.stop++;
+      }
+    }
+
     // Curve limits apply until the tail clears the curve.
     while (tr.lim < dir.limS0.length && dir.limS1[tr.lim] < s - L) tr.lim++;
     for (let j = tr.lim; j < dir.limS0.length && dir.limS0[j] < s + look; j++) {
       const lv = dir.limV[j];
       if (dir.limS0[j] <= s && dir.limS1[j] >= s - L) vAllow = Math.min(vAllow, lv);
       else if (dir.limS0[j] > s) vAllow = Math.min(vAllow, Math.sqrt(lv * lv + 2 * b * (dir.limS0[j] - s)));
+    }
+
+    // City chaos: weather speed cap on outdoor track, applied like a curve limit.
+    if (this.outdoorFactor < 1 && dir.outS0 && dir.outS1) {
+      const o0 = dir.outS0, o1 = dir.outS1;
+      const cap = r.vmax * this.outdoorFactor;
+      while (tr.out < o0.length && o1[tr.out] < s - L) tr.out++;
+      for (let j = tr.out; j < o0.length && o0[j] < s + look; j++) {
+        if (o0[j] <= s && o1[j] >= s - L) vAllow = Math.min(vAllow, cap);
+        else if (o0[j] > s) vAllow = Math.min(vAllow, Math.sqrt(cap * cap + 2 * b * (o0[j] - s)));
+      }
+    }
+
+    // City chaos: temporary restrictions (signal problems) on the tracks under and ahead of the train.
+    if (this.restr.length) {
+      for (let k = Math.max(0, tr.elem - 1); k < dir.elems.length; k++) {
+        const el = dir.elems[k];
+        if (el.s0 > s + look) break;
+        if (!this.restrOnTrack[el.track]) continue;
+        for (const q of this.restr) {
+          if (q.track !== el.track) continue;
+          const a = el.s0 + Math.max(0, q.u0 - el.u0);
+          const z = el.s0 + Math.min(el.s1 - el.s0, q.u1 - el.u0);
+          if (z <= a) continue;
+          if (s >= a && s - L <= z) vAllow = Math.min(vAllow, q.v);
+          else if (a > s) vAllow = Math.min(vAllow, Math.sqrt(q.v * q.v + 2 * b * (a - s)));
+        }
+      }
     }
 
     // Next stop: the head stops so the train is centred on the platform.
@@ -388,6 +546,9 @@ export class TrainSim {
       }
     }
 
+    // City chaos: a broken-down train brakes hard (integrate clamps to emergency braking) and stays put.
+    if (tr.holdUntil > t) vAllow = 0;
+
     // Integrate.
     let vNew = Math.min(v + r.accel * dt, vAllow);
     vNew = Math.max(vNew, v - OPERATIONS.emergencyBrake * dt, 0);
@@ -429,7 +590,8 @@ export class TrainSim {
     if (tr.s - tr.lastS > 1) {
       tr.lastS = tr.s;
       tr.stoppedSince = t;
-    } else if (t - tr.stoppedSince > OPERATIONS.deadlockAfter) {
+    } else if (t - Math.max(tr.stoppedSince, this.graceUntil) > OPERATIONS.deadlockAfter) {
+      // (Stall time during incidents doesn't count: graceUntil.)
       this.day.deadlocks++;
       if (tr.load > 0) this.hooks.evacuate(tr, t);
       this.toReady(tr, tr.dir === 0 ? 1 : 0);
@@ -454,10 +616,18 @@ export class TrainSim {
     const overComfort = tr.load * this.agentScale > r.capComfort;
     const { alight, board } = this.hooks.arrive(tr, r, stopIdx, t);
     let dwell = OPERATIONS.dwellBase + ((alight + board) * OPERATIONS.dwellPerPassenger) / r.cars;
-    dwell = Math.min(OPERATIONS.dwellMax, dwell);
+    dwell = Math.min(OPERATIONS.dwellMax, dwell * this.dwellFactor);
     if (overComfort || tr.load * this.agentScale > r.capComfort) dwell *= OPERATIONS.dwellCrowdedFactor;
     if (stopIdx === 0) dwell = Math.max(dwell, OPERATIONS.dwellBase);
     tr.until = t + dwell;
+    // City chaos: a sick passenger holds the train at the next open, non-terminal stop.
+    if (tr.holdNext > 0) {
+      if (stopIdx > 0 && stopIdx < dir.stopS.length - 1) {
+        tr.until += tr.holdNext;
+        this.onHold?.(tr, dir.stopStation[stopIdx], t);
+      } else if (stopIdx > 0) tr.incident = 0; // reached the terminal first: the hold is dropped
+      if (stopIdx > 0) tr.holdNext = 0;
+    }
   }
 
   private leaveStop(tr: Train, t: number): void {

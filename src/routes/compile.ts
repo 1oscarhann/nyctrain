@@ -3,7 +3,7 @@
  * operational routes with paths, speed limits, directed track elements, junction merge locks
  * and timetables.
  */
-import { OPERATIONS, TRAINS } from '../balance';
+import { OPERATIONS, TRAINS, type TrackLevel } from '../balance';
 import type { Game } from '../core/game';
 import { curveSpeed, otherEnd } from '../construction/geometry';
 import type { Network } from '../construction/network';
@@ -16,6 +16,9 @@ import { PERIOD_IDS, type PathLeg, type Route } from './types';
 import { platformLength } from '../construction/network';
 
 const ALIGN = Math.cos((25 * Math.PI) / 180);
+
+/** Track open to the weather (city chaos: snow and heat cap speeds there). */
+const exposed = (l: TrackLevel) => l === 'elevated' || l === 'at-grade';
 
 export interface CompileResult {
   net: CompiledNetwork;
@@ -78,6 +81,7 @@ function buildDir(
   const zs: number[] = [];
   const limits: SpeedLimit[] = [];
   const elems: CElement[] = [];
+  const outdoor: [number, number][] = [];
   let s = 0;
   for (const leg of legs) {
     const e = net.edges.get(leg.edge)!;
@@ -106,6 +110,16 @@ function buildDir(
       if (b <= a) continue;
       const sa = leg.dir === 0 ? s + (a - lo) : s + (hi - b);
       limits.push({ s0: sa, s1: sa + (b - a), v: curveSpeed(p.r) });
+    }
+    // Outdoor stretches in edge coordinates: the whole edge, or the exposed half of a ramp (the
+    // same half-way rule as Network.levelAt).
+    const la = net.nodes.get(e.a)!.level, lb = net.nodes.get(e.b)!.level;
+    const open: [number, number][] = la === lb ? (exposed(la) ? [[0, L]] : []) : [...(exposed(la) ? [[0, L / 2] as [number, number]] : []), ...(exposed(lb) ? [[L / 2, L] as [number, number]] : [])];
+    for (const [x0, x1] of open) {
+      const a = Math.max(lo, x0), b = Math.min(hi, x1);
+      if (b <= a) continue;
+      const sa = leg.dir === 0 ? s + (a - lo) : s + (hi - b);
+      outdoor.push([sa, sa + (b - a)]);
     }
     // Directed track element.
     const startNode = leg.dir === 0 ? e.a : e.b;
@@ -136,6 +150,17 @@ function buildDir(
   for (const l of limits) {
     l.s0 *= k;
     l.s1 *= k;
+  }
+  // Outdoor stretches in path s, sorted, with gaps under 1 m merged.
+  outdoor.sort((a, b) => a[0] - b[0]);
+  const outS0: number[] = [], outS1: number[] = [];
+  for (const [a, b] of outdoor) {
+    const n = outS0.length;
+    if (n && a * k - outS1[n - 1] < 1) outS1[n - 1] = Math.max(outS1[n - 1], b * k);
+    else {
+      outS0.push(a * k);
+      outS1.push(b * k);
+    }
   }
   // Stop positions along this path.
   const stopS = new Float64Array(stopIds.length);
@@ -171,6 +196,8 @@ function buildDir(
     schedArrive: new Float64Array(prof.arrive),
     schedDepart: new Float64Array(prof.depart),
     runTime: prof.total,
+    outS0: new Float64Array(outS0),
+    outS1: new Float64Array(outS1),
   };
 }
 

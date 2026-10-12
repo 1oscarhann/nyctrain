@@ -4,7 +4,8 @@
  */
 import { OPERATIONS, STATION, TRAINS } from '../../balance';
 import { cap } from '../../construction/describe';
-import { fmtCount, fmtDistance, fmtMinutes, fmtMoney } from '../../core/units';
+import { fmtClock, fmtCount, fmtDistance, fmtMinutes, fmtMoney } from '../../core/units';
+import { describeAlert, shortDate } from '../alertFeed';
 import { fleetPlan, purchaseFleet } from '../../routes/fleet';
 import type { RouteTool } from '../../routes/routeTool';
 import { maxCarsFor } from '../../routes/routeSet';
@@ -80,8 +81,19 @@ export function routePanel(app: App, id: number): Panel {
   const sh = shell(`Route · ${cap(r.cls)} metro · ${r.cars} cars`, r.name, () => game.select(null), bullet(r.color, r.bullet, 34));
   const body = sh.body;
   if (!op.ok) body.append(h('div', { class: path.ok ? 'warn' : 'err' }, op.reason ?? 'Not running'));
+  // City chaos: incidents on this route right now.
+  const incidents = h('div');
+  const renderIncidents = () => {
+    incidents.replaceChildren(
+      ...app.feed.activeOnRoute(r.id).map((a) => {
+        const t = describeAlert(a, app.routeRef);
+        return h('div', { class: a.severity === 3 ? 'err' : 'warn', style: 'cursor:pointer', onclick: () => game.select({ kind: 'alerts', focus: a.id }) }, h('b', null, t.title), ` · ${t.when}`);
+      }),
+    );
+  };
+  renderIncidents();
   const stats = h('div', { class: 'stat-grid', style: 'margin-top:6px' });
-  body.append(stats);
+  body.append(incidents, stats);
 
   // Stops
   const stops = h('div', { class: 'list', style: 'margin-top:4px' });
@@ -127,8 +139,25 @@ export function routePanel(app: App, id: number): Panel {
   }, 'Apply');
   renderCars();
   renderFleet();
+  // Event service planned on this route (temporary headway overrides).
+  const service = h('div');
+  const renderService = () => {
+    const list = game.chaos.service.filter((o) => o.routeId === r.id).sort((a, b) => a.from - b.from);
+    service.replaceChildren(
+      ...list.map((o) =>
+        h(
+          'div',
+          { class: 'ev-service' },
+          h('span', { class: 'grow' }, h('span', { class: 'hw-muted' }, `Event service ${Math.floor(o.from / 86400) === game.day ? 'today' : shortDate(Math.floor(o.from / 86400))}: `), `${fmtClock(o.from)}–${fmtClock(o.to)} every ${o.headwayMin} min`),
+          h('button', { class: 'hw-btn ghost small', onclick: () => { app.removeEventService(o.id); renderService(); } }, 'Remove'),
+        ),
+      ),
+    );
+  };
+  renderService();
   body.append(
     section('Frequency'),
+    service,
     frequencyTable(draft.headways, (p, v) => { draft.headways[p] = v; renderFleet(); }),
     section('Train length'),
     carsWrap,
@@ -192,10 +221,16 @@ export function routePanel(app: App, id: number): Panel {
   renderCharts();
   fetch();
   let tick = 0;
+  let feedVersion = app.feed.version;
   return {
     el: sh.el,
     update: () => {
       if (++tick % 10 === 0) fetch();
+      if (app.feed.version !== feedVersion) {
+        feedVersion = app.feed.version;
+        renderIncidents();
+        renderService();
+      }
     },
     dayEnd: fetch,
     destroy: () => chartObjs.forEach((c) => c.destroy()),

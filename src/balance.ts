@@ -298,7 +298,238 @@ export const GOALS = {
   tripTo: [-73.7781, 40.6413] as [number, number],
 };
 
+// ---------------------------------------------------------------------------
+// City chaos: events, disruptions and weather (v2). These are shared by every city; each city's
+// venues, event kinds and climate are in CHAOS_BY_CITY below (CITY_BALANCE[city].chaos).
+export type ChaosLevel = 'off' | 'calm' | 'normal' | 'wild';
+export type WeatherKind = 'clear' | 'rain' | 'snow' | 'heat';
+export type IncidentKind = 'signal' | 'breakdown' | 'sick' | 'police';
+
+export interface VenueDef {
+  key: string;
+  /** Generic place name ("Midtown arena"): no team, league or venue trademarks. */
+  name: string;
+  lon: number;
+  lat: number;
+  /** The region (borough) the venue is in: driving there is slow if it is a core region. */
+  region: string;
+  /** Extra drive time and money for event parking (traffic, queues, the walk from the car park). */
+  parkingTime: number;
+  parkingCost: number;
+}
+
+export interface EventKindDef {
+  venue: string;
+  label: string;
+  /** Months it can happen in (0 = Jan). */
+  months: number[];
+  /** Chance per weekday in season (Σ over a venue's kinds × CHAOS.eventChance.wild ≤ 1). */
+  chance: number;
+  attendance: [number, number];
+  /** Start hour options as [hour, weight]. */
+  starts: [number, number][];
+  duration: number;
+  /** Fans' target arrival, offset from the start (triangular), seconds. */
+  arrive: [number, number];
+  /** Fans' departure, offset from the end (triangular), seconds. */
+  leave: [number, number];
+  /** Only between these dates (inclusive): [month0, day0, month1, day1]. */
+  window?: [number, number, number, number];
+  /** Only on these days of the week (1 = Mon … 5 = Fri). */
+  weekdays?: number[];
+  /** Days of notice (default EVENTS.announceDays). */
+  announce?: number;
+}
+
+/** Chance of each weather kind per weekday, by month (Jan…Dec). */
+export interface ClimateDef {
+  snow: number[];
+  rain: number[];
+  heat: number[];
+}
+
+export interface CityChaos {
+  venues: VenueDef[];
+  kinds: EventKindDef[];
+  climate: ClimateDef;
+}
+
+export const CHAOS = {
+  levels: ['off', 'calm', 'normal', 'wild'] as ChaosLevel[],
+  /** New games; saves from before chaos existed migrate to this. */
+  defaultLevel: 'normal' as ChaosLevel,
+  /** Headless runs and migrated saves; new games draw their own seed on the main thread. */
+  defaultSeed: 2030,
+  /** Incident rate multiplier: Calm halves, Wild is the "make it crazy" setting. */
+  rate: { off: 0, calm: 0.5, normal: 1, wild: 2.5 } as Record<ChaosLevel, number>,
+  /** Weather chance multiplier (snow/rain/heat probabilities, scaled down so Σ ≤ weatherChanceMax). */
+  weatherChance: { off: 0, calm: 1, normal: 1, wild: 1.5 } as Record<ChaosLevel, number>,
+  weatherChanceMax: 0.9,
+  /** Event chance multiplier per venue-day. */
+  eventChance: { off: 0, calm: 1, normal: 1, wild: 1.25 } as Record<ChaosLevel, number>,
+  /** Incidents happen between these times of day (trains run; people notice). */
+  serviceStart: 5.5 * HOUR,
+  serviceEnd: 23.5 * HOUR,
+  /** Hard cap per kind per day (perf network at Wild ≈ 43 breakdowns → 40). */
+  maxPerKindPerDay: 40,
+  /** Core ≈ 1.8/day on 88 directed-track km; perf ≈ 11/day on 560 km. */
+  signal: { perTrackKmDay: 1 / 50, segment: 800, crawl: 15 * KMH, duration: [15 * MIN, 60 * MIN] as [number, number] },
+  /** Core ≈ 2.8/day on 27.6k planned train-km; perf ≈ 17/day on 171k. A stall stays under the 30-min watchdog. */
+  breakdown: { perTrainKm: 1 / 10_000, duration: [5 * MIN, 20 * MIN] as [number, number] },
+  /** Core ≈ 2.3/day; holds stay short so they nudge, not block. */
+  sick: { perTrainKm: 1 / 12_000, duration: [3 * MIN, 8 * MIN] as [number, number] },
+  /** Core ≈ 0.8/day (40 stations); busy stations are likelier (weight 1 + yesterday's boardings / busyWeight). */
+  police: { perStationDay: 0.02, duration: [10 * MIN, 40 * MIN] as [number, number], waitOutside: 15 * MIN, busyWeight: 20_000 },
+  /** Points sampled along a signal problem's segment for the map. */
+  signalPathPoints: 17,
+  /** Incident toasts only at 1×/5× (TIME.speeds index ≤ 1) unless severity 3; ticker always. */
+  toastMaxSpeedIndex: 1,
+  toastMinGapMs: 20_000,
+};
+
+export const WEATHER = {
+  /** A snow or heat day continues into a clear-drawn next day with this chance (at carrySeverity × severity). */
+  persist: 0.4,
+  carrySeverity: 0.8,
+  /** Forecasts are right this often; misses show lower confidence (50–70%). */
+  forecastAccuracy: 0.8,
+  /** Severity is uniform in [minSeverity, 1]; effects scale linearly; ≥ heavyAt is "Heavy …"/"Heat wave". */
+  minSeverity: 0.5,
+  heavyAt: 0.85,
+  /** Full-severity effects. walkPenalty is minutes added to the walk mode's generalised cost. */
+  effects: {
+    // Wet rails, umbrellas, nobody walks 2 km.
+    rain: { walkSpeed: 0.92, walkPenalty: 8, driveSpeed: 0.85, outdoorSpeed: 1, dwell: 1.05, crowd: 1.1, rates: { signal: 1.5, breakdown: 1.1, sick: 1, police: 0.8 } },
+    // Elevated and at-grade track capped at 55% of top speed (90 km/h → ~50 km/h).
+    snow: { walkSpeed: 0.75, walkPenalty: 15, driveSpeed: 0.6, outdoorSpeed: 0.55, dwell: 1.15, crowd: 1.1, rates: { signal: 2, breakdown: 1.5, sick: 1, police: 0.7 } },
+    // AC failures, heat slow orders, hot crowded cars.
+    heat: { walkSpeed: 0.9, walkPenalty: 6, driveSpeed: 0.95, outdoorSpeed: 0.85, dwell: 1.05, crowd: 1.35, rates: { signal: 1.3, breakdown: 2, sick: 2.5, police: 1.2 } },
+  } as Record<Exclude<WeatherKind, 'clear'>, { walkSpeed: number; walkPenalty: number; driveSpeed: number; outdoorSpeed: number; dwell: number; crowd: number; rates: Record<IncidentKind, number> }>,
+};
+
+export const EVENTS = {
+  /** Days of notice (a kind can override, e.g. parades 5). */
+  announceDays: 3,
+  /** Agent pool: at most this many event-goers by transit per day (poolCap = ceil(/ agentScale)). */
+  maxPeoplePerDay: 200_000,
+  /** Origin weight = residents · exp(−d / originDecay): city-wide draw, mild pull to nearby areas. */
+  originDecay: 12_000,
+  /** Stations within this walk of the venue serve it (crowds won't walk as far as commuters). */
+  venueAccess: 1500,
+  /** Fans' destination points scatter this far around the venue. */
+  venueScatter: 150,
+  /** Expected crowding minutes added to event transit costs (packed trains). */
+  crowdMinutes: 4,
+  /** Fans leave home path.time × this before their target arrival. */
+  tripBuffer: 1.15,
+  /** Wrap-up alert this long after the event ends. */
+  wrapUpAfter: 2 * HOUR,
+  /** Event service: routes stopping within this of the venue are pre-selected. */
+  serviceRadius: 1200,
+  serviceHeadway: 3,
+  serviceBefore: [-2 * HOUR, 15 * MIN] as [number, number],
+  serviceAfter: [-15 * MIN, 90 * MIN] as [number, number],
+};
+
 export const UNITS = { KMH, MIN, HOUR };
+
+const ALL_MONTHS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+/** Midweek football season (Aug–May) and nights (Tue–Thu). */
+const FOOTBALL_MONTHS = [0, 1, 2, 3, 4, 7, 8, 9, 10, 11];
+const MIDWEEK = [2, 3, 4];
+
+/**
+ * New York: venues, event kinds and climate. Weather chances are rounded NYC climatology for
+ * commute-disrupting days: ≈ 12 snow, 21 rain and 10 heat days a year (with carry-over).
+ */
+const NYC_CHAOS: CityChaos = {
+  venues: [
+    { key: 'bronx-ballpark', name: 'Bronx ballpark', lon: -73.9262, lat: 40.8296, region: 'Bronx', parkingTime: 25 * MIN, parkingCost: 35 },
+    { key: 'queens-ballpark', name: 'Queens ballpark', lon: -73.8456, lat: 40.7571, region: 'Queens', parkingTime: 20 * MIN, parkingCost: 30 },
+    { key: 'midtown-arena', name: 'Midtown arena', lon: -73.9934, lat: 40.7505, region: 'Manhattan', parkingTime: 30 * MIN, parkingCost: 50 },
+    { key: 'brooklyn-arena', name: 'Brooklyn arena', lon: -73.9754, lat: 40.6826, region: 'Brooklyn', parkingTime: 25 * MIN, parkingCost: 40 },
+    { key: 'flushing-tennis', name: 'Flushing tennis centre', lon: -73.8467, lat: 40.7499, region: 'Queens', parkingTime: 25 * MIN, parkingCost: 40 },
+    { key: 'downtown-parade', name: 'Lower Broadway', lon: -74.0105, lat: 40.709, region: 'Manhattan', parkingTime: 45 * MIN, parkingCost: 50 },
+    { key: 'central-park', name: 'Central Park Great Lawn', lon: -73.9665, lat: 40.7812, region: 'Manhattan', parkingTime: 30 * MIN, parkingCost: 45 },
+    { key: 'coney-island', name: 'Coney Island boardwalk', lon: -73.9787, lat: 40.5743, region: 'Brooklyn', parkingTime: 20 * MIN, parkingCost: 25 },
+  ],
+  kinds: [
+    { venue: 'bronx-ballpark', label: 'Bronx ballpark game', months: [3, 4, 5, 6, 7, 8], chance: 0.42, attendance: [28_000, 46_000],
+      starts: [[19.08, 0.7], [13.08, 0.3]], duration: 3 * HOUR, arrive: [-90 * MIN, 5 * MIN], leave: [-20 * MIN, 40 * MIN] },
+    { venue: 'queens-ballpark', label: 'Queens ballpark game', months: [3, 4, 5, 6, 7, 8], chance: 0.42, attendance: [24_000, 42_000],
+      starts: [[19.17, 0.7], [13.17, 0.3]], duration: 3 * HOUR, arrive: [-90 * MIN, 5 * MIN], leave: [-20 * MIN, 40 * MIN] },
+    { venue: 'midtown-arena', label: 'Midtown arena game', months: [0, 1, 2, 3, 9, 10, 11], chance: 0.25, attendance: [17_000, 19_800],
+      starts: [[19.5, 1]], duration: 2.5 * HOUR, arrive: [-75 * MIN, 5 * MIN], leave: [-10 * MIN, 30 * MIN] },
+    { venue: 'midtown-arena', label: 'Midtown arena concert', months: ALL_MONTHS, chance: 0.2, attendance: [15_000, 19_500],
+      starts: [[20, 1]], duration: 3 * HOUR, arrive: [-75 * MIN, 30 * MIN], leave: [-10 * MIN, 30 * MIN] },
+    { venue: 'brooklyn-arena', label: 'Brooklyn arena game', months: [0, 1, 2, 3, 9, 10, 11], chance: 0.25, attendance: [14_000, 17_700],
+      starts: [[19.5, 1]], duration: 2.5 * HOUR, arrive: [-75 * MIN, 5 * MIN], leave: [-10 * MIN, 30 * MIN] },
+    { venue: 'brooklyn-arena', label: 'Brooklyn arena concert', months: ALL_MONTHS, chance: 0.12, attendance: [13_000, 18_000],
+      starts: [[20, 1]], duration: 3 * HOUR, arrive: [-75 * MIN, 30 * MIN], leave: [-10 * MIN, 30 * MIN] },
+    { venue: 'flushing-tennis', label: 'Flushing tennis open', months: [7, 8], window: [7, 26, 8, 8], chance: 1, attendance: [35_000, 50_000],
+      starts: [[11, 1]], duration: 11 * HOUR, arrive: [-60 * MIN, 5 * HOUR], leave: [-6 * HOUR, 30 * MIN] },
+    { venue: 'downtown-parade', label: 'Downtown parade', months: ALL_MONTHS, chance: 0.012, attendance: [80_000, 150_000],
+      starts: [[11, 1]], duration: 2.5 * HOUR, arrive: [-2 * HOUR, 0], leave: [-30 * MIN, 40 * MIN], announce: 5 },
+    { venue: 'central-park', label: 'Central Park summer concert', months: [5, 6, 7], chance: 0.08, attendance: [30_000, 60_000],
+      starts: [[19, 1]], duration: 3 * HOUR, arrive: [-2 * HOUR, 30 * MIN], leave: [-20 * MIN, 30 * MIN] },
+    { venue: 'coney-island', label: 'Coney Island fireworks', months: [5, 6, 7], weekdays: [5], chance: 0.8, attendance: [8_000, 20_000],
+      starts: [[21.5, 1]], duration: 0.75 * HOUR, arrive: [-2 * HOUR, 0], leave: [0, 30 * MIN] },
+  ],
+  climate: {
+    snow: [0.14, 0.13, 0.07, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0.07],
+    rain: [0.06, 0.06, 0.08, 0.09, 0.09, 0.09, 0.1, 0.1, 0.08, 0.08, 0.08, 0.07],
+    heat: [0, 0, 0, 0, 0.01, 0.07, 0.14, 0.11, 0.03, 0, 0, 0],
+  },
+};
+
+/**
+ * London: venues, event kinds and climate. Football is midweek evenings (Tue–Thu) in season;
+ * the tennis fortnight and the Oval test match are fixed windows. The climate has far fewer snow
+ * days than New York (≈ 2–3 a year), more wet commutes (≈ 32) and only a couple of heat days.
+ */
+const LONDON_CHAOS: CityChaos = {
+  venues: [
+    { key: 'wembley', name: 'Wembley stadium', lon: -0.2796, lat: 51.556, region: 'Brent', parkingTime: 40 * MIN, parkingCost: 35 },
+    { key: 'stratford', name: 'Stratford stadium', lon: -0.0166, lat: 51.5387, region: 'Newham', parkingTime: 35 * MIN, parkingCost: 30 },
+    { key: 'holloway', name: 'Holloway stadium', lon: -0.1084, lat: 51.5549, region: 'Islington', parkingTime: 40 * MIN, parkingCost: 35 },
+    { key: 'tottenham', name: 'Tottenham stadium', lon: -0.0664, lat: 51.6043, region: 'Haringey', parkingTime: 40 * MIN, parkingCost: 35 },
+    { key: 'greenwich-arena', name: 'Greenwich peninsula arena', lon: 0.0032, lat: 51.503, region: 'Greenwich', parkingTime: 25 * MIN, parkingCost: 30 },
+    { key: 'twickenham', name: 'Twickenham stadium', lon: -0.3415, lat: 51.456, region: 'Richmond upon Thames', parkingTime: 35 * MIN, parkingCost: 40 },
+    { key: 'wimbledon', name: 'Wimbledon tennis grounds', lon: -0.2143, lat: 51.434, region: 'Merton', parkingTime: 30 * MIN, parkingCost: 35 },
+    { key: 'oval', name: 'Kennington Oval', lon: -0.115, lat: 51.4837, region: 'Lambeth', parkingTime: 35 * MIN, parkingCost: 30 },
+    { key: 'hyde-park', name: 'Hyde Park', lon: -0.1605, lat: 51.5073, region: 'Westminster', parkingTime: 35 * MIN, parkingCost: 40 },
+    { key: 'whitehall', name: 'Whitehall', lon: -0.1265, lat: 51.5045, region: 'Westminster', parkingTime: 45 * MIN, parkingCost: 45 },
+  ],
+  kinds: [
+    { venue: 'wembley', label: 'Wembley stadium match', months: [2, 5, 8, 9, 10], weekdays: [1, 2, 3, 4], chance: 0.07, attendance: [60_000, 90_000],
+      starts: [[19.75, 1]], duration: 2 * HOUR, arrive: [-2 * HOUR, 5 * MIN], leave: [-10 * MIN, 40 * MIN] },
+    { venue: 'wembley', label: 'Wembley stadium concert', months: [5, 6, 7], chance: 0.12, attendance: [75_000, 90_000],
+      starts: [[19.5, 1]], duration: 3 * HOUR, arrive: [-2.5 * HOUR, 30 * MIN], leave: [-15 * MIN, 40 * MIN] },
+    { venue: 'stratford', label: 'Stratford stadium match', months: FOOTBALL_MONTHS, weekdays: MIDWEEK, chance: 0.08, attendance: [50_000, 62_500],
+      starts: [[19.75, 0.6], [20, 0.4]], duration: 1.9 * HOUR, arrive: [-90 * MIN, 5 * MIN], leave: [-5 * MIN, 40 * MIN] },
+    { venue: 'holloway', label: 'North London football', months: FOOTBALL_MONTHS, weekdays: MIDWEEK, chance: 0.1, attendance: [55_000, 60_700],
+      starts: [[19.75, 0.6], [20, 0.4]], duration: 1.9 * HOUR, arrive: [-90 * MIN, 5 * MIN], leave: [-5 * MIN, 40 * MIN] },
+    { venue: 'tottenham', label: 'Tottenham football', months: FOOTBALL_MONTHS, weekdays: MIDWEEK, chance: 0.09, attendance: [52_000, 62_800],
+      starts: [[19.75, 0.6], [20, 0.4]], duration: 1.9 * HOUR, arrive: [-90 * MIN, 5 * MIN], leave: [-5 * MIN, 40 * MIN] },
+    { venue: 'greenwich-arena', label: 'Greenwich arena concert', months: ALL_MONTHS, chance: 0.3, attendance: [14_000, 20_000],
+      starts: [[20, 0.7], [19.5, 0.3]], duration: 3 * HOUR, arrive: [-75 * MIN, 30 * MIN], leave: [-10 * MIN, 30 * MIN] },
+    { venue: 'twickenham', label: 'Twickenham rugby', months: [1, 2, 10], weekdays: [5], chance: 0.25, attendance: [60_000, 82_000],
+      starts: [[20, 1]], duration: 2 * HOUR, arrive: [-2 * HOUR, 5 * MIN], leave: [-10 * MIN, 40 * MIN] },
+    { venue: 'wimbledon', label: 'Wimbledon tennis fortnight', months: [5, 6], window: [5, 24, 6, 7], chance: 1, attendance: [38_000, 42_000],
+      starts: [[11, 1]], duration: 9.5 * HOUR, arrive: [-60 * MIN, 4 * HOUR], leave: [-6 * HOUR, 30 * MIN] },
+    { venue: 'oval', label: 'Oval cricket test match', months: [7], window: [7, 22, 7, 26], chance: 1, attendance: [20_000, 27_500],
+      starts: [[11, 1]], duration: 7.5 * HOUR, arrive: [-60 * MIN, 2 * HOUR], leave: [-3 * HOUR, 30 * MIN] },
+    { venue: 'hyde-park', label: 'Hyde Park summer concert', months: [5, 6], chance: 0.1, attendance: [50_000, 65_000],
+      starts: [[18, 1]], duration: 4.5 * HOUR, arrive: [-3 * HOUR, 60 * MIN], leave: [-30 * MIN, 40 * MIN] },
+    { venue: 'whitehall', label: 'Whitehall parade', months: ALL_MONTHS, chance: 0.008, attendance: [60_000, 120_000],
+      starts: [[11, 1]], duration: 2.5 * HOUR, arrive: [-2 * HOUR, 0], leave: [-30 * MIN, 40 * MIN], announce: 5 },
+  ],
+  climate: {
+    snow: [0.03, 0.03, 0.01, 0, 0, 0, 0, 0, 0, 0, 0, 0.02],
+    rain: [0.15, 0.12, 0.12, 0.11, 0.11, 0.1, 0.1, 0.11, 0.11, 0.15, 0.16, 0.15],
+    heat: [0, 0, 0, 0, 0, 0.01, 0.04, 0.03, 0.005, 0, 0, 0],
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Cities
@@ -322,7 +553,12 @@ export interface CityBalance {
   commuters: Partial<Pick<typeof COMMUTERS, 'driveSpeedCore' | 'driveSpeedOther' | 'parkingCbdTime' | 'parkingCbdCost' | 'parkingOtherTime' | 'valueOfTime' | 'driveCostPerKm' | 'modeConstant'>>;
   economy: Partial<Pick<typeof ECONOMY, 'startingCash' | 'fareDefault' | 'fareMin' | 'fareMax' | 'fareStep'>>;
   goals: Partial<typeof GOALS>;
+  /** Event venues and kinds, and the climate (CHAOS_BY_CITY). */
+  chaos: CityChaos;
 }
+
+/** Each city's events and weather (the shared chaos tunables are CHAOS, WEATHER and EVENTS above). */
+export const CHAOS_BY_CITY: Record<CityId, CityChaos> = { nyc: NYC_CHAOS, london: LONDON_CHAOS };
 
 export const CITY_BALANCE: Record<CityId, CityBalance> = {
   nyc: {
@@ -334,6 +570,7 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
     commuters: {},
     economy: {},
     goals: {},
+    chaos: CHAOS_BY_CITY.nyc,
   },
   london: {
     origin: [-0.1276, 51.5073], // Charing Cross, the traditional centre of London
@@ -376,5 +613,6 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
       tripFrom: [-0.0886, 51.5133],
       tripTo: [-0.4543, 51.47],
     },
+    chaos: CHAOS_BY_CITY.london,
   },
 };

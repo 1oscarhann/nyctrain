@@ -47,8 +47,9 @@ export class Toasts {
   constructor(parent: HTMLElement) {
     parent.append(this.el);
   }
-  show(title: string, body?: string, tone: 'green' | 'amber' | 'red' = 'green', ms = 4200): void {
-    const t = h('div', { class: `toast hw-panel ${tone}` }, h('div', { class: 't' }, title), body ? h('div', { class: 'b' }, body) : null);
+  /** onClick (optional) runs when the toast is clicked, before it closes (it gets a pointer cursor). */
+  show(title: string, body?: string, tone: 'green' | 'amber' | 'red' | 'event' = 'green', ms = 4200, onClick?: () => void): void {
+    const t = h('div', { class: `toast hw-panel ${tone}${onClick ? ' link' : ''}` }, h('div', { class: 't' }, title), body ? h('div', { class: 'b' }, body) : null);
     this.el.prepend(t);
     while (this.el.children.length > 5) this.el.lastChild?.remove();
     setTimeout(() => {
@@ -56,7 +57,10 @@ export class Toasts {
       t.style.opacity = '0';
       setTimeout(() => t.remove(), 320);
     }, ms);
-    t.addEventListener('click', () => t.remove());
+    t.addEventListener('click', () => {
+      onClick?.();
+      t.remove();
+    });
   }
 }
 

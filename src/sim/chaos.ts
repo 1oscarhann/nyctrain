@@ -1,0 +1,586 @@
+/**
+ * City chaos in the sim worker: today's weather and events, and the incidents that fire and clear
+ * during the day. Every effect goes through existing mechanics (train speeds and dwell, boarding,
+ * walk and drive times), so it shows up in observed times and crowding and in tomorrow's choices.
+ * With the level Off nothing here draws a random number or changes a value: the sim is v1.
+ */
+import { CHAOS, EVENTS, OPERATIONS, type ChaosLevel, type IncidentKind } from '../balance';
+import { dayIndex, SECONDS_PER_DAY } from '../core/calendar';
+import { CLEAR, CLEAR_MODS, eventsForDay, venueOf, venueXY, weatherForDay, weatherMods, type CityEvent, type DayWeather, type FullWeatherMods } from '../core/cityCalendar';
+import type { Commuters } from './commuters';
+import { cdfIndex, measureExposure, planIncidents, trackSpans, type Exposure, type PlannedIncident, type TrackSpan } from './incidents';
+import type { Alert, ChaosState, CompiledNetwork, CRouteDir, DayChaos, DayChaosInfo, EventDayInfo, EventOutcome, ServiceOverride } from './protocol';
+import { TState, type TrackRestriction, type Train, type TrainSim } from './trainSim';
+
+export interface ChaosCallbacks {
+  /** An incident started or cleared, today's weather, or an event wrap-up. */
+  alert?(a: Alert): void;
+  /** Today's level, weather and events (3 am, or on start after 3 am). */
+  dayChaos?(info: DayChaosInfo): void;
+}
+
+/** An incident fired on demand (tests, scripts): the target is given instead of drawn. */
+export type ForcedIncident =
+  /** r1 picks the directed track (weighted by length), r2 the place along it. */
+  | { kind: 'signal'; duration: number; r1?: number; r2?: number }
+  /** train is a train id. */
+  | { kind: 'breakdown' | 'sick'; train: number; duration: number }
+  /** station is a station id. */
+  | { kind: 'police'; station: number; duration: number };
+
+interface Active {
+  alert: Alert;
+  kind: IncidentKind;
+  until: number;
+  restr?: TrackRestriction;
+  trainId?: number;
+}
+
+const SEVERITY: Record<IncidentKind, 1 | 2 | 3> = { signal: 2, breakdown: 3, sick: 1, police: 3 };
+const zeroCounts = (): Record<IncidentKind, number> => ({ signal: 0, breakdown: 0, sick: 0, police: 0 });
+const DAY = SECONDS_PER_DAY;
+
+export class ChaosController {
+  /** Level in force today. */
+  level: ChaosLevel;
+  /** Level from the next 3 am. */
+  private nextLevel: ChaosLevel;
+  readonly seed: number;
+  private net: CompiledNetwork | null = null;
+  private exposure: Exposure = { trainKmByPeriod: [0, 0, 0, 0, 0], trainKm: 0, trackKm: 0, stations: 0 };
+  private spans: TrackSpan[] = [];
+  private spanCdf = new Float64Array(0);
+  /** Closed stations by compiled index (shared with the train sim and commuters). */
+  private closedUntil: Float64Array = new Float64Array(0);
+  private plan: PlannedIncident[] = [];
+  private planIdx = 0;
+  private active: Active[] = [];
+  private restrs: TrackRestriction[] = [];
+  private seqDay = -1;
+  private seq = 0;
+  private day = -1;
+  private weather: DayWeather = { ...CLEAR };
+  private mods: FullWeatherMods = CLEAR_MODS;
+  private weatherAlert: Alert | null = null;
+  private info: DayChaosInfo | null = null;
+  private wrapups: { at: number; day: number; idx: number; ev: CityEvent }[] = [];
+  private counts = zeroCounts();
+  private minutes = 0;
+  private forcedWeather = new Map<number, DayWeather>();
+  private forcedEvents = new Map<number, CityEvent[]>();
+  private service: ServiceOverride[] = [];
+  private now = 0;
+
+  constructor(
+    opts: { level: ChaosLevel; seed: number },
+    private trains: TrainSim,
+    private commuters: Commuters | null,
+    private cb: ChaosCallbacks = {},
+  ) {
+    this.level = opts.level;
+    this.nextLevel = opts.level;
+    this.seed = opts.seed >>> 0;
+    trains.onHold = (tr, si, t) => this.onHold(tr, si, t);
+  }
+
+  // ------------------------------------------------------------------ settings
+  /** Takes effect at the next 3 am. */
+  setLevel(level: ChaosLevel): void {
+    this.nextLevel = level;
+  }
+
+  /** Event service overrides (the full list). */
+  setService(list: readonly ServiceOverride[]): void {
+    this.service = list.map((o) => ({ ...o }));
+    this.trains.setOverrides(this.service);
+  }
+
+  serviceList(): readonly ServiceOverride[] {
+    return this.service;
+  }
+
+  /** Tests and scripts: use this weather on `day` instead of the calendar's (applies now if it is today). */
+  forceWeather(day: number, w: DayWeather): void {
+    this.forcedWeather.set(day, { ...w });
+    if (day === this.day) {
+      this.weather = { ...w };
+      this.applyWeather();
+    }
+  }
+
+  /** Tests and scripts: use these events on `day` instead of the calendar's (from that day's 3 am). */
+  forceEvents(day: number, events: CityEvent[]): void {
+    this.forcedEvents.set(day, events.map((e) => ({ ...e })));
+  }
+
+  // ------------------------------------------------------------------ daily cycle
+  /** 3 am (or on start after 3 am): the day's weather, events and incident plan. Returns the events. */
+  beginDay(day: number, now: number): CityEvent[] {
+    this.day = day;
+    this.level = this.nextLevel;
+    this.weather = this.forcedWeather.get(day) ?? weatherForDay(this.seed, day, this.level);
+    this.applyWeather();
+    const events = this.forcedEvents.get(day) ?? eventsForDay(this.seed, day, this.level);
+    this.plan = planIncidents(this.seed, day, this.exposure, CHAOS.rate[this.level], this.mods.rates, now);
+    this.planIdx = 0;
+    this.weatherAlert = null;
+    if (this.weather.kind !== 'clear') {
+      this.weatherAlert = { id: day * 1000, kind: 'weather', status: 'info', day, start: now, until: (day + 1) * DAY, severity: 1, place: '', routes: [], weather: { ...this.weather } };
+      this.post(this.weatherAlert);
+    }
+    return events;
+  }
+
+  private applyWeather(): void {
+    this.mods = weatherMods(this.weather);
+    this.trains.setWeather(this.mods.outdoorSpeed, this.mods.dwell);
+    this.commuters?.setWeather(this.weather);
+  }
+
+  /** After injection: post today's info and schedule the event wrap-ups. */
+  setEventInfo(day: number, events: CityEvent[], info: EventDayInfo[]): void {
+    const m = this.mods;
+    this.info = {
+      day,
+      level: this.level,
+      weather: { ...this.weather },
+      mods: { walkSpeed: m.walkSpeed, walkPenalty: m.walkPenalty, driveSpeed: m.driveSpeed, outdoorSpeed: m.outdoorSpeed, dwell: m.dwell, crowd: m.crowd },
+      events: info,
+    };
+    this.cb.dayChaos?.(this.info);
+    [...events].sort((a, b) => a.id - b.id).forEach((ev, idx) => this.wrapups.push({ at: day * DAY + ev.end + EVENTS.wrapUpAfter, day, idx, ev }));
+    this.wrapups.sort((a, b) => a.at - b.at || a.idx - b.idx);
+  }
+
+  /** Before the 3 am pool reset: post any wrap-ups still pending (late events, or a load). */
+  flushWrapups(): void {
+    while (this.wrapups.length) this.postWrapup(this.wrapups.shift()!, this.now);
+  }
+
+  /** Midnight: the closing day's summary (call before endDay). */
+  daySummary(outcomes: EventOutcome[], stats: { eventRiders: number; diverted: number; carriedPast: number }): DayChaos {
+    return {
+      weather: { ...this.weather },
+      incidents: { ...this.counts },
+      incidentMinutes: this.minutes,
+      diverted: stats.diverted,
+      carriedPast: stats.carriedPast,
+      eventRiders: stats.eventRiders,
+      events: outcomes,
+    };
+  }
+
+  endDay(): void {
+    this.counts = zeroCounts();
+    this.minutes = 0;
+  }
+
+  // ------------------------------------------------------------------ stepping
+  /** Every step, before the trains move: fire due incidents, clear expired ones, post wrap-ups. */
+  step(t: number): void {
+    this.now = t;
+    while (this.planIdx < this.plan.length && this.plan[this.planIdx].t <= t) this.fire(this.plan[this.planIdx++], t);
+    if (this.active.length) this.clearExpired(t);
+    while (this.wrapups.length && this.wrapups[0].at <= t) this.postWrapup(this.wrapups.shift()!, t);
+  }
+
+  private fire(p: PlannedIncident, t: number): void {
+    const net = this.net;
+    if (!net) return;
+    switch (p.kind) {
+      case 'signal':
+        this.fireSignal(p.r1, p.r2, p.dur, t);
+        break;
+      case 'breakdown':
+      case 'sick': {
+        const cands = this.trains.trains.filter((tr) => {
+          if (tr.state !== TState.Running || tr.holdUntil > t || tr.holdNext > 0 || tr.incident !== 0) return false;
+          return p.kind === 'breakdown' || tr.stop < net.routes[tr.route].dirs[tr.dir].stopS.length - 1;
+        });
+        if (!cands.length) return; // nothing running: dropped
+        const tr = cands[Math.min(cands.length - 1, Math.floor(p.r1 * cands.length))];
+        if (p.kind === 'breakdown') this.fireBreakdown(tr, p.dur, t);
+        else this.fireSick(tr, p.dur, t);
+        break;
+      }
+      case 'police': {
+        // Busy stations are likelier: weight 1 + yesterday's boardings / busyWeight.
+        const served = this.servedStations();
+        if (!served.length) return;
+        const last = this.commuters?.last;
+        const hourly = last && last.netVersion === net.version && last.stationHourly.length === net.stations.length * 24 ? last.stationHourly : null;
+        const cdf = new Float64Array(served.length);
+        let acc = 0;
+        served.forEach((si, i) => {
+          let b = 0;
+          if (hourly) for (let h = 0; h < 24; h++) b += hourly[si * 24 + h];
+          acc += 1 + b / CHAOS.police.busyWeight;
+          cdf[i] = acc;
+        });
+        this.firePolice(served[cdfIndex(cdf, p.r1)], p.dur, t);
+        break;
+      }
+    }
+  }
+
+  /** Fire an incident on a given target now (or at t). Returns its alert id, or −1 if there was no target. */
+  force(f: ForcedIncident, t = this.now): number {
+    const net = this.net;
+    if (!net) return -1;
+    switch (f.kind) {
+      case 'signal':
+        return this.fireSignal(f.r1 ?? 0.5, f.r2 ?? 0.5, f.duration, t);
+      case 'breakdown':
+      case 'sick': {
+        const tr = this.trains.trains.find((x) => x.id === f.train);
+        if (!tr) return -1;
+        return f.kind === 'breakdown' ? this.fireBreakdown(tr, f.duration, t) : this.fireSick(tr, f.duration, t);
+      }
+      case 'police': {
+        const si = net.stations.findIndex((s) => s.id === f.station);
+        return si < 0 ? -1 : this.firePolice(si, f.duration, t);
+      }
+    }
+  }
+
+  private newId(t: number): number {
+    const d = dayIndex(t);
+    if (d !== this.seqDay) {
+      this.seqDay = d;
+      this.seq = 0;
+    }
+    this.seq = Math.min(899, this.seq + 1);
+    return d * 1000 + this.seq;
+  }
+
+  /** Signal problem: a crawl on part of a directed track (weighted by length). */
+  private fireSignal(r1: number, r2: number, dur: number, t: number): number {
+    const net = this.net!;
+    if (!this.spans.length) return -1;
+    const sp = this.spans[cdfIndex(this.spanCdf, r1)];
+    const half = CHAOS.signal.segment / 2;
+    const mid = sp.u0 + r2 * (sp.u1 - sp.u0);
+    const u0 = Math.max(sp.u0, mid - half), u1 = Math.min(sp.u1, mid + half);
+    const id = this.newId(t);
+    const until = t + dur;
+    const restr: TrackRestriction = { id, edge: sp.edge, edgeDir: sp.edgeDir, u0, u1, v: CHAOS.signal.crawl, until, track: sp.track };
+    this.restrs.push(restr);
+    this.trains.setRestrictions(this.restrs.slice());
+    // Where it is: sampled points of the segment, the routes using it, the nearest station.
+    const path: [number, number][] = [];
+    const routes = new Set<number>();
+    let towards: string | undefined;
+    const n = CHAOS.signalPathPoints;
+    for (let i = 0; i < n; i++) {
+      const u = u0 + ((u1 - u0) * i) / (n - 1);
+      let pt: [number, number] | null = null;
+      for (const r of net.routes) {
+        for (const dir of r.dirs) {
+          const el = dir.elems.find((e) => e.track === sp.track && u >= e.u0 - 0.01 && u <= e.u0 + (e.s1 - e.s0) + 0.01);
+          if (!el) continue;
+          routes.add(r.id);
+          towards ??= this.terminalName(dir);
+          pt ??= pointAt(dir, el.s0 + (u - el.u0));
+        }
+      }
+      if (pt) path.push(pt);
+    }
+    const pos = path[Math.floor(path.length / 2)] ?? [0, 0];
+    const alert: Alert = {
+      id,
+      kind: 'signal',
+      status: 'active',
+      day: dayIndex(t),
+      start: t,
+      until,
+      severity: SEVERITY.signal,
+      place: this.nearestStationName(pos[0], pos[1]),
+      towards,
+      routes: [...routes],
+      crawl: CHAOS.signal.crawl,
+      pos,
+      path,
+    };
+    this.started({ alert, kind: 'signal', until, restr }, dur);
+    return id;
+  }
+
+  /** Train breakdown: it brakes hard and stalls where it stops. */
+  private fireBreakdown(tr: Train, dur: number, t: number): number {
+    const net = this.net!;
+    const r = net.routes[tr.route];
+    const dir = r.dirs[tr.dir];
+    const id = this.newId(t);
+    const until = t + dur;
+    tr.holdUntil = until;
+    tr.incident = id;
+    const sRest = Math.min(dir.length, tr.s + (tr.v * tr.v) / (2 * OPERATIONS.emergencyBrake));
+    const alert: Alert = {
+      id,
+      kind: 'breakdown',
+      status: 'active',
+      day: dayIndex(t),
+      start: t,
+      until,
+      severity: SEVERITY.breakdown,
+      place: this.between(dir, tr.stop),
+      towards: this.terminalName(dir),
+      routes: [r.id],
+      trainId: tr.id,
+      pos: pointAt(dir, sRest),
+    };
+    this.started({ alert, kind: 'breakdown', until, trainId: tr.id }, dur);
+    return id;
+  }
+
+  /** Sick passenger: the train will be held at its next open, non-terminal stop (alert posted then). */
+  private fireSick(tr: Train, dur: number, t: number): number {
+    const id = this.newId(t);
+    tr.holdNext = dur;
+    tr.incident = id;
+    return id;
+  }
+
+  private onHold(tr: Train, si: number, t: number): void {
+    const net = this.net;
+    if (!net) return;
+    const r = net.routes[tr.route];
+    const st = net.stations[si];
+    const id = tr.incident || this.newId(t);
+    tr.incident = id;
+    const dur = tr.holdNext;
+    const until = tr.until;
+    const alert: Alert = {
+      id,
+      kind: 'sick',
+      status: 'active',
+      day: dayIndex(t),
+      start: t,
+      until,
+      severity: SEVERITY.sick,
+      place: st?.name ?? '',
+      towards: this.terminalName(r.dirs[tr.dir]),
+      routes: [r.id],
+      stationId: st?.id,
+      trainId: tr.id,
+      pos: st ? [st.x, st.y] : undefined,
+    };
+    this.started({ alert, kind: 'sick', until, trainId: tr.id }, dur);
+  }
+
+  /** Police activity: the station closes; trains run through. */
+  private firePolice(si: number, dur: number, t: number): number {
+    const net = this.net!;
+    const st = net.stations[si];
+    if (!st) return -1;
+    const id = this.newId(t);
+    const until = t + dur;
+    this.closedUntil[si] = Math.max(this.closedUntil[si], until);
+    this.commuters?.evictStation(si, this.closedUntil[si], t);
+    const routes = net.routes.filter((r) => r.dirs.some((d) => d.stopStation.includes(si))).map((r) => r.id);
+    const alert: Alert = {
+      id,
+      kind: 'police',
+      status: 'active',
+      day: dayIndex(t),
+      start: t,
+      until,
+      severity: SEVERITY.police,
+      place: st.name,
+      routes,
+      stationId: st.id,
+      pos: [st.x, st.y],
+    };
+    this.started({ alert, kind: 'police', until }, dur);
+    return id;
+  }
+
+  private started(a: Active, dur: number): void {
+    // Trains queued behind an incident aren't deadlocked.
+    this.trains.graceUntil = Math.max(this.trains.graceUntil, a.until);
+    this.counts[a.kind]++;
+    this.minutes += dur / 60;
+    this.active.push(a);
+    this.post(a.alert);
+  }
+
+  private clearExpired(t: number): void {
+    const due = this.active.filter((a) => a.until <= t);
+    if (!due.length) return;
+    this.active = this.active.filter((a) => a.until > t);
+    for (const a of due) this.finish(a, t);
+  }
+
+  /** End an incident (expired, or its target vanished) and post the cleared alert. */
+  private finish(a: Active, t: number, reason?: string): void {
+    if (a.restr) {
+      this.restrs = this.restrs.filter((q) => q !== a.restr);
+      this.trains.setRestrictions(this.restrs.slice());
+    }
+    if (a.trainId !== undefined) {
+      const tr = this.trains.trains.find((x) => x.id === a.trainId);
+      if (tr && tr.incident === a.alert.id) {
+        tr.incident = 0;
+        if (reason) tr.holdUntil = 0;
+      }
+    }
+    this.post({ ...a.alert, status: 'cleared', until: t, ...(reason ? { reason } : {}) });
+  }
+
+  private postWrapup(w: { day: number; idx: number; ev: CityEvent }, t: number): void {
+    const outcome: EventOutcome = this.commuters?.eventOutcomes().find((o) => o.id === w.ev.id) ?? {
+      id: w.ev.id,
+      label: w.ev.label,
+      attendance: w.ev.attendance,
+      byTransit: 0,
+      arrived: 0,
+      late: 0,
+      gaveUp: 0,
+      avgTripMin: 0,
+    };
+    this.post({
+      id: w.day * 1000 + 900 + w.idx,
+      kind: 'event',
+      status: 'info',
+      day: w.day,
+      start: t,
+      until: t,
+      severity: 1,
+      place: venueOf(w.ev).name,
+      routes: [],
+      eventId: w.ev.id,
+      pos: venueXY(w.ev),
+      outcome,
+    });
+  }
+
+  private post(a: Alert): void {
+    this.cb.alert?.(a);
+  }
+
+  // ------------------------------------------------------------------ network
+  /** Called after the trains and commuters took the new network: remap closures and targets. */
+  setNetwork(net: CompiledNetwork, t: number): void {
+    const old = this.net;
+    this.net = net;
+    const cu = new Float64Array(net.stations.length);
+    if (old) {
+      const idx = new Map(net.stations.map((s, i) => [s.id, i]));
+      old.stations.forEach((s, i) => {
+        const until = this.closedUntil[i];
+        const ni = idx.get(s.id);
+        if (until > t && ni !== undefined) cu[ni] = until;
+      });
+    }
+    this.closedUntil = cu;
+    this.trains.closedUntil = cu;
+    this.commuters?.setClosures(cu);
+    this.exposure = measureExposure(net);
+    this.spans = trackSpans(net);
+    this.spanCdf = new Float64Array(this.spans.length);
+    let acc = 0;
+    this.spans.forEach((sp, i) => (this.spanCdf[i] = acc += Math.max(0, sp.u1 - sp.u0)));
+    if (this.active.length) {
+      const byId = new Map(this.trains.trains.map((tr) => [tr.id, tr]));
+      const stationIds = new Set(net.stations.map((s) => s.id));
+      const gone: [Active, string][] = [];
+      this.active = this.active.filter((a) => {
+        let why: string | null = null;
+        if (a.restr && a.restr.track < 0) why = 'track removed';
+        else if (a.trainId !== undefined && byId.get(a.trainId)?.incident !== a.alert.id) why = 'train withdrawn';
+        else if (a.kind === 'police' && !stationIds.has(a.alert.stationId ?? -1)) why = 'station removed';
+        if (why) gone.push([a, why]);
+        return !why;
+      });
+      for (const [a, why] of gone) this.finish(a, t, why);
+    }
+    // Waiters re-queued by the network change leave closed stations again.
+    cu.forEach((until, si) => {
+      if (until > t) this.commuters?.evictStation(si, until, t);
+    });
+  }
+
+  // ------------------------------------------------------------------ queries
+  /** Active incidents, plus today's weather alert. */
+  activeAlerts(): Alert[] {
+    const out = this.active.map((a) => a.alert);
+    if (this.weatherAlert) out.unshift(this.weatherAlert);
+    return out;
+  }
+
+  state(): ChaosState {
+    return {
+      level: this.level,
+      nextLevel: this.nextLevel,
+      seed: this.seed,
+      today: this.info,
+      active: this.activeAlerts(),
+      outcomes: this.commuters?.eventOutcomes() ?? [],
+      service: this.service.map((o) => ({ ...o })),
+    };
+  }
+
+  /** Today's weather and its effects. */
+  todayWeather(): { weather: DayWeather; mods: FullWeatherMods } {
+    return { weather: { ...this.weather }, mods: this.mods };
+  }
+
+  exposureNow(): Exposure {
+    return this.exposure;
+  }
+
+  /** Remaining planned incidents today (for scripts). */
+  remainingPlan(): readonly PlannedIncident[] {
+    return this.plan.slice(this.planIdx);
+  }
+
+  // ------------------------------------------------------------------ helpers
+  private servedStations(): number[] {
+    const net = this.net!;
+    const s = new Set<number>();
+    for (const r of net.routes) for (const d of r.dirs) for (const si of d.stopStation) s.add(si);
+    return [...s].sort((a, b) => a - b);
+  }
+
+  private nearestStationName(x: number, y: number): string {
+    let best = Infinity;
+    let name = '';
+    for (const s of this.net?.stations ?? []) {
+      const d = Math.hypot(s.x - x, s.y - y);
+      if (d < best) {
+        best = d;
+        name = s.name;
+      }
+    }
+    return name;
+  }
+
+  private terminalName(dir: CRouteDir): string | undefined {
+    return this.net?.stations[dir.stopStation[dir.stopStation.length - 1]]?.name;
+  }
+
+  /** "between Marcy Av and Flushing Av" for a train heading to stop `next`. */
+  private between(dir: CRouteDir, next: number): string {
+    const st = this.net!.stations;
+    const a = st[dir.stopStation[Math.max(0, next - 1)]]?.name ?? '';
+    const b = st[dir.stopStation[Math.min(dir.stopStation.length - 1, next)]]?.name ?? '';
+    return a === b ? b : `between ${a} and ${b}`;
+  }
+}
+
+/** Point (local metres) at path distance s along a route direction. */
+export function pointAt(dir: CRouteDir, s: number): [number, number] {
+  const cum = dir.cum;
+  const n = cum.length;
+  if (n === 0) return [0, 0];
+  if (s <= 0 || n === 1) return [dir.xs[0], dir.ys[0]];
+  if (s >= cum[n - 1]) return [dir.xs[n - 1], dir.ys[n - 1]];
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] <= s) lo = mid;
+    else hi = mid;
+  }
+  const f = (s - cum[lo]) / Math.max(1e-9, cum[hi] - cum[lo]);
+  return [dir.xs[lo] + (dir.xs[hi] - dir.xs[lo]) * f, dir.ys[lo] + (dir.ys[hi] - dir.ys[lo]) * f];
+}

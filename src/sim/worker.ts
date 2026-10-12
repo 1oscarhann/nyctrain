@@ -31,11 +31,13 @@ async function init(msg: Extract<ToWorker, { type: 'init' }>) {
   const world = await fetchWorld(msg.dataBase);
   engine = new Engine(
     world,
-    { agentScale: msg.agentScale, seed: msg.seed, time: msg.time, fare: msg.fare, modeState: msg.modeState },
+    { agentScale: msg.agentScale, seed: msg.seed, time: msg.time, fare: msg.fare, modeState: msg.modeState, chaos: msg.chaos, service: msg.service },
     {
       dayEnd: (report) => post({ type: 'dayEnd', report }),
       busy: (label) => post({ type: 'busy', label }),
       event: (title, body, tone) => post({ type: 'event', title, body, tone }),
+      alert: (alert) => post({ type: 'alert', alert }),
+      dayChaos: (info) => post({ type: 'dayChaos', info }),
     },
   );
   const c = engine.commuters!;
@@ -75,6 +77,12 @@ function handle(msg: ToWorker) {
     case 'query':
       post({ type: 'reply', id: msg.id, data: answer(msg.q) });
       break;
+    case 'chaosLevel':
+      engine.setChaosLevel(msg.level);
+      break;
+    case 'service':
+      engine.setService(msg.overrides);
+      break;
   }
 }
 
@@ -99,6 +107,8 @@ function answer(q: Extract<ToWorker, { type: 'query' }>['q']): unknown {
       return c.flows(q.limit);
     case 'segmentLoads':
       return null;
+    case 'chaos':
+      return engine!.chaos.state();
   }
 }
 

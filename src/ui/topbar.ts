@@ -1,13 +1,17 @@
 /**
- * Top bar: cash (with daily change), date and time, speed controls, daily riders, transit mode
- * share, and average commute compared with the no-subway baseline.
+ * Top bar: cash (with daily change), date and time, speed controls, the weather chip and news
+ * ticker (city chaos), daily riders, transit mode share, and average commute compared with the
+ * no-subway baseline.
  */
 import { TIME } from '../balance';
 import { dayIndex, fmtDate, timeOfDay } from '../core/calendar';
+import { weatherLabel } from '../core/cityCalendar';
 import { fmtClock, fmtCount, fmtMoney, fmtPct } from '../core/units';
+import { forecastText, LEVEL_LABEL, weatherEffects } from './alertFeed';
 import type { App } from './app';
 import { h, svgIcon } from './dom';
-import { ICONS } from './icons';
+import { ICONS, WEATHER_ICON } from './icons';
+import { NewsTicker } from './ticker';
 import { attachTip } from './widgets';
 
 export class TopBar {
@@ -24,6 +28,13 @@ export class TopBar {
   private speedBtns: HTMLButtonElement[] = [];
   private pauseBtn: HTMLButtonElement;
   private rate = h('span', { class: 'sub num hw-amber', style: 'display:none' });
+  private weatherSep = h('div', { class: 'tb-sep' });
+  private weather: HTMLElement;
+  private weatherIcon = h('span', { class: 'tb-weather-icon' });
+  private weatherValue = h('span', { class: 'value' });
+  private weatherSub = h('span', { class: 'sub num' });
+  private weatherKind = '';
+  readonly ticker: NewsTicker;
 
   constructor(private app: App) {
     const stat = (label: string, value: HTMLElement, sub?: HTMLElement, onclick?: () => void) =>
@@ -39,6 +50,22 @@ export class TopBar {
     attachTip(skip, app.tooltip, 'Skip to 6am', undefined, 'Fast-forward through the night');
     const menu = h('button', { class: 'hw-btn ghost', id: 'btn-menu', style: 'width:38px;padding:0', onclick: () => app.openMenu() }, svgIcon(ICONS.menu));
     attachTip(menu, app.tooltip, 'Menu', undefined, 'Save, load, settings');
+    // City chaos: weather chip (click for Service alerts) and the news ticker.
+    this.weather = h(
+      'div',
+      { class: 'tb-stat tb-weather', role: 'button', tabindex: '0', onclick: () => app.openAlerts({ focus: app.feed.day * 1000 }) },
+      this.weatherIcon,
+      h('div', { class: 'tb-weather-text' }, h('span', { class: 'label' }, 'Weather'), this.weatherValue, this.weatherSub),
+    );
+    this.weather.addEventListener('mouseenter', () => {
+      const r = this.weather.getBoundingClientRect();
+      app.tooltip.show(this.weatherTip(), [r.left, r.bottom - 8]);
+    });
+    this.weather.addEventListener('mouseleave', () => app.tooltip.show(null));
+    this.weather.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') app.openAlerts({ focus: app.feed.day * 1000 });
+    });
+    this.ticker = new NewsTicker((item) => app.openAlerts({ focus: item.focus, event: item.event }));
     this.el = h(
       'div',
       { id: 'topbar', class: 'hw-panel' },
@@ -49,7 +76,10 @@ export class TopBar {
       stat('Date', this.date, this.clock),
       h('div', { class: 'tb-group' }, this.pauseBtn, ...this.speedBtns, skip),
       this.rate,
-      h('div', { class: 'tb-spacer' }),
+      this.weatherSep,
+      this.weather,
+      h('div', { class: 'tb-ticker-slot' }, this.ticker.el),
+      h('div', { class: 'tb-sep' }),
       stat('Daily riders', this.riders, this.ridersSub),
       h('div', { class: 'tb-sep' }),
       stat('Transit share', this.share),
@@ -96,5 +126,43 @@ export class TopBar {
       this.commuteSub.textContent = 'no-transit baseline';
       this.commuteSub.className = 'sub num';
     }
+    this.updateChaos(t);
+  }
+
+  /** Weather chip and ticker; both stay quiet when chaos is off today and from 3 am. */
+  private updateChaos(now: number): void {
+    const feed = this.app.feed;
+    const off = feed.off;
+    this.weather.style.display = off ? 'none' : '';
+    this.weatherSep.style.display = off ? 'none' : '';
+    this.ticker.el.style.visibility = off ? 'hidden' : '';
+    if (off) return;
+    const w = feed.weather();
+    const label = weatherLabel(w);
+    if (this.weatherKind !== w.kind) {
+      this.weatherKind = w.kind;
+      this.weatherIcon.replaceChildren(svgIcon(WEATHER_ICON[w.kind]));
+      this.weather.dataset.kind = w.kind;
+    }
+    if (this.weatherValue.textContent !== label) this.weatherValue.textContent = label;
+    const fc = feed.forecast();
+    const sub = `${fc.label}: ${forecastText(fc.f)}`;
+    if (this.weatherSub.textContent !== sub) this.weatherSub.textContent = sub;
+    this.ticker.set(feed.tickerItems(now, this.app.routeRef));
+  }
+
+  private weatherTip(): string {
+    const feed = this.app.feed;
+    const w = feed.weather();
+    const fx = weatherEffects(w);
+    const fc = feed.forecast();
+    const lv = feed.levels();
+    const level = lv.today === lv.next ? `${LEVEL_LABEL[lv.today]} chaos` : `${LEVEL_LABEL[lv.today]} chaos today, ${LEVEL_LABEL[lv.next]} from 3 am`;
+    return (
+      `<div class="title">${weatherLabel(w)}${w.carried ? ' (continuing)' : ''}<span class="kbd">A</span></div>` +
+      `<div class="hw-muted">${fx.length ? fx.map((x) => x.charAt(0).toUpperCase() + x.slice(1)).join(' · ') : 'No weather effects today'}</div>` +
+      `<div class="hw-muted">${fc.long}: ${forecastText(fc.f)} · ${level}</div>` +
+      `<div class="hw-muted">Click for Service alerts</div>`
+    );
   }
 }

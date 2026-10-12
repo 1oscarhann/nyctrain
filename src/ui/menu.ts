@@ -1,5 +1,5 @@
-/** In-game menu: save to slots, export/import, load, settings, exit to title. */
-import { COMMUTERS } from '../balance';
+/** In-game menu: save to slots, export/import, load, city chaos level, settings, exit to title. */
+import { CHAOS, COMMUTERS } from '../balance';
 import { setUnits } from '../core/units';
 import { exportFile, importFile, listSlots, readSlot, SLOTS, type SlotId } from '../save/store';
 import { saveSummary } from '../save/summary';
@@ -7,6 +7,7 @@ import { CITIES, city } from '../cities';
 import type { App } from './app';
 import { h } from './dom';
 import { modal } from './widgets';
+import { LEVEL_HINT, LEVEL_LABEL } from './alertFeed';
 import { storeSettings } from './settings';
 
 const SLOT_LABEL: Record<SlotId, string> = { autosave: 'Autosave', slot1: 'Slot 1', slot2: 'Slot 2', slot3: 'Slot 3' };
@@ -56,6 +57,16 @@ export async function openMenu(app: App): Promise<void> {
     );
   };
   renderUnits();
+  // City chaos level for this game (applies from the next 3 am).
+  const chaos = h('div', { class: 'seg' });
+  const chaosHint = h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:4px' });
+  const renderChaos = () => {
+    chaos.replaceChildren(
+      ...CHAOS.levels.map((l) => h('button', { class: app.game.chaos.level === l ? 'on' : '', title: LEVEL_HINT[l], onclick: () => { if (l !== app.game.chaos.level) app.setChaosLevel(l); renderChaos(); } }, LEVEL_LABEL[l])),
+    );
+    chaosHint.textContent = `${LEVEL_HINT[app.game.chaos.level]}. Changes apply from 3 am; Service alerts (A) shows what is happening.`;
+  };
+  renderChaos();
   const scale = h('div', { class: 'seg' });
   for (const s of COMMUTERS.agentScaleChoices) {
     scale.append(
@@ -93,6 +104,9 @@ export async function openMenu(app: App): Promise<void> {
         },
       }, 'Import file'),
     ),
+    h('div', { class: 'section' }, 'City chaos (events, disruptions, weather)'),
+    chaos,
+    chaosHint,
     h('div', { class: 'section' }, 'Units'),
     units,
     h('div', { class: 'section' }, 'Agent scale (real commuters per simulated agent)'),

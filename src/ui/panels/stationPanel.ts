@@ -6,7 +6,7 @@ import { city } from '../../cities';
 import { cap } from '../../construction/describe';
 import { LEVEL_NAMES } from '../../construction/validate';
 import { progress } from '../../construction/blueprint';
-import { fmtCount, fmtMoney } from '../../core/units';
+import { fmtClock, fmtCount, fmtMoney } from '../../core/units';
 import type { App } from '../app';
 import { barChart } from '../charts';
 import { bullet, h } from '../dom';
@@ -71,11 +71,13 @@ export function stationPanel(app: App, id: number): Panel {
       ? routes.map((r) => h('span', { style: 'display:inline-flex;align-items:center;gap:6px;cursor:pointer', onclick: () => game.select({ kind: 'route', id: r.id }) }, bullet(r.color, r.bullet, 20), r.name))
       : [h('span', { class: 'hw-muted' }, 'No routes serve this station yet')]),
   );
+  // City chaos: closed by police activity.
+  const closedBanner = h('div');
   const stats = h('div', { class: 'stat-grid', style: 'margin-top:8px' });
   const chartWrap = h('div', { class: 'chart' });
   if (s.status !== 'built') chartWrap.append(h('div', { class: 'hw-muted', style: 'font-size:12.5px' }, 'Ridership appears once the station opens.'));
   const flowsWrap = h('div');
-  body.append(statusLine ?? '', routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, section('Station'), kv([
+  body.append(statusLine ?? '', closedBanner, routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, section('Station'), kv([
     ['Level', cap(LEVEL_NAMES[level])],
     ['Class', `${cap(cls)} metro`],
     ['Platform', `${s.cars} cars`],
@@ -90,7 +92,17 @@ export function stationPanel(app: App, id: number): Panel {
 
   let detail: StationDetail | null = null;
   let chart: { destroy(): void } | null = null;
+  let closedId = -1;
   const render = () => {
+    const closed = app.feed.activeFor({ stationId: id });
+    if ((closed?.id ?? 0) !== closedId) {
+      closedId = closed?.id ?? 0;
+      closedBanner.replaceChildren(
+        closed
+          ? h('div', { class: 'err', style: 'cursor:pointer', onclick: () => game.select({ kind: 'alerts', focus: closed.id }) }, h('b', null, `Closed: police activity until ${fmtClock(closed.until)}. `), 'Trains run through; riders are sent to nearby stations.')
+          : '',
+      );
+    }
     const boardY = app.report?.stationBoardings[id];
     const left = detail ? (detail.leftYesterday || detail.leftToday) : 0;
     const waiting = app.waitingAt(id);

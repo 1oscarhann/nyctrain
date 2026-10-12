@@ -4,7 +4,7 @@
  */
 import { city } from '../cities';
 import { Emitter } from '../core/emitter';
-import type { CompiledNetwork, DayReport, FromWorker, ModeState, Query, Snapshot, ToWorker } from './protocol';
+import type { Alert, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, FromWorker, ModeState, Query, ServiceOverride, Snapshot, ToWorker } from './protocol';
 import { TRAIN_STRIDE } from './protocol';
 
 export interface SimEvents extends Record<string, unknown> {
@@ -14,6 +14,10 @@ export interface SimEvents extends Record<string, unknown> {
   busy: string | null;
   event: { title: string; body?: string; tone?: 'green' | 'amber' | 'red' };
   error: string;
+  /** City chaos: an incident started or cleared, today's weather (3 am), or an event wrap-up. */
+  alert: Alert;
+  /** City chaos: today's level, weather and events with the expected mode split (3 am, or on start). */
+  dayChaos: DayChaosInfo;
 }
 
 export interface TrainView {
@@ -49,7 +53,15 @@ export class SimClient {
     this.worker.postMessage(msg, transfer);
   }
 
-  init(opts: { agentScale: number; seed: number; time: number; fare: number; modeState?: ModeState }): void {
+  init(opts: {
+    agentScale: number;
+    seed: number;
+    time: number;
+    fare: number;
+    modeState?: ModeState;
+    chaos: { level: ChaosLevel; seed: number };
+    service: ServiceOverride[];
+  }): void {
     const c = city();
     this.send({ type: 'init', city: c.id, dataBase: new URL(c.dataPath, document.baseURI).href, ...opts });
   }
@@ -69,6 +81,16 @@ export class SimClient {
 
   setFare(fare: number): void {
     this.send({ type: 'fare', fare });
+  }
+
+  /** City chaos level; the worker applies it from the next 3 am. */
+  setChaosLevel(level: ChaosLevel): void {
+    this.send({ type: 'chaosLevel', level });
+  }
+
+  /** Event service overrides (the full list, replacing the previous one). */
+  setService(overrides: ServiceOverride[]): void {
+    this.send({ type: 'service', overrides });
   }
 
   query<T>(q: Query): Promise<T> {
@@ -114,6 +136,12 @@ export class SimClient {
         break;
       case 'error':
         this.events.emit('error', m.message);
+        break;
+      case 'alert':
+        this.events.emit('alert', m.alert);
+        break;
+      case 'dayChaos':
+        this.events.emit('dayChaos', m.info);
         break;
     }
   }

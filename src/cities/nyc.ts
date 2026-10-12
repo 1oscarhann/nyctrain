@@ -18,6 +18,7 @@ export const NYC: CityConfig = {
   blurb:
     'New York, but nobody ever built the subway. You get the real city, real commuting data for the five boroughs and a few billion dollars. Draw the lines — millions of New Yorkers decide whether they’re worth taking.',
   people: 'New Yorkers',
+  transitWord: 'subway',
   goals: [
     { id: 'east-river', title: 'Cross the East River', detail: 'A running route linking Manhattan with Brooklyn or Queens.', kind: 'crossing', a: ['Manhattan'], b: ['Brooklyn', 'Queens'] },
     { id: 'five-boroughs', title: 'Connect all five boroughs', detail: 'One connected network reaching all five. Staten Island needs a long tunnel.', stretch: true, kind: 'connect', regions: BOROUGHS },

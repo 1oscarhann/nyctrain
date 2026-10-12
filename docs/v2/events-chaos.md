@@ -6,6 +6,139 @@ Depends on: v1 as committed (`a27dbfa`). Touches the sim worker (train sim, comm
 compile, protocol, save format (v2 → v3) and the UI shell. Coordinates with `living-city.md` and
 `express-quad.md` on shared files (§5.0).
 
+## Implementation notes (sim)
+
+The sim half is implemented: checklist steps 1–12 and 17, plus the game state and save parts of
+step 13. The UI (steps 13–16: `AlertFeed`, ticker, weather chip, Service alerts panel, event
+service editor, map layers, panel banners, menu, styles) is the next engineer's. This section lists
+where things live, what differs from the design below, and the hooks the UI uses. **Where the
+code and the line references below disagree, trust the code.**
+
+**Where it lives.**
+- `src/balance.ts`: `CHAOS`, `WEATHER` and `EVENTS` (shared tunables), and **`CHAOS_BY_CITY`**
+  (venues, event kinds and climate per city), referenced as `CITY_BALANCE[city].chaos`.
+- `src/core/rng.ts`: `hashSeed`, `poisson`, `triangular`, `stochasticRound`, `pickWeighted`.
+- `src/core/cityCalendar.ts`: the pure calendar and weather, shared by both threads.
+- `src/sim/incidents.ts`: exposure and the incident plan (pure).
+- `src/sim/eventTrips.ts`: the pure event-trip helpers.
+- `src/sim/chaos.ts`: `ChaosController` (fires and clears incidents, weather, wrap-ups, network
+  remapping).
+- Changes to `trainSim.ts`, `commuters.ts`, `engine.ts`, `modeChoice.ts`, `transitGraph.ts`,
+  `compile.ts`, `protocol.ts`, `worker.ts`, `client.ts`, `headless.ts`, `core/game.ts`,
+  `save/*`, and `scripts/{balance,perf,headless-sim}.ts`.
+- `src/ui/app.ts` has only the plumbing: the new-game seed, the `sim.init` fields, the midnight
+  `pruneService`, and the methods `setChaosLevel` / `addEventService` / `removeEventService`.
+
+**Differences from the design (multi-city and later commits).**
+- **Per-city tables.** `EVENTS.venues`/`EVENTS.kinds` and `WEATHER.chance` moved to
+  `CHAOS_BY_CITY[city]` as `{ venues, kinds, climate }`. `VenueDef` gains `region` (its borough),
+  which decides whether driving there is "core". Every calendar function takes an optional
+  last argument `cc: CityChaos`; by default it uses the current city (`applyCity`).
+- New York uses the design's values. London has its own venues:
+  - Wembley stadium (match, concert), in Brent;
+  - Stratford stadium, in Newham;
+  - "North London football" at Holloway, in Islington;
+  - Tottenham football, in Haringey;
+  - Greenwich arena concert, on the North Greenwich peninsula;
+  - Twickenham rugby (Friday nights in Feb, Mar and Nov), in Richmond;
+  - the Wimbledon tennis fortnight (24 Jun – 7 Jul), in Merton;
+  - an Oval cricket test match (22–26 Aug), in Kennington;
+  - a Hyde Park summer concert;
+  - a rare Whitehall parade (5 days' notice).
+
+  London's football is on midweek evenings (Tue–Thu) from August to May. Its climate gives about
+  2.5 snow, 33 rain and 2.6 heat days a year; New York gets 12 / 22 / 10. That works out to 0.57
+  events per weekday in London and 1.13 in New York.
+- `checkKinds` asks for Σ chance × Wild ≤ 1 only for venues with **several** kinds. A
+  fixed-window kind on its own, like the tennis (chance 1), is fine.
+- `ChaosController.setEventInfo(day, events, info)` and `daySummary(outcomes, stats)`;
+  `Commuters.setWeather(w: DayWeather)` (it needs the kind and severity for the baseline cache).
+- The protocol adds a **`{ kind: 'chaos' }` query** that replies with a `ChaosState`: level,
+  next level, seed, today's `DayChaosInfo`, active alerts, today's outcomes and service. It lets
+  the UI resync after a load or when a panel opens. `DayChaosInfo` gains `mods` (today's weather
+  factors), and a cleared `Alert` can carry a `reason` ("track removed", "train withdrawn",
+  "station removed").
+- A **sick-passenger** incident counts (tally, minutes, alert) when the hold starts at a station.
+  A hold dropped at the terminal is not counted and posts no alert.
+- `Game` defaults to `CHAOS.defaultLevel` (Normal). `createHeadlessGame` defaults to **Off** (and
+  takes `chaosSeed`), so tests and the README balance numbers reproduce v1.
+  `engine.chaos.forceWeather` / `forceEvents` / `force` work at any level, including Off.
+- `migrate()` sets `save.migratedFrom` (not stored) when it upgraded a file. The one-off "New:
+  city events…" toast can key off `migratedFrom < 3`.
+- The moving block lets a follower creep up to ~10 m into the 100 m margin with 2 s steps (this is
+  v1 behaviour), so test 13.1-11.3 checks a gap above 85 m.
+- Test 13.1-13 (`eventService.serviceEstimate`) belongs with the UI file `src/routes/eventService.ts`,
+  which is not written yet.
+- §10.4 bands, from `npm run balance -- scenario=core days=12 chaos=normal` and six more seeds
+  (`seed=1…6`):
+  - New York: day-11 riders +0.3% to +1.5% against Off; days 8–11 operating result +$0.03M to
+    +$0.10M/day.
+  - London: −0.1% to +1.3%, and +£0.01M to +£0.04M/day.
+  - The default seed 2030 draws 5 snow days in New York's first 12 (January), which gives +3.1%
+    and +$0.20M/day, just outside the bands. It is seed variance (snow days are ridership days),
+    not a bias.
+  - 0 deadlocks everywhere. The sprawl networks still lose $0.75–0.84M/day (New York) and
+    £0.58–0.62M/day (London).
+
+**Hooks for the UI.**
+- **Client** (`SimClient`):
+  - Events: `events.on('alert', (a: Alert) => …)` and `events.on('dayChaos', (i: DayChaosInfo) => …)`.
+  - Commands: `setChaosLevel(level)` (applies from the next 3 am) and `setService(list)` (the full
+    list).
+  - Query: `query<ChaosState>({ kind: 'chaos' })`.
+  - `init` already sends `chaos: { level, seed }` and `service` from `game.chaos`.
+- **App**: `app.setChaosLevel(level)`, `app.addEventService(list)` → `ServiceOverride[]`, and
+  `app.removeEventService(id)`. Each updates `game.chaos` and the worker together. Still missing:
+  `case 'alerts'` in `refreshPanel`, the `A` key, the feed, toasts and the migrated-save toast.
+- **Game**:
+  - State: `game.chaos: ChaosSettings` (`{ level, seed, service, nextServiceId }`).
+  - Methods: `setChaosLevel`, `addService(o)`, `removeService(id)`, `pruneService(now)`. Each emits
+    `'chaos'`.
+  - `Selection` gains `{ kind: 'alerts'; focus?: number }`.
+  - New games draw a seed with `newChaosSeed()` (`crypto.getRandomValues`). Loaded games keep
+    theirs.
+- **Calendar on the main thread** (same results as the worker): `announcedEvents(seed, today,
+  level)` gives the events card list. Also `eventsForDay`, `weatherForDay`, `forecastFor(seed,
+  day + 1, level)` ("Tmrw"), `weatherMods`, `weatherLabel`, `venueOf`, `venueXY`, `eventKind` and
+  `maxAnnounceDays`. The worker's `dayChaos` is authoritative for today (forced events and
+  weather, and the mode split).
+- **Alerts** (`protocol.ts` `Alert`):
+  - Life cycle: `active` → `cleared` with the same `id`. A cleared alert's `until` is the actual
+    clear time.
+  - Weather: one `info` alert at 3 am when it isn't clear (`id = day·1000`).
+  - Event wrap-ups: `kind 'event'`, `info`, `id = day·1000 + 900 + i`, with `outcome`. They come
+    2 h after the end, or at the next 3 am at the latest.
+  - Breakdowns and sick holds carry `trainId`; police alerts carry `stationId`. The UI's closed
+    stations and alerted trains are the active alerts' ids.
+  - Signal problems carry `path` (up to 17 points), `crawl` (m/s) and `towards`.
+  - Positions are local metres (`toLonLat`). `place` and `towards` are names only; the main thread
+    formats units.
+- **Reports**: `DayReport.chaos` (`DayChaos`) holds weather, incidents by kind, incident minutes,
+  `diverted`, `carriedPast`, `eventRiders` and per-event outcomes. Reports saved before chaos
+  existed lack it.
+- **Event service**: `ServiceOverride { id, routeId, from, to (absolute game s), headwayMin,
+  eventId }`.
+  - The worker never lengthens a headway, and adds service where the route has none.
+  - Overrides already planned at 3 am also raise the event's transit share (`capWait`).
+  - Trains come from the owned fleet.
+  - The extra car-km go through the existing operating cost.
+
+**Measured.**
+- Chaos **Off is bit-identical** to the code before this feature. The full `DayReport` JSON, the
+  finance history and the mode shares hash the same on the test network (3 days) and on the New
+  York and London core and sprawl scenarios (4 days). The `npm run sim` and `npm run balance`
+  outputs differ only in timings.
+- `npm run perf`, peak game-hour, minimum of 5 interleaved runs on a shared machine:
+  - code before chaos: 235 ms;
+  - Off: 227 ms;
+  - Normal: 242 ms;
+  - `chaos=wild weather=snow outdoor=1`: 301 ms. That run also has 378 trains running instead of
+    311, because snow slows every train.
+
+  All are well inside the 1,000 ms budget.
+- The 3 am injection on the core network takes 2–8 ms for one arena event, and 22–57 ms for a
+  four-event day with a 150k parade (warm).
+
 ## 0. Summary
 
 In v1 every weekday is the same weekday. In v2 the city throws things at the network, and each

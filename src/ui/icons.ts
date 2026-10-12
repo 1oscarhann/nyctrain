@@ -18,4 +18,14 @@ export const ICONS = {
   undo: '<path d="M9 7 L4 12 L9 17"/><path d="M4 12 H14 A6 6 0 0 1 14 24"/>',
   routes: '<path d="M4 6 H20 M4 12 H20 M4 18 H20" stroke-width="2.4"/>',
   help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5 A2.5 2.5 0 1 1 12 12 V14"/><circle cx="12" cy="17.5" r="0.6" fill="currentColor"/>',
+  // City chaos: weather, the Service alerts bell, event tickets.
+  sun: '<circle cx="12" cy="12" r="4.5"/><path d="M12 2.5V5 M12 19v2.5 M2.5 12H5 M19 12h2.5 M5.3 5.3l1.8 1.8 M16.9 16.9l1.8 1.8 M5.3 18.7l1.8-1.8 M16.9 7.1l1.8-1.8"/>',
+  rain: '<path d="M7 15h9.5a4 4 0 0 0 .4-8 5.5 5.5 0 0 0-10.6 1.6A3.2 3.2 0 0 0 7 15Z"/><path d="M8.5 18l-1 2.5 M12.5 18l-1 2.5 M16.5 18l-1 2.5"/>',
+  snow: '<path d="M12 3v18 M4.2 7.5l15.6 9 M4.2 16.5l15.6-9"/><path d="M9.5 4.5 12 7l2.5-2.5 M9.5 19.5 12 17l2.5 2.5"/>',
+  heat: '<path d="M10 4.5a2 2 0 0 1 4 0v9.3a4 4 0 1 1-4 0Z"/><path d="M12 9v6.5 M17.5 6h2.5 M17.5 9.5h2.5"/>',
+  alert: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15Z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
+  ticket: '<path d="M4 8.5V6h16v2.5a2.5 2.5 0 0 0 0 5V18H4v-4.5a2.5 2.5 0 0 0 0-5Z"/><path d="M14 6.5v11" stroke-dasharray="2 2"/>',
 };
+
+/** Weather icon by kind. */
+export const WEATHER_ICON: Record<'clear' | 'rain' | 'snow' | 'heat', string> = { clear: ICONS.sun, rain: ICONS.rain, snow: ICONS.snow, heat: ICONS.heat };

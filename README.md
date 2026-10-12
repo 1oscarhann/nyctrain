@@ -85,24 +85,30 @@ Open Government Licence v3.0.
 
 All toolbar buttons have tooltips that show their shortcut.
 
+**City chaos** (special events, disruptions and weather; see [City chaos](#city-chaos)) runs in
+the simulation. New games start at the Normal level, and saves keep their level and seed. The
+in-game controls are not built yet. They will be the Service alerts panel (`A`, or a bell
+button), the weather chip and news ticker, and the chaos level (Off / Calm / Normal / Wild) in
+the menu. In the scripts, `chaos=` and `seed=` set the level and seed.
+
 ## Architecture
 
 ```
 src/
   balance.ts      every tunable number (SI units inside; the UI shows miles/mph or km), per-city overrides in CITY_BALANCE
   cities/         New York and London: regions, goals, copy, naming style; applyCity() switches everything
-  core/           geo (local metres around City Hall), calendar (weekdays only), units, game state, goals
+  core/           geo (local metres around City Hall), calendar (weekdays only), city chaos calendar and weather, units, game state, goals
   data/           world loading, tract index, land mask
   map/            MapLibre style recolouring, network/station/elevated layers, overlays, naming
   construction/   track graph with arc fillets, levels and ramps, validation and costs, tools
   routes/         route pathfinding on track, compilation for the sim, fleet sizing, route tool
   trains/         kinematics (run profiles), interpolated train layer
-  sim/            worker, engine, train sim (moving block, merge locks), commuters, mode choice, transit graph
+  sim/            worker, engine, train sim (moving block, merge locks), commuters, mode choice, transit graph, city chaos (incidents, event trips)
   economy/        finance: daily settlement, monthly reports, bonds, bankruptcy
   ui/             app shell, panels, charts, tutorial, menus
   save/           save format, migrations, IndexedDB store, export and import
 scripts/          data pipeline, headless sim, balance tuning, performance check
-tests/            Vitest unit tests and the headless simulation test
+tests/            Vitest unit tests and the headless simulation tests
 ```
 
 Each city is a `CityConfig` (`src/cities/`: regions, chart areas, goals, tutorial copy, naming
@@ -114,20 +120,26 @@ at game start on the main thread, at init in the worker, and first thing in scri
 The worker steps a fixed 2 s game timestep in 14 ms slices and posts compact snapshots about
 10 times per second: train positions and loads, platform queues and live counters. The main
 thread interpolates train positions between snapshots. Agents are never saved. A save stores
-the network, routes, finances, goals and the day's mode shares and observations, and the
-commuters are rebuilt from the data when the save is loaded.
+the network, routes, finances, goals, the day's mode shares and observations, and the city chaos
+level, seed and planned event service (save format v3). The commuters are rebuilt from the data
+when the save is loaded.
 
 ## Testing each part
 
 ```bash
-npm test                 # all 42 tests (unit + headless, both cities)
-npm run test:unit        # geometry, costs, ramps, water, pathfinding, logit, kinematics, economy
-npm run test:headless    # 3 days on the test network: plausible numbers, no deadlocks, finite money
+npm test                 # all 80 tests (unit + headless, both cities)
+npm run test:unit        # geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+                         # chaos (calendar, weather, incidents, train-sim hooks, event trips, save v3)
+npm run test:headless    # 3 days on the test network, plus chaos end to end (closures, event agents,
+                         # determinism, snow, breakdowns, Off is inert, a London venue event)
 npm run sim -- days=3    # headless run of the test network, with a daily summary
+npm run sim -- days=3 chaos=normal           # the same with city chaos: weather, incidents and events per day
 npm run balance -- scenario=core days=12     # ~40-station core: ridership and daily money
 npm run balance -- scenario=sprawl days=8    # low-density sprawl: should lose money
 npm run balance -- city=london scenario=core days=12   # the same for London (43 stations)
+npm run balance -- scenario=core days=12 chaos=normal  # chaos=off|calm|normal|wild, seed=N, money=1
 npm run perf             # 300 stations / 25 routes / ~430 trains: times one peak game-hour
+npm run perf -- chaos=wild weather=snow outdoor=1      # worst case: Wild, full snow, every track outdoor
 ```
 
 To check each milestone by hand in `npm run dev`:
@@ -227,8 +239,137 @@ about 5× headroom. Building paths for every tract pair takes about 0.5 s. In th
 worker holds a sim rate of 3600 game seconds per real second (60×). Per-frame main-thread work
 (train interpolation and layer rebuild) is about 1 ms.
 
+## City chaos
+
+Every weekday the city throws something at the network: special events at real venues,
+disruptions and weather. Each one goes through mechanics the sim already has:
+- train speeds and dwell times;
+- boarding and platform queues;
+- walking and driving times.
+
+So it shows up in observed door-to-door times and crowding, and in the next day's mode choice.
+The design is `docs/v2/events-chaos.md` (its top section has the implementation notes). The
+simulation side is done; the UI (Service alerts panel, ticker, map markers, event service editor)
+comes next.
+
+**Determinism.** Everything comes from the game's chaos seed:
+- the event calendar, the weather and its one-day forecast, and the incident plan are pure
+  functions of `(seed, day, level)`, computed identically on the main thread and in the worker
+  (`src/core/cityCalendar.ts`, `src/sim/incidents.ts`);
+- event-goers are drawn from a stream per event.
+
+The commuter RNG is never touched. With chaos **Off** the simulation is bit-identical to the
+code before chaos: the same `DayReport`s, finances and mode shares, checked by hashing the
+headless and balance runs. Headless runs and scripts default to Off. A save stores the level,
+the seed and the planned event service, and a load mid-day replans the rest of the day from
+the seed.
+
+| Level | Incidents | Weather | Events |
+|---|---|---|---|
+| Off | none | always clear | none |
+| Calm | ×0.5 | normal | normal |
+| Normal (new games) | ×1 | normal | normal |
+| Wild | ×2.5 | chances ×1.5 | chances ×1.25 |
+
+A level change takes effect at the next 3 am.
+
+### Incidents
+
+They fire between 05:30 and 23:30, without warning, at rates set by the network's exposure. On
+the ~40-station core that is about 7–9 a day at Normal and about 21 at Wild.
+
+| Kind | Rate (Normal) | Lasts | What happens |
+|---|---|---|---|
+| Signal problem | 1 per 50 directed-track km a day | 15–60 min | an 800 m stretch of one track is limited to 15 km/h; trains bunch behind it |
+| Train breakdown | 1 per 10,000 planned train-km | 5–20 min | a running train brakes hard and stalls; the moving block queues followers |
+| Sick passenger | 1 per 12,000 train-km | 3–8 min | the train is held at its next stop (never at a terminal) |
+| Police activity | 0.02 per station a day, busy stations likelier | 10–40 min | the station closes. Trains run through, and riders for it get off at the next stop and walk back. People waiting come back when it reopens if that is within 15 min; otherwise they take a cab |
+
+The deadlock watchdog ignores stall time while an incident is active. There is no separate
+incident cost: it shows up as lost fares, crowding, give-ups and the next day's choices.
+
+### Weather
+
+Weather is drawn per day. A snow or heat spell can carry over to the next day at 80% of its
+strength. Severity is between 0.5 and 1, and effects scale linearly with it (0.85 and above is
+"Heavy snow", "Heavy rain" or "Heat wave"). At full severity:
+
+| | Walking | Walk penalty | Road speed | Elevated and at-grade trains | Dwell | Crowding felt | Incident rates |
+|---|---|---|---|---|---|---|---|
+| Rain | −8% | +8 min | −15% | — | +5% | +10% | signal ×1.5, breakdown ×1.1, police ×0.8 |
+| Snow | −25% | +15 min | −40% | ≤ 55% of top speed (≈ 50 km/h) | +15% | +10% | signal ×2, breakdown ×1.5, police ×0.7 |
+| Heat | −10% | +6 min | −5% | ≤ 85% of top speed | +5% | +35% | signal ×1.3, breakdown ×2, sick ×2.5, police ×1.2 |
+
+Mode choice at 3 am uses the day's walking and driving costs, and the day's walks, drives and cab
+fallbacks take the slower times. The report's baseline commute is the no-subway commute under the
+same weather, so a snow day doesn't look like the subway made things worse.
+
+| Climate (Normal, weekdays a year) | Snow | Rain | Heat |
+|---|---|---|---|
+| New York | ≈ 12 (Dec–Mar) | ≈ 22 | ≈ 10 (May–Sep) |
+| London | ≈ 2.5 (Dec–Mar) | ≈ 33 | ≈ 2.6 (Jun–Sep) |
+
+### Special events
+
+Events come from a seeded calendar, at most one per venue a day, announced 3 days ahead (5 for a
+parade). The labels are generic and use no trademarks. On the day:
+- fans are drawn from the city's residents, weighted towards the venue
+  (`exp(−distance / 12 km)`);
+- they choose walking, driving (plus the venue's parking time and cost) or transit (one
+  Dijkstra from the venue);
+- the transit fans become agents for that day only (a pool of up to 200,000 people). They pay
+  fares, crowd trains and platforms, and are removed at the next 3 am.
+
+Event service (temporary headway overrides on chosen routes) works in the sim. Overrides planned
+before 3 am also raise the share of fans who come by transit.
+
+| City | Venues and events (weekday chances in season) |
+|---|---|
+| New York (≈ 1.1 a weekday) | Bronx and Queens ballpark games (Apr–Sep); Midtown and Brooklyn arena games (Oct–Apr) and concerts; Flushing tennis open (26 Aug – 8 Sep); Downtown parade (rare); Central Park summer concerts; Coney Island fireworks (Fridays, Jun–Aug) |
+| London (≈ 0.6 a weekday) | Wembley stadium match (international windows) and concerts (summer); Stratford stadium match, North London football (Holloway) and Tottenham football on midweek evenings, Aug–May; Greenwich arena concerts; Twickenham rugby (Friday nights, Feb, Mar and Nov); Wimbledon tennis fortnight (24 Jun – 7 Jul); Oval cricket test match (late Aug); Hyde Park summer concerts; Whitehall parade (rare) |
+
+### Balance impact (headless, agent scale 10, 12 days from 7 Jan 2030)
+
+| Scenario | Off | Normal (seed 2030) | Normal (seeds 1–6) | Wild (seed 2030) |
+|---|---|---|---|---|
+| NYC core: day-11 riders | 1.333M | 1.374M (+3.1%) | +0.3% … +1.5% | 1.354M (+1.6%) |
+| NYC core: operating result, days 8–11 | +$1.32M/day | +$1.52M/day | +$1.35 … +$1.43M/day | +$1.48M/day |
+| London core: day-11 riders | 761k | 766k (+0.7%) | −0.1% … +1.3% | 769k (+1.1%) |
+| London core: operating result, days 8–11 | −£0.32M/day | −£0.28M/day | −£0.31 … −£0.29M/day | −£0.23M/day |
+| Sprawl, days 0–7 | NYC −$0.81 … −0.84M; London −£0.59 … −0.62M | NYC −$0.75 … −0.84M; London −£0.58 … −0.62M | | |
+
+There were 0 deadlocks in every run.
+- Snow days are ridership days. Walking and driving get much worse, so mode choice tips towards
+  the subway. Seed 2030 gives New York five snow days in its first twelve (it is January), which
+  is why it sits above the other seeds.
+- Incidents cost lateness and give-ups: at Wild (seed 2030), give-ups on days 8–11 were 3–6× those
+  at Off.
+- Events add fans only where a station is within 1.5 km of the venue. The New York core reaches
+  the Midtown and Brooklyn arenas, the parade route and Central Park: about 4–12k fans a day by
+  transit, averaged over a run. The London core reaches the Greenwich arena, Stratford, the Oval,
+  Hyde Park and Whitehall.
+
+### Performance with chaos
+
+On the perf network, timing the peak game-hour (minimum of 5 interleaved runs on this shared
+machine, where the code before chaos measures 235 ms rather than 190):
+
+| Run | Peak hour |
+|---|---|
+| Off | 227 ms |
+| Normal | 242 ms |
+| `chaos=wild weather=snow outdoor=1` | 301 ms |
+
+The last run has every route treated as outdoor in full snow, so 378 trains run at once instead
+of 311. The 3 am event injection takes 2–8 ms for a typical event and 22–57 ms for a four-event
+day with a 150,000-person parade. The first snow day adds a one-off ~150 ms to the 3 am step,
+because the weather baseline is cached per kind and severity.
+
 ## Known issues
 
+- City chaos has no UI yet. Its alerts, daily info and event service are fully exposed by the
+  worker, client and game state, but new browser games run at Normal without the Service alerts
+  panel, ticker or map markers that explain what is happening.
 - London uses 2011 census flows, because the 2021 census was taken in lockdown. Its commuter
   totals are 2011's, and its earnings bands are modelled from area income rather than measured.
 

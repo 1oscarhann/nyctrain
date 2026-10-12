@@ -10,6 +10,8 @@
   --green: #4cd08a;
   --amber: #ffc24a;
   --red: #ff5d5d;
+  /* City chaos: events are lavender everywhere (ticker, cards, venue markers). */
+  --event: #c9a0ff;
   --harbour: #1e3a4c;
   --slate: #2b3138;
   --radius: 10px;
@@ -609,6 +611,12 @@ table.freq select {
 .toast.red {
   border-left-color: var(--red);
 }
+.toast.event {
+  border-left-color: var(--event);
+}
+.toast.link {
+  cursor: pointer;
+}
 .toast .t {
   font-weight: 700;
 }
@@ -763,4 +771,392 @@ table.freq select {
 }
 input[type='range'] {
   accent-color: var(--amber);
+}
+input[type='checkbox'] {
+  accent-color: var(--amber);
+}
+
+/* ---------------------------------------------------------------- city chaos: top bar */
+.tb-stat.tb-weather {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 4px 8px;
+  margin: 0 -8px;
+  border-radius: 6px;
+  outline: none;
+}
+.tb-weather:hover,
+.tb-weather:focus-visible {
+  background: rgba(231, 235, 239, 0.06);
+}
+.tb-weather-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.tb-weather-icon svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+.tb-weather[data-kind='clear'] .tb-weather-icon,
+.weather-card[data-kind='clear'] .weather-icon {
+  color: var(--amber);
+}
+.tb-weather[data-kind='rain'] .tb-weather-icon,
+.weather-card[data-kind='rain'] .weather-icon {
+  color: #7fb6f2;
+}
+.tb-weather[data-kind='snow'] .tb-weather-icon,
+.weather-card[data-kind='snow'] .weather-icon {
+  color: #dde9f4;
+}
+.tb-weather[data-kind='heat'] .tb-weather-icon,
+.weather-card[data-kind='heat'] .weather-icon {
+  color: #ff8a5c;
+}
+.tb-ticker-slot {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.ticker {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgba(231, 235, 239, 0.035);
+  border: 1px solid var(--panel-line);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+}
+.ticker-track {
+  display: inline-flex;
+  height: 100%;
+  align-items: center;
+  white-space: nowrap;
+}
+.ticker-track.scrolling {
+  animation: ticker-scroll linear infinite;
+  will-change: transform;
+}
+.ticker:hover .ticker-track {
+  animation-play-state: paused;
+}
+@keyframes ticker-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.ticker-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 24px 0 14px;
+}
+.ticker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ticker-item:hover {
+  color: #fff;
+  text-decoration: underline;
+  text-decoration-color: rgba(231, 235, 239, 0.35);
+  text-underline-offset: 3px;
+}
+.ticker-quiet,
+.ticker-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.ticker-more {
+  font-weight: 700;
+}
+.ticker .dot,
+.alert-row .dot,
+.alert-empty .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--muted);
+}
+.ticker-quiet .dot,
+.alert-empty .dot,
+.tone-green > .dot {
+  background: var(--green);
+}
+.tone-red > .dot {
+  background: var(--red);
+  box-shadow: 0 0 0 3px rgba(255, 93, 93, 0.22);
+}
+.tone-amber > .dot {
+  background: var(--amber);
+}
+.tone-event > .dot {
+  background: var(--event);
+}
+@media (max-width: 1180px) {
+  .ticker {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track {
+    animation: none !important;
+  }
+}
+
+/* ---------------------------------------------------------------- city chaos: toolbar bell */
+.tool-btn .badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--red);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 17px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--panel-solid);
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- city chaos: Service alerts */
+.alert-card {
+  border: 1px solid var(--panel-line);
+  border-left: 3px solid var(--muted);
+  background: rgba(231, 235, 239, 0.035);
+  border-radius: 6px;
+  padding: 7px 9px;
+  margin: 6px 0;
+  cursor: pointer;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.alert-card:hover {
+  background: rgba(231, 235, 239, 0.06);
+}
+.alert-card.tone-red {
+  border-left-color: var(--red);
+}
+.alert-card.tone-amber {
+  border-left-color: var(--amber);
+}
+.alert-card.tone-green {
+  border-left-color: var(--green);
+}
+.alert-card.tone-event {
+  border-left-color: var(--event);
+}
+.alert-card.focus {
+  outline: 1.5px solid rgba(255, 194, 74, 0.75);
+  outline-offset: 1px;
+}
+.alert-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.alert-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  font-size: 13px;
+}
+.alert-when {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.alert-detail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  color: var(--muted);
+}
+.alert-detail .grow {
+  flex: 1;
+  min-width: 0;
+}
+.alert-routes {
+  display: inline-flex;
+  gap: 3px;
+}
+.alert-routes:empty {
+  display: none;
+}
+.weather-card {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: default;
+}
+.weather-card:hover {
+  background: rgba(231, 235, 239, 0.035);
+}
+.weather-icon svg {
+  width: 26px;
+  height: 26px;
+  display: block;
+}
+.alert-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  padding: 4px 2px;
+}
+.alert-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.alert-row:hover {
+  background: rgba(231, 235, 239, 0.05);
+}
+.alert-row.focus {
+  background: rgba(255, 194, 74, 0.1);
+}
+.alert-row .grow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ev-line {
+  margin-top: 3px;
+}
+.ev-serving {
+  white-space: nowrap;
+}
+.ev-serving .bullet {
+  margin-left: 2px;
+  vertical-align: -3px;
+}
+.ev-outcome {
+  color: var(--green);
+}
+.ev-service {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 12.5px;
+}
+.ev-service .grow {
+  flex: 1;
+  min-width: 0;
+}
+.ev-service > svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--event);
+}
+.ev-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.ev-actions .hw-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.svc-editor {
+  margin-top: 8px;
+  padding: 8px 9px;
+  border-radius: 6px;
+  background: rgba(10, 13, 17, 0.4);
+  border: 1px solid var(--panel-line);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  cursor: default;
+}
+.svc-editor select {
+  height: 26px;
+  font-size: 12px;
+  padding: 0 4px;
+}
+.svc-title {
+  font-weight: 700;
+}
+.svc-title .hw-muted {
+  font-weight: 400;
+  font-size: 11.5px;
+}
+.svc-routes {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 156px;
+  overflow-y: auto;
+}
+.svc-route {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.svc-route:hover {
+  background: rgba(231, 235, 239, 0.05);
+}
+.svc-route .grow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.svc-est {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.svc-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.svc-row .grow {
+  flex: 1;
+}
+.chaos-level {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }

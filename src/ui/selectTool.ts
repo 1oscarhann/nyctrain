@@ -1,5 +1,6 @@
 /**
  * Default tool: click a station, train, track or tract to inspect it; hover for quick info.
+ * City chaos markers (incidents, event venues) are picked first and open Service alerts.
  */
 import { TRACK } from '../balance';
 import { pickEdge } from '../construction/pick';
@@ -16,6 +17,11 @@ export class SelectTool implements Tool {
 
   move(p: Pointer): void {
     const app = this.app;
+    const chaos = app.chaosTip(p.px);
+    if (chaos) {
+      app.tip(chaos, p.px);
+      return;
+    }
     const train = app.view.pick(p.px, ['trains']);
     if (train !== null) {
       const t = app.trains.data.find((d) => d.id === train);
@@ -42,6 +48,11 @@ export class SelectTool implements Tool {
 
   click(p: Pointer): void {
     const app = this.app;
+    // City chaos markers first: an incident, then a venue opens Service alerts focused on it.
+    const incident = app.view.pick(p.px, ['chaos-incidents']);
+    if (incident !== null) return app.game.select({ kind: 'alerts', focus: incident });
+    const venue = app.view.pick(p.px, ['chaos-venues']);
+    if (venue !== null) return app.game.select({ kind: 'alerts', event: venue });
     const train = app.view.pick(p.px, ['trains']);
     if (train !== null) return app.game.select({ kind: 'train', id: train });
     const sid = app.stations.pick(p.x, p.y, app.tol(10));

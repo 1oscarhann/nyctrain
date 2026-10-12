@@ -1,12 +1,15 @@
 /**
  * Balance tuning: build scenario networks in code, run them to near-equilibrium and report
- * ridership and daily money.  npm run balance [-- city=nyc|london scenario=core|sprawl|test days=8 scale=10]
- * (scenario=test is New York only)
+ * ridership and daily money.  npm run balance [-- city=nyc|london scenario=core|sprawl|test days=8 scale=10
+ * chaos=off|calm|normal|wild seed=2030 money=1]
+ * (scenario=test is New York only; chaos defaults to off, which reproduces v1 exactly; with chaos on,
+ * or money=1, each day also shows its operating result)
  */
 import { loadLandFromDisk, loadWorldFromDisk } from './nodeData';
 import { buildTestNetwork, createHeadlessGame, drawLine, makeRoute, runDays, stationNear } from '../src/sim/headless';
 import type { Game } from '../src/core/game';
-import { COMMUTERS, ECONOMY, type TrackLevel } from '../src/balance';
+import { CHAOS, COMMUTERS, ECONOMY, type ChaosLevel, type TrackLevel } from '../src/balance';
+import { weatherLabel } from '../src/core/cityCalendar';
 import { annuityPayment } from '../src/economy/finance';
 import { edgeReport } from '../src/construction/validate';
 import { fmtMoney } from '../src/core/units';
@@ -297,9 +300,12 @@ if (args.theta) COMMUTERS.logitScale = Number(args.theta);
 const scenario = (args.scenario ?? 'core') as string;
 const days = Number(args.days ?? 8);
 const scale = Number(args.scale ?? 10);
+const chaos = (args.chaos ?? 'off') as ChaosLevel;
+if (!CHAOS.levels.includes(chaos)) throw new Error(`Unknown chaos level ${chaos}`);
+const chaosSeed = Number(args.seed ?? CHAOS.defaultSeed);
 
 // Built in sandbox so the scenario never runs out of money; the ledger still records every cost.
-const game = createHeadlessGame(loadWorldFromDisk(), loadLandFromDisk(), { sandbox: true });
+const game = createHeadlessGame(loadWorldFromDisk(), loadLandFromDisk(), { sandbox: true, chaos, chaosSeed });
 let stopsets: Record<string, number[]> = {};
 if (scenario === 'test' && cityId !== 'nyc') throw new Error('scenario=test is the New York test network; use core or sprawl for London');
 if (scenario === 'test') {
@@ -346,7 +352,19 @@ const last = run.reports[run.reports.length - 1];
 const f = game.finance.history[game.finance.history.length - 1];
 const debtService = (annuityPayment(debtNeeded, ECONOMY.bondRate, ECONOMY.bondYears) * 12) / ECONOMY.daysPerYear;
 const interest = (debtNeeded * ECONOMY.bondRate) / ECONOMY.daysPerYear;
-for (const r of run.reports) console.log(`  day ${r.day}: riders ${Math.round(r.riders).toLocaleString()} · share ${(r.transitShare * 100).toFixed(1)}% · commute ${r.avgCommute.toFixed(1)} (base ${r.baselineCommute.toFixed(1)}) · late ${r.avgLateness.toFixed(0)}s · left ${Math.round(r.leftBehind).toLocaleString()} · gaveup ${Math.round(r.gaveUp).toLocaleString()} · dl ${r.deadlocks}`);
+// With chaos on, each day also shows the weather, incidents and event fans by transit.
+const chaosLine = (r: (typeof run.reports)[number]) => {
+  if (chaos === 'off' || !r.chaos) return '';
+  const inc = Object.values(r.chaos.incidents).reduce((a, b) => a + b, 0);
+  const fans = r.chaos.events.reduce((a, e) => a + e.byTransit, 0);
+  return ` · ${weatherLabel(r.chaos.weather)} · inc ${inc} · events ${r.chaos.events.length} (${Math.round(fans).toLocaleString()} by transit)`;
+};
+const finByDay = new Map(game.finance.history.map((h) => [h.day, h]));
+const moneyLine = (day: number) => {
+  const h = finByDay.get(day);
+  return (chaos === 'off' && !args.money) || !h ? '' : ` · op ${fmtMoney(h.revenue - h.operating - h.staffing - h.maintenance, { sign: true })}`;
+};
+for (const r of run.reports) console.log(`  day ${r.day}: riders ${Math.round(r.riders).toLocaleString()} · share ${(r.transitShare * 100).toFixed(1)}% · commute ${r.avgCommute.toFixed(1)} (base ${r.baselineCommute.toFixed(1)}) · late ${r.avgLateness.toFixed(0)}s · left ${Math.round(r.leftBehind).toLocaleString()} · gaveup ${Math.round(r.gaveUp).toLocaleString()} · dl ${r.deadlocks}${chaosLine(r)}${moneyLine(r.day)}`);
 const opCost = f.operating + f.staffing + f.maintenance;
 console.log(`last day: revenue ${fmtMoney(f.revenue)} · operating ${fmtMoney(f.operating)} (${Math.round(f.carKm).toLocaleString()} car-km) · staffing ${fmtMoney(f.staffing)} · maintenance ${fmtMoney(f.maintenance)}`);
 console.log(`  operating result ${fmtMoney(f.revenue - opCost, { sign: true })}/day · after bond interest ${fmtMoney(f.revenue - opCost - interest, { sign: true })}/day · after full debt service ${fmtMoney(f.revenue - opCost - debtService, { sign: true })}/day`);

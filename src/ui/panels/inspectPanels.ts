@@ -2,7 +2,7 @@
 import { city } from '../../cities';
 import { TRAINS } from '../../balance';
 import { edgeTooltip } from '../../construction/describe';
-import { fmtCount, fmtDensity, fmtSpeed } from '../../core/units';
+import { fmtClock, fmtCount, fmtDensity, fmtSpeed } from '../../core/units';
 import type { App } from '../app';
 import { bullet, h } from '../dom';
 import { kv, section, shareBar, shell, SHARE_COLORS, statCard, type Panel } from './common';
@@ -26,7 +26,19 @@ export function trainPanel(app: App, id: number): Panel {
     const people = t.load * app.agentScale;
     const lf = people / r.capComfort;
     sh.titleEl.replaceChildren(bullet(r.color, r.bullet, 22), ' ', `${r.name}`);
+    // City chaos: stalled (breakdown) or held at a station (sick passenger).
+    const inc = app.feed.activeFor({ trainId: id });
+    const banner = inc
+      ? h(
+          'div',
+          { class: inc.kind === 'breakdown' ? 'err' : 'warn', style: 'cursor:pointer', onclick: () => app.game.select({ kind: 'alerts', focus: inc.id }) },
+          inc.kind === 'breakdown'
+            ? `Stalled: mechanical problem, moving again ~${fmtClock(inc.until)}`
+            : `Held at ${inc.place}: sick passenger, ~${Math.max(1, Math.round((inc.until - app.sim.time()) / 60))} min`,
+        )
+      : null;
     body.replaceChildren(
+      banner ?? '',
       h('div', { class: 'hw-muted', style: 'margin-bottom:8px' }, `Towards ${terminal}`),
       h(
         'div',

@@ -2,6 +2,7 @@
  * Save migrations: each step upgrades a save by one version, so any old save can be brought up
  * to date by running the steps in order.
  */
+import { CHAOS } from '../balance';
 import { isCityId } from '../cities';
 import { SAVE_VERSION, type SaveFile } from './format';
 
@@ -19,6 +20,14 @@ const STEPS: Record<number, (s: AnySave) => AnySave> = {
     s.version = 2;
     return s;
   },
+  // v2 → v3: city chaos (events, disruptions, weather). Defaults only, so it is idempotent.
+  2: (s) => {
+    const game = (s.game ?? {}) as Record<string, unknown>;
+    game.chaos ??= { level: CHAOS.defaultLevel, seed: CHAOS.defaultSeed, service: [], nextServiceId: 1 };
+    s.game = game;
+    s.version = 3;
+    return s;
+  },
 };
 
 export class SaveError extends Error {}
@@ -28,6 +37,7 @@ export function migrate(raw: unknown): SaveFile {
   let s = raw as AnySave;
   if (s.format !== 'headway-ny') throw new SaveError('Not a Headway save');
   let v = Number(s.version ?? 1);
+  const from = v;
   if (v > SAVE_VERSION) throw new SaveError(`This save is from a newer version of the game (v${v})`);
   while (v < SAVE_VERSION) {
     const step = STEPS[v];
@@ -41,5 +51,6 @@ export function migrate(raw: unknown): SaveFile {
   if (f.city === undefined) f.city = 'nyc';
   if (!isCityId(f.city)) throw new SaveError(`Unknown city "${String(f.city)}"`);
   if (f.meta) f.meta.city = f.city;
+  if (from < SAVE_VERSION) f.migratedFrom = from;
   return f;
 }

@@ -40,7 +40,16 @@ export class StationLayers {
   private data: StationDatum[] = [];
   private pills: PillDatum[] = [];
   stats = new Map<number, StationStat>();
+  /** Stations closed by an incident (police activity): red outline, "· CLOSED" label. */
+  closed = new Set<number>();
   private version = 0;
+
+  /** Replace the closed set (from the active alerts). */
+  setClosed(ids: Set<number>): void {
+    if (ids.size === this.closed.size && [...ids].every((id) => this.closed.has(id))) return;
+    this.closed = ids;
+    this.version++;
+  }
 
   constructor(private game: Game) {}
 
@@ -138,21 +147,21 @@ export class StationLayers {
         radiusUnits: 'pixels',
         stroked: true,
         getFillColor: (d) => (d.status === 'blueprint' ? [255, 255, 255, 120] : [255, 255, 255, 255]),
-        getLineColor: (d) => (d.status === 'construction' ? [255, 194, 74, 255] : d.status === 'blueprint' ? [255, 255, 255, 160] : [22, 27, 33, 255]),
-        getLineWidth: (d) => (d.status === 'construction' ? 3 : 2),
+        getLineColor: (d) => (this.closed.has(d.id) ? [255, 93, 93, 255] : d.status === 'construction' ? [255, 194, 74, 255] : d.status === 'blueprint' ? [255, 255, 255, 160] : [22, 27, 33, 255]),
+        getLineWidth: (d) => (d.status === 'construction' || this.closed.has(d.id) ? 3 : 2),
         lineWidthUnits: 'pixels',
         pickable: true,
         parameters: DEPTH_OFF,
-        updateTriggers: { getFillColor: this.version, getLineColor: this.version, getRadius: this.version, getPosition: this.version },
+        updateTriggers: { getFillColor: this.version, getLineColor: this.version, getLineWidth: this.version, getRadius: this.version, getPosition: this.version },
       }),
       showLabels &&
         new TextLayer<StationDatum>({
           id: 'station-labels',
           data: this.data,
           getPosition: (d) => d.pos,
-          getText: (d) => (d.status === 'construction' ? `${d.name} · ${Math.floor(d.progress * 100)}%` : d.name),
+          getText: (d) => (d.status === 'construction' ? `${d.name} · ${Math.floor(d.progress * 100)}%` : this.closed.has(d.id) ? `${d.name} • CLOSED` : d.name),
           getSize: 12.5,
-          getColor: (d) => (d.status === 'blueprint' ? [231, 235, 239, 150] : [231, 235, 239, 255]),
+          getColor: (d) => (d.status === 'blueprint' ? [231, 235, 239, 150] : this.closed.has(d.id) ? [255, 93, 93, 255] : [231, 235, 239, 255]),
           getPixelOffset: (d) => [d.radius + 6, 0],
           getTextAnchor: 'start',
           getAlignmentBaseline: 'center',

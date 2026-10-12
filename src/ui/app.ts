@@ -6,11 +6,12 @@
 import { ArcLayer, ScatterplotLayer, TextLayer, PathLayer } from '@deck.gl/layers';
 import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
 import type { Layer } from '@deck.gl/core';
-import { COMMUTERS, ECONOMY, TIME, type TrackLevel } from '../balance';
-import { Game, type Selection } from '../core/game';
+import { CHAOS, COMMUTERS, ECONOMY, TIME, type ChaosLevel, type TrackLevel } from '../balance';
+import { city, cityBalance } from '../cities';
+import { Game, newChaosSeed, type Selection } from '../core/game';
 import { toLonLat } from '../core/geo';
 import { dayIndex, isNewMonth, SECONDS_PER_DAY, timeOfDay } from '../core/calendar';
-import { fmtDensity, fmtFare, fmtMoney, setUnits } from '../core/units';
+import { fmtCount, fmtDensity, fmtFare, fmtMoney, setUnits } from '../core/units';
 import { checkGoals, emptyGoals, goalTitle, type GoalState } from '../core/goals';
 import { LandMask } from '../data/landMask';
 import { TractIndex, type LandCollection, type World } from '../data/world';
@@ -25,11 +26,12 @@ import { NetworkLayers, lineScale, type RouteDrawInfo } from '../map/networkLaye
 import { StationLayers } from '../map/stationLayers';
 import { Elevated3D } from '../map/elevated3d';
 import { Overlays, crowdColor, type FlowLine, type OverlayMode } from '../map/overlays';
+import { ChaosLayers } from '../map/chaosLayers';
 import { nameStationAt } from '../map/naming';
 import { compileNetwork, type CompileResult } from '../routes/compile';
 import { RouteTool } from '../routes/routeTool';
 import { SimClient } from '../sim/client';
-import type { CRoute, DayReport, ModeState, Snapshot } from '../sim/protocol';
+import type { Alert, CRoute, DayReport, ModeState, ServiceOverride, Snapshot } from '../sim/protocol';
 import { TrainLayer, samplePath } from '../trains/trainLayer';
 import { buildSave, applySave } from '../save/serialize';
 import type { SaveFile, SaveSettings } from '../save/format';
@@ -49,6 +51,8 @@ import { routeEditor, routePanel, routesList } from './panels/routePanel';
 import { edgePanel, tractPanel, trainPanel } from './panels/inspectPanels';
 import { financePanel } from './panels/financePanel';
 import { goalsPanel } from './panels/goalsPanel';
+import { alertsPanel } from './panels/alertsPanel';
+import { AlertFeed, describeAlert, eventWhen, fmtK, isIncident, LEVEL_HINT, LEVEL_LABEL, plainDetail, type RouteRef } from './alertFeed';
 import { openMenu } from './menu';
 import { Tutorial } from './tutorial';
 import { showGameOver, showMonthReport } from './reports';
@@ -56,6 +60,8 @@ import { showGameOver, showMonthReport } from './reports';
 export interface AppOptions {
   sandbox: boolean;
   save: SaveFile | null;
+  /** City chaos level for a new game (default CHAOS.defaultLevel; a save keeps its own). */
+  chaos?: ChaosLevel;
   settings: SaveSettings;
   tutorial: boolean;
   /** Return to the title screen. */
@@ -65,6 +71,7 @@ export interface AppOptions {
 }
 
 const DEPTH = { depthCompare: 'always', depthWriteEnabled: false } as const;
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 const offsetExt = new PathStyleExtension({ offset: true });
 
 interface CrowdSeg {
@@ -96,6 +103,12 @@ export class App implements AppContext {
   readonly toolbar: Toolbar;
   readonly blueprintBar: BlueprintBar;
   readonly side: HTMLElement;
+  /** City chaos: alerts, today's info and announced events; markers on the map. */
+  readonly feed: AlertFeed;
+  readonly chaosLayers = new ChaosLayers();
+  private chaosAnim: (() => void) | null = null;
+  private lastIncidentToast = -Infinity;
+  private focusEvent: number | null = null;
   private panel: Panel | null = null;
   compiled: CompileResult | null = null;
   private compiledByVersion = new Map<number, CompileResult>();
@@ -146,7 +159,12 @@ export class App implements AppContext {
       modeState = r.modeState;
       this.lastModeState = r.modeState ?? null;
       this.tutorialDone = r.tutorialDone || !opts.tutorial;
+    } else {
+      // A new game draws its own city chaos seed (calendar, weather and incidents derive from it).
+      this.game.chaos.seed = newChaosSeed();
+      if (opts.chaos) this.game.chaos.level = opts.chaos;
     }
+    this.feed = new AlertFeed(this.game);
 
     // ---- UI chrome
     this.tooltip = new Tooltip(root);
@@ -189,9 +207,11 @@ export class App implements AppContext {
     view.addLayers('overlays', () => this.overlays.layers());
     view.addLayers('crowding', () => this.crowdLayers());
     view.addLayers('elevated', () => this.elevated.layers(this.network, view.is3D, view.map.getZoom()));
+    view.addLayers('venues', () => this.chaosLayers.venueLayers(view.map.getZoom()));
     view.addLayers('flows', () => this.flowLayers());
     view.addLayers('trains', () => this.trainLayers());
     view.addLayers('stations', () => this.stations.layers(view.map.getZoom(), performance.now()));
+    view.addLayers('incidents', () => this.chaosLayers.incidentLayers(performance.now()));
     view.addLayers('construction', () => this.constructionLabels());
     view.addLayers('tool', () => this.tools.layers());
 
@@ -205,6 +225,10 @@ export class App implements AppContext {
     });
     g.events.on('toast', (t) => this.toast(t.title, t.body, t.tone));
     g.events.on('select', (sel) => this.onSelect(sel));
+    g.events.on('chaos', () => {
+      this.feed.touch();
+      this.refreshChaos();
+    });
     view.events.on('view3d', () => this.scheduleRender());
     this.sim.events.on('ready', (r) => {
       this.baseline = r.baseline;
@@ -215,8 +239,21 @@ export class App implements AppContext {
     this.sim.events.on('busy', (l) => this.busy.set(l));
     this.sim.events.on('event', (e) => this.toast(e.title, e.body, e.tone));
     this.sim.events.on('error', (m) => this.toast('Simulation error', m, 'red'));
+    this.sim.events.on('alert', (a) => this.onAlert(a));
+    this.sim.events.on('dayChaos', (info) => {
+      this.feed.setInfo(info);
+      this.refreshChaos();
+    });
 
-    this.sim.init({ agentScale: this.settings.agentScale, seed: this.settings.seed, time: this.game.time, fare: this.game.fare, modeState });
+    this.sim.init({
+      agentScale: this.settings.agentScale,
+      seed: this.settings.seed,
+      time: this.game.time,
+      fare: this.game.fare,
+      modeState,
+      chaos: { level: this.game.chaos.level, seed: this.game.chaos.seed },
+      service: this.game.chaos.service,
+    });
     this.recompile();
     this.render();
     this.tools.set('select');
@@ -234,6 +271,10 @@ export class App implements AppContext {
       }, 250),
     );
     if (!this.tutorialDone) setTimeout(() => this.startTutorial(), 600);
+    // A save from before city chaos: say once what's new.
+    if (opts.save?.migratedFrom !== undefined && opts.save.migratedFrom < 3) {
+      setTimeout(() => this.toasts.show('New: city events, disruptions and weather', 'Change the chaos level in Service alerts (A).', 'green', 9000, () => this.openAlerts()), 1500);
+    }
   }
 
   destroy(): void {
@@ -245,6 +286,7 @@ export class App implements AppContext {
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.intervals.forEach((i) => clearInterval(i));
     this.stopAnim?.();
+    this.chaosAnim?.();
     this.tutorial?.close();
   }
 
@@ -378,6 +420,8 @@ export class App implements AppContext {
   // ------------------------------------------------------------------ sim events
   private onSnapshot(s: Snapshot): void {
     this.game.setTime(s.time);
+    const day = dayIndex(s.time);
+    if (day !== this.feed.day) this.onNewDay(day, s.time);
     this.applyStationStats();
     this.stations.refreshStats();
     if (this.speedIndex < 0) this.view.invalidate();
@@ -430,6 +474,9 @@ export class App implements AppContext {
       return;
     }
     if (g.finance.negativeDays === 1 && !g.sandbox) this.toast('Cash is negative', `Issue a bond or cut costs. ${ECONOMY.bankruptcyDays} days in the red with no bond room means bankruptcy.`, 'red');
+    this.feed.endDay(r.chaos, g.time);
+    // Event service that has ended is dropped before the autosave.
+    g.pruneService(g.time);
     // Autosave at midnight with fresh mode shares.
     this.sim.query<ModeState>({ kind: 'modeState' }).then((ms) => {
       this.lastModeState = ms;
@@ -447,6 +494,7 @@ export class App implements AppContext {
   private onSelect(sel: Selection | null): void {
     this.network.highlight(sel);
     this.tools.refreshXray();
+    this.toolbar.updateAlerts();
     if (this.tools.active?.id === 'route' && sel && sel.kind !== 'route') this.tools.set('select');
     this.refreshPanel();
     this.tutorial?.poke();
@@ -476,6 +524,8 @@ export class App implements AppContext {
         return this.showPanel(goalsPanel(this));
       case 'routes':
         return this.showPanel(routesList(this));
+      case 'alerts':
+        return this.showPanel(alertsPanel(this, sel.focus, sel.event));
     }
   }
 
@@ -700,6 +750,122 @@ export class App implements AppContext {
     this.refreshPanel();
   }
 
+  // ------------------------------------------------------------------ city chaos
+  /** Chaos level for this game; the sim applies it from the next 3 am. */
+  setChaosLevel(level: ChaosLevel): void {
+    this.game.setChaosLevel(level);
+    this.sim.setChaosLevel(level);
+    // Events a new level reveals aren't announcements.
+    this.feed.markSeen();
+    this.toast(`City chaos: ${LEVEL_LABEL[level]} from 3 am`, `${LEVEL_HINT[level]}.`, 'amber');
+  }
+
+  openAlerts(f: { focus?: number; event?: number } = {}): void {
+    this.game.select({ kind: 'alerts', ...(f.focus !== undefined ? { focus: f.focus } : {}), ...(f.event !== undefined ? { event: f.event } : {}) });
+  }
+
+  toggleAlerts(): void {
+    if (this.game.selection?.kind === 'alerts') this.game.select(null);
+    else this.openAlerts();
+  }
+
+  /** Ease the map to a point (local metres), zooming in to at least 13.5. */
+  flyTo(x: number, y: number): void {
+    const map = this.view.map;
+    map.easeTo({ center: toLonLat(x, y), zoom: Math.max(map.getZoom(), 13.5), duration: 700 });
+  }
+
+  /** The event whose venue ring shows on the map (its card is focused), or null. */
+  setFocusEvent(id: number | null): void {
+    if (id === this.focusEvent) return;
+    this.focusEvent = id;
+    this.chaosLayers.setEvents(this.feed.events(), this.feed.day, id);
+    this.view.invalidate();
+  }
+
+  /** Route bullet, colour and name by id (game routes, else the compiled ones). */
+  routeRef = (id: number): RouteRef | undefined => {
+    const r = this.game.routes.get(id);
+    if (r) return { id, bullet: r.bullet, color: r.color, name: r.name };
+    const c = this.compiled?.net.routes.find((x) => x.id === id);
+    return c ? { id, bullet: c.bullet, color: c.color, name: c.name } : undefined;
+  };
+
+  private onAlert(a: Alert): void {
+    const isNew = this.feed.upsert(a) === 'new';
+    this.refreshChaos();
+    if (!isNew) return;
+    if (isIncident(a) && a.status === 'active') {
+      // Incident toasts at 1×/5× (or severity 3), at most one per toastMinGapMs; the ticker and badge always.
+      const t = performance.now();
+      if ((this.speedIndex <= CHAOS.toastMaxSpeedIndex || a.severity === 3) && t - this.lastIncidentToast >= CHAOS.toastMinGapMs) {
+        this.lastIncidentToast = t;
+        const d = describeAlert(a, this.routeRef);
+        this.toasts.show(d.title, `${plainDetail(d)} · ${d.when}`, a.severity === 3 ? 'red' : 'amber', 6000, () => this.openAlerts({ focus: a.id }));
+      }
+    } else if (a.kind === 'event' && a.outcome) {
+      const d = describeAlert(a, this.routeRef);
+      this.toasts.show(d.title, d.detail, 'event', 6000, () => this.openAlerts({ focus: a.id }));
+    }
+  }
+
+  /** First snapshot of a game day: roll the feed, and announce events that just entered the window. */
+  private onNewDay(day: number, now: number): void {
+    const fresh = this.feed.rollDay(day, now);
+    const venues = cityBalance().chaos.venues;
+    for (const ev of fresh.slice(0, 3)) {
+      this.toasts.show(`Announced: ${ev.label}`, `${eventWhen(ev, day)} · ${venues[ev.venue].name} · ${fmtCount(ev.attendance)} expected`, 'green', 6000, () => this.openAlerts({ event: ev.id }));
+    }
+    this.refreshChaos();
+  }
+
+  /** Push the feed to the map (closed stations, alerted trains, markers), the bell and the pulse. */
+  private refreshChaos(): void {
+    const f = this.feed;
+    this.stations.setClosed(f.closedStations());
+    this.trains.setAlerted(f.alertedTrains());
+    this.chaosLayers.setAlerts(f.active());
+    this.chaosLayers.setEvents(f.events(), f.day, this.focusEvent);
+    this.toolbar.updateAlerts();
+    // Markers pulse even while paused.
+    const want = this.chaosLayers.hasIncidents;
+    if (want && !this.chaosAnim) this.chaosAnim = this.view.beginAnimation();
+    else if (!want && this.chaosAnim) {
+      this.chaosAnim();
+      this.chaosAnim = null;
+    }
+    this.view.invalidate();
+  }
+
+  /** Tooltip for an incident or venue marker under the pointer, or null. */
+  chaosTip(px: [number, number]): string | null {
+    const inc = this.view.pick(px, ['chaos-incidents']);
+    const a = inc !== null ? this.feed.get(inc) : undefined;
+    if (a) {
+      const d = describeAlert(a, this.routeRef);
+      return `<div class="title">${esc(d.title)}</div><div class="hw-muted">${esc(plainDetail(d))} · ${esc(d.when)}</div><div class="hw-muted">Click for Service alerts</div>`;
+    }
+    const ven = this.view.pick(px, ['chaos-venues']);
+    const ev = ven !== null ? this.feed.events().find((e) => e.id === ven) : undefined;
+    if (ev) {
+      const by = ev.split && ev.split.byTransit > 0 ? ` · ~${fmtK(ev.split.byTransit)} by ${city().transitWord}` : '';
+      const venue = cityBalance().chaos.venues[ev.venue].name;
+      return `<div class="title">${esc(ev.label)}</div><div class="hw-muted">${esc(venue)} · ${eventWhen(ev, this.feed.day)} · ${fmtCount(ev.attendance)} expected${by}</div><div class="hw-muted">Click for Service alerts</div>`;
+    }
+    return null;
+  }
+
+  /** Plan event service (one override per route and window) and send the full list to the sim. */
+  addEventService(list: Omit<ServiceOverride, 'id'>[]): ServiceOverride[] {
+    const added = list.map((o) => this.game.addService(o));
+    this.sim.setService(this.game.chaos.service);
+    return added;
+  }
+
+  removeEventService(id: number): void {
+    if (this.game.removeService(id)) this.sim.setService(this.game.chaos.service);
+  }
+
   issueBond(): void {
     const b = this.game.finance.issueBond(this.game.day);
     if (!b) this.toast('No bond room left', `The limit is ${fmtMoney(ECONOMY.bondMax)}`, 'red');
@@ -810,6 +976,10 @@ export class App implements AppContext {
       case 'b':
       case 'B':
         this.setTool('bulldoze');
+        break;
+      case 'a':
+      case 'A':
+        this.toggleAlerts();
         break;
       case 'Escape':
         if (this.tools.active?.id !== 'select') {

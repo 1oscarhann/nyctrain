@@ -50,6 +50,8 @@ export interface CityConfig {
   /** Title screen and loading copy. */
   blurb: string;
   people: string;
+  /** What the player's network is called in copy ("by subway", "by metro"). */
+  transitWord: string;
   goals: CityGoal[];
   tutorial: { jobs: string; track: string };
   /** Extra data attribution shown on the map (licence requirements). */

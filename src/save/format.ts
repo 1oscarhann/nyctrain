@@ -7,9 +7,23 @@ import type { FinanceData } from '../economy/finance';
 import type { RouteSetData } from '../routes/routeSet';
 import type { GoalState } from '../core/goals';
 import type { UnitSystem } from '../core/units';
-import type { CityId } from '../balance';
+import type { ChaosLevel, CityId } from '../balance';
+import type { ServiceOverride } from '../sim/protocol';
 
-export const SAVE_VERSION = 2;
+/** v3: city chaos (events, disruptions, weather). */
+export const SAVE_VERSION = 3;
+
+/**
+ * City chaos: the level, the seed (calendar, weather and the incident plan all derive from it) and
+ * the planned event service. Active incidents, alerts and event agents are not saved: a load
+ * replans the rest of the day from the same seed.
+ */
+export interface SavedChaos {
+  level: ChaosLevel;
+  seed: number;
+  service: ServiceOverride[];
+  nextServiceId: number;
+}
 
 export interface SaveSettings {
   units: UnitSystem;
@@ -42,9 +56,12 @@ export interface SaveFile {
     /** Days of history for the top bar after loading. */
     lastReport: unknown | null;
     tutorialDone: boolean;
+    chaos: SavedChaos;
   };
   settings: SaveSettings;
   modeState: SavedModeState | null;
+  /** Set by migrate() (not stored) when the file was older: the version it had. */
+  migratedFrom?: number;
 }
 
 export function f32ToB64(a: Float32Array): string {

@@ -3,7 +3,7 @@
  * start games. Switching city re-applies the city's balance, origin and currency (cities/index.ts)
  * and reloads its data (cached per city).
  */
-import { ECONOMY, MAP, COMMUTERS, type CityId } from '../balance';
+import { CHAOS, ECONOMY, MAP, COMMUTERS, type ChaosLevel, type CityId } from '../balance';
 import { applyCity, CITIES, CITY_IDS, city, cityBalance } from '../cities';
 import { toLonLat } from '../core/geo';
 import { currency, fmtCount, setUnits } from '../core/units';
@@ -15,7 +15,8 @@ import { saveSummary } from '../save/summary';
 import { App } from './app';
 import { h, svgIcon } from './dom';
 import { ICONS } from './icons';
-import { loadLastCity, loadSettings, storeLastCity, storeSettings } from './settings';
+import { loadChaosLevel, loadLastCity, loadSettings, storeChaosLevel, storeLastCity, storeSettings } from './settings';
+import { LEVEL_HINT, LEVEL_LABEL } from './alertFeed';
 import { modal } from './widgets';
 
 let world: World;
@@ -107,7 +108,7 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
     await showTitle(root, await useCityOr(root, id, back));
   };
 
-  const start = async (sandbox: boolean, save: SaveFile | null, tutorial: boolean) => {
+  const start = async (sandbox: boolean, save: SaveFile | null, tutorial: boolean, chaos?: ChaosLevel) => {
     leave();
     let v = view;
     if (save && save.city !== city().id) {
@@ -121,7 +122,7 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
       v.resetFlat();
     }
     v.map.jumpTo({ center: MAP.startCenter, zoom: MAP.startZoom, bearing: 0 });
-    startGame(root, v, { sandbox: save ? save.game.sandbox : sandbox, save, tutorial });
+    startGame(root, v, { sandbox: save ? save.game.sandbox : sandbox, save, tutorial, chaos });
   };
 
   const btn = (label: string, sub: string | null, onclick: () => void, primary = false) =>
@@ -157,14 +158,27 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
 
   function chooseTutorial(sandbox: boolean) {
     let close: () => void = () => {};
+    // City chaos for the new game (remembered); it can be changed in the game at any time.
+    let level = loadChaosLevel();
+    const seg = h('div', { class: 'seg' });
+    const hint = h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:4px' });
+    const renderLevel = () => {
+      seg.replaceChildren(...CHAOS.levels.map((l) => h('button', { class: l === level ? 'on' : '', onclick: () => { level = l; storeChaosLevel(l); renderLevel(); } }, LEVEL_LABEL[l])));
+      hint.textContent = `${LEVEL_HINT[level]}. Change it any time from the menu or Service alerts (A).`;
+    };
+    renderLevel();
     close = modal(
       root,
       h(
         'div',
         null,
         h('h2', null, sandbox ? 'New sandbox' : 'New game'),
+        h('div', { class: 'section', style: 'margin-top:0' }, 'City chaos: events, disruptions and weather'),
+        seg,
+        hint,
+        h('div', { class: 'section' }, 'Tutorial'),
         h('div', { class: 'hw-muted', style: 'line-height:1.5' }, 'Want a short walkthrough? It takes you from the jobs map to your first morning rush in eight steps.'),
-        h('div', { class: 'actions' }, h('button', { class: 'hw-btn', onclick: () => { close(); start(sandbox, null, false); } }, 'Skip'), h('button', { class: 'hw-btn primary', onclick: () => { close(); start(sandbox, null, true); } }, 'Start with tutorial')),
+        h('div', { class: 'actions' }, h('button', { class: 'hw-btn', onclick: () => { close(); start(sandbox, null, false, level); } }, 'Skip'), h('button', { class: 'hw-btn primary', onclick: () => { close(); start(sandbox, null, true, level); } }, 'Start with tutorial')),
       ),
     );
   }
@@ -227,11 +241,12 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
   }
 }
 
-function startGame(root: HTMLElement, view: MapView, p: { sandbox: boolean; save: SaveFile | null; tutorial: boolean }): void {
+function startGame(root: HTMLElement, view: MapView, p: { sandbox: boolean; save: SaveFile | null; tutorial: boolean; chaos?: ChaosLevel }): void {
   const settings = loadSettings();
   current = new App(root, view, world, land, {
     sandbox: p.sandbox,
     save: p.save,
+    chaos: p.chaos,
     settings: { ...settings, seed: p.save?.settings.seed ?? settings.seed },
     tutorial: p.tutorial,
     exit: () => {

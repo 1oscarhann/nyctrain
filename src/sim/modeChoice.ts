@@ -25,17 +25,33 @@ export interface PairGeometry {
   homeCbd: boolean;
 }
 
+/**
+ * Today's weather as mode choice sees it (city chaos). Every factor is exactly 1 and the
+ * penalty exactly 0 on a clear day, so the arithmetic is unchanged from v1.
+ */
+export interface WeatherMods {
+  /** Walking speed factor (walks take 1/walkSpeed as long). */
+  walkSpeed: number;
+  /** Minutes added to the walk mode's generalised cost. */
+  walkPenalty: number;
+  /** Road speed factor (parking time is not scaled). */
+  driveSpeed: number;
+}
+
+export const CLEAR_WX: WeatherMods = { walkSpeed: 1, walkPenalty: 0, driveSpeed: 1 };
+
 /** Walking time in seconds, or Infinity beyond the walking limit. */
-export function walkTime(d: number): number {
+export function walkTime(d: number, wx?: WeatherMods): number {
   if (d > COMMUTERS.walkMaxDistance) return Infinity;
-  return (d * COMMUTERS.walkDetour) / COMMUTERS.walkSpeed;
+  return (d * COMMUTERS.walkDetour) / (COMMUTERS.walkSpeed * (wx?.walkSpeed ?? 1));
 }
 
 /** One-way drive time in seconds (door to door, including parking) and money cost. */
-export function driveTripTime(g: PairGeometry): number {
+export function driveTripTime(g: PairGeometry, wx?: WeatherMods): number {
   const road = g.distance * COMMUTERS.driveDetour;
-  const vM = COMMUTERS.driveSpeedCore;
-  const vO = COMMUTERS.driveSpeedOther;
+  const f = wx?.driveSpeed ?? 1;
+  const vM = COMMUTERS.driveSpeedCore * f;
+  const vO = COMMUTERS.driveSpeedOther * f;
   let t: number;
   if (g.homeCore && g.workCore) t = road / vM;
   else if (g.homeCore || g.workCore) t = road * (0.5 / vM + 0.5 / vO);
@@ -56,11 +72,11 @@ export interface TransitCostInput {
   fare: number;
 }
 
-/** Generalised costs in minutes: [walk, drive, transit] (Infinity = unavailable). */
-export function generalisedCosts(g: PairGeometry, band: number, transit: TransitCostInput | null): [number, number, number] {
-  const tw = walkTime(g.distance);
-  const walk = isFinite(tw) ? tw / 60 + COMMUTERS.modeConstant.walk : Infinity;
-  const drive = driveTripTime(g) / 60 + moneyToMinutes(driveMoney(g), band) + COMMUTERS.modeConstant.drive;
+/** Generalised costs in minutes: [walk, drive, transit] (Infinity = unavailable). Weather (wx) slows walking and driving. */
+export function generalisedCosts(g: PairGeometry, band: number, transit: TransitCostInput | null, wx?: WeatherMods): [number, number, number] {
+  const tw = walkTime(g.distance, wx);
+  const walk = isFinite(tw) ? tw / 60 + COMMUTERS.modeConstant.walk + (wx?.walkPenalty ?? 0) : Infinity;
+  const drive = driveTripTime(g, wx) / 60 + moneyToMinutes(driveMoney(g), band) + COMMUTERS.modeConstant.drive;
   let tr = Infinity;
   if (transit && isFinite(transit.time)) {
     tr =
