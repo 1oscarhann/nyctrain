@@ -11,7 +11,7 @@ import { fmtMoney, setUnits } from '../src/core/units';
 import type { Terrain } from '../src/construction/validate';
 import type { World } from '../src/data/world';
 import type { Alert, DayChaosInfo } from '../src/sim/protocol';
-import { AlertFeed, describeAlert, eventWhen, nextDayWord, plainDetail, RECENT, type RouteRef } from '../src/ui/alertFeed';
+import { AlertFeed, describeAlert, eventWhen, nextDayWord, outcomeText, plainDetail, RECENT, type RouteRef } from '../src/ui/alertFeed';
 
 const D = 86400;
 const H = 3600;
@@ -174,6 +174,8 @@ describe('London', () => {
     });
     const t = describeAlert(feed.get(ev.day * 1000 + 900)!, ref);
     expect(t.detail).toBe('9,420 came by metro · 610 arrived late · 120 gave up');
+    // An event no station reaches: nobody came by train (not "0 came by metro").
+    expect(outcomeText({ id: ev.id, label: ev.label, attendance: ev.attendance, byTransit: 0, arrived: 0, late: 0, gaveUp: 0, avgTripMin: 0 })).toBe('No fans came by metro');
     expect(fmtMoney(12_000)).toBe('£12k');
     applyCity('nyc');
     expect(fmtMoney(12_000)).toBe('$12k');

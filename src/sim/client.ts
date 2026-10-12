@@ -5,7 +5,7 @@
 import { city } from '../cities';
 import { Emitter } from '../core/emitter';
 import type { Alert, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, FromWorker, ModeState, Query, ServiceOverride, Snapshot, ToWorker } from './protocol';
-import { TRAIN_STRIDE } from './protocol';
+import { SKIP_LABEL, TRAIN_STRIDE } from './protocol';
 
 export interface SimEvents extends Record<string, unknown> {
   ready: { agents: number; groups: number; baseline: number };
@@ -42,6 +42,13 @@ export class SimClient {
   private latestAt = 0;
   private interval = 100;
   speed = 0;
+  /**
+   * True while the worker runs a skip: what it posts meanwhile (alerts, wrap-ups) describes the
+   * skipped hours and arrives in one burst, so the UI files it without toasts.
+   */
+  skipping = false;
+  /** A network compile waiting out the edit debounce (see setNetworkSoon). */
+  private pendingNet: { timer: ReturnType<typeof setTimeout>; build: () => void } | null = null;
 
   constructor() {
     this.worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
@@ -70,12 +77,34 @@ export class SimClient {
     this.send({ type: 'network', net });
   }
 
+  /**
+   * Compile and send the network after a short pause, so a burst of edits costs one compile
+   * (`build` calls setNetwork when the network changed). A pending compile is flushed before any
+   * skip or speed change: otherwise the worker would run the night (and the 3 am mode choice)
+   * on the old network, and nobody would ride the new one until the next day.
+   */
+  setNetworkSoon(build: () => void, delayMs = 200): void {
+    if (this.pendingNet) clearTimeout(this.pendingNet.timer);
+    this.pendingNet = { build, timer: setTimeout(() => this.flushNetwork(), delayMs) };
+  }
+
+  /** Run a pending network compile now (no-op if none is waiting). */
+  flushNetwork(): void {
+    const p = this.pendingNet;
+    if (!p) return;
+    clearTimeout(p.timer);
+    this.pendingNet = null;
+    p.build();
+  }
+
   setSpeed(speed: number): void {
+    this.flushNetwork();
     this.speed = speed;
     this.send({ type: 'speed', speed });
   }
 
   skipTo(time: number): void {
+    this.flushNetwork();
     this.send({ type: 'skipTo', time });
   }
 
@@ -102,6 +131,8 @@ export class SimClient {
   }
 
   terminate(): void {
+    if (this.pendingNet) clearTimeout(this.pendingNet.timer);
+    this.pendingNet = null;
     this.worker.terminate();
   }
 
@@ -123,6 +154,8 @@ export class SimClient {
         this.events.emit('dayEnd', m.report);
         break;
       case 'busy':
+        if (m.label === SKIP_LABEL) this.skipping = true;
+        else if (m.label === null) this.skipping = false;
         this.events.emit('busy', m.label);
         break;
       case 'reply': {

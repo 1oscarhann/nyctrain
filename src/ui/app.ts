@@ -52,7 +52,7 @@ import { edgePanel, tractPanel, trainPanel } from './panels/inspectPanels';
 import { financePanel } from './panels/financePanel';
 import { goalsPanel } from './panels/goalsPanel';
 import { alertsPanel } from './panels/alertsPanel';
-import { AlertFeed, describeAlert, eventWhen, fmtK, isIncident, LEVEL_HINT, LEVEL_LABEL, plainDetail, type RouteRef } from './alertFeed';
+import { AlertFeed, describeAlert, eventWhen, fmtK, isIncident, LEVEL_HINT, LEVEL_LABEL, outcomeText, plainDetail, type RouteRef } from './alertFeed';
 import { openMenu } from './menu';
 import { Tutorial } from './tutorial';
 import { showGameOver, showMonthReport } from './reports';
@@ -126,7 +126,6 @@ export class App implements AppContext {
   private lastModeState: ModeState | null = null;
   private stopAnim: (() => void) | null = null;
   private renderPending = false;
-  private recompileTimer: number | null = null;
   private panelTimer = 0;
   private destroyed = false;
   private intervals: number[] = [];
@@ -382,12 +381,11 @@ export class App implements AppContext {
     this.view.invalidate();
   }
 
+  /** Edits come in bursts: compile once they pause. The client sends it before any skip or speed change. */
   private scheduleRecompile(): void {
-    if (this.recompileTimer !== null) clearTimeout(this.recompileTimer);
-    this.recompileTimer = window.setTimeout(() => {
-      this.recompileTimer = null;
-      this.recompile();
-    }, 200);
+    this.sim.setNetworkSoon(() => {
+      if (!this.destroyed) this.recompile();
+    });
   }
 
   private recompile(): void {
@@ -794,7 +792,8 @@ export class App implements AppContext {
   private onAlert(a: Alert): void {
     const isNew = this.feed.upsert(a) === 'new';
     this.refreshChaos();
-    if (!isNew) return;
+    // Alerts from skipped hours arrive in one burst after the skip: they go in the feed, not in toasts.
+    if (!isNew || this.sim.skipping) return;
     if (isIncident(a) && a.status === 'active') {
       // Incident toasts at 1×/5× (or severity 3), at most one per toastMinGapMs; the ticker and badge always.
       const t = performance.now();
@@ -848,9 +847,14 @@ export class App implements AppContext {
     const ven = this.view.pick(px, ['chaos-venues']);
     const ev = ven !== null ? this.feed.events().find((e) => e.id === ven) : undefined;
     if (ev) {
-      const by = ev.split && ev.split.byTransit > 0 ? ` · ~${fmtK(ev.split.byTransit)} by ${city().transitWord}` : '';
       const venue = cityBalance().chaos.venues[ev.venue].name;
-      return `<div class="title">${esc(ev.label)}</div><div class="hw-muted">${esc(venue)} · ${eventWhen(ev, this.feed.day)} · ${fmtCount(ev.attendance)} expected${by}</div><div class="hw-muted">Click for Service alerts</div>`;
+      // After the event: its wrap-up (or just "over" until the wrap-up comes).
+      const outcome = this.feed.outcome(ev.id);
+      const over = this.sim.time() >= ev.day * SECONDS_PER_DAY + ev.end;
+      const by = ev.split && ev.split.byTransit > 0 ? ` · ~${fmtK(ev.split.byTransit)} by ${city().transitWord}` : '';
+      const when = eventWhen(ev, this.feed.day);
+      const line = outcome ? `${when} · ${outcomeText(outcome)}` : over ? `${when} · over${by}` : `${when} · ${fmtCount(ev.attendance)} expected${by}`;
+      return `<div class="title">${esc(ev.label)}</div><div class="hw-muted">${esc(venue)} · ${esc(line)}</div><div class="hw-muted">Click for Service alerts</div>`;
     }
     return null;
   }

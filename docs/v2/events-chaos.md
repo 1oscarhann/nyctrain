@@ -9,10 +9,9 @@ compile, protocol, save format (v2 → v3) and the UI shell. Coordinates with `l
 ## Implementation notes (sim)
 
 The sim half is implemented: checklist steps 1–12 and 17, plus the game state and save parts of
-step 13. The UI (steps 13–16: `AlertFeed`, ticker, weather chip, Service alerts panel, event
-service editor, map layers, panel banners, menu, styles) is the next engineer's. This section lists
-where things live, what differs from the design below, and the hooks the UI uses. **Where the
-code and the line references below disagree, trust the code.**
+step 13. The UI (steps 13–16) is implemented too; see "Implementation notes (UI)" below. This
+section lists where things live, what differs from the design below, and the hooks the UI uses.
+**Where the code and the line references below disagree, trust the code.**
 
 **Where it lives.**
 - `src/balance.ts`: `CHAOS`, `WEATHER` and `EVENTS` (shared tunables), and **`CHAOS_BY_CITY`**
@@ -67,8 +66,8 @@ code and the line references below disagree, trust the code.**
   city events…" toast can key off `migratedFrom < 3`.
 - The moving block lets a follower creep up to ~10 m into the 100 m margin with 2 s steps (this is
   v1 behaviour), so test 13.1-11.3 checks a gap above 85 m.
-- Test 13.1-13 (`eventService.serviceEstimate`) belongs with the UI file `src/routes/eventService.ts`,
-  which is not written yet.
+- Test 13.1-13 (`eventService.serviceEstimate`) is in `tests/chaos.test.ts`, with the UI file
+  `src/routes/eventService.ts`.
 - §10.4 bands, from `npm run balance -- scenario=core days=12 chaos=normal` and six more seeds
   (`seed=1…6`):
   - New York: day-11 riders +0.3% to +1.5% against Off; days 8–11 operating result +$0.03M to
@@ -88,8 +87,7 @@ code and the line references below disagree, trust the code.**
   - Query: `query<ChaosState>({ kind: 'chaos' })`.
   - `init` already sends `chaos: { level, seed }` and `service` from `game.chaos`.
 - **App**: `app.setChaosLevel(level)`, `app.addEventService(list)` → `ServiceOverride[]`, and
-  `app.removeEventService(id)`. Each updates `game.chaos` and the worker together. Still missing:
-  `case 'alerts'` in `refreshPanel`, the `A` key, the feed, toasts and the migrated-save toast.
+  `app.removeEventService(id)`. Each updates `game.chaos` and the worker together.
 - **Game**:
   - State: `game.chaos: ChaosSettings` (`{ level, seed, service, nextServiceId }`).
   - Methods: `setChaosLevel`, `addService(o)`, `removeService(id)`, `pruneService(now)`. Each emits
@@ -138,6 +136,55 @@ code and the line references below disagree, trust the code.**
   All are well inside the 1,000 ms budget.
 - The 3 am injection on the core network takes 2–8 ms for one arena event, and 22–57 ms for a
   four-event day with a 150k parade (warm).
+
+## Implementation notes (UI)
+
+Checklist steps 13–16 and the stretch item "today's event service in the route panel" are done,
+for both cities (London venues, "metro", £).
+
+**Where it lives.**
+- `src/ui/alertFeed.ts`: `AlertFeed` (alerts, today's info, the announced calendar, ticker items in
+  the §2.3 order) and `describeAlert` (titles and details in the player's units). It has no DOM;
+  `tests/chaosUi.test.ts` covers it.
+- `src/ui/ticker.ts`: `NewsTicker`.
+- `src/ui/topbar.ts`: the weather chip.
+- `src/ui/toolbar.ts`: the bell and its badge.
+- `src/ui/panels/alertsPanel.ts`: Service alerts and the inline event service editor.
+- `src/routes/eventService.ts`: `routesNearVenue`, `stationsNear`, `defaultWindows`,
+  `serviceEstimate`.
+- `src/map/chaosLayers.ts`: the venues, signal segments, venue ring and pulsing incidents.
+- The rest are small touches:
+  - `StationLayers.closed` and `TrainLayer.alerted`;
+  - the station, train and route panel banners;
+  - the "City chaos" section in `menu.ts`;
+  - the chaos level in the new-game dialog (`boot.ts`, remembered in `settings.ts`);
+  - `styles.css`.
+
+**Differences from the design.**
+- The new-game dialog also asks for the chaos level, which is remembered per viewer.
+- A card whose venue no station or route reaches has no "Event service…" button (as in the §2.4
+  mock-up).
+- The venue tooltip shows the wrap-up once it is in, or "over" until then. A wrap-up with nobody by
+  train reads "No fans came by subway".
+- The route panel also lists the route's active incidents.
+- A stalled or held train gets a white rim outside the red casing, so it reads on red routes.
+- The deck.gl labels use "•" instead of "·", because the glyph atlas leaves the middle dot blank.
+- In reduced motion the ticker item is cut with an ellipsis so "+N" stays visible.
+
+**Fixed: the browser lost a day of riders after an edit followed by a skip.** The App debounced
+network compiles (200 ms, longer while SwiftShader blocks the main thread), but `skipTo` went to
+the worker at once. So the worker skipped through the 3 am mode choice with no network: no
+transit commuters, and 0 fans by subway, until the next day. This was a v1 bug in the App path
+(the pre-chaos build fails the same way); headless never raced, because it sets the network
+synchronously.
+- The debounce now lives in `SimClient.setNetworkSoon(build)`, and `skipTo` and `setSpeed` flush
+  any compile still pending first.
+- The worker's skip is bracketed by the busy label `SKIP_LABEL`. While it shows,
+  `SimClient.skipping` is true, and the App files alerts from the skipped hours without toasts.
+  That burst used to deliver, for example, day 0's wrap-up ("Midtown arena game · 0 came by
+  subway") at 17:30 on day 1.
+- The regression test is the "browser message order" test in `tests/chaos.headless.test.ts`. It
+  drives the real `SimClient` against a real `Engine` in process.
 
 ## 0. Summary
 

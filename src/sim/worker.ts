@@ -7,7 +7,7 @@ import { TIME } from '../balance';
 import { applyCity } from '../cities';
 import { fetchWorld } from '../data/world';
 import { Engine } from './engine';
-import type { FromWorker, ToWorker } from './protocol';
+import { SKIP_LABEL, type FromWorker, type ToWorker } from './protocol';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -66,7 +66,7 @@ function handle(msg: ToWorker) {
       last = performance.now();
       break;
     case 'skipTo':
-      post({ type: 'busy', label: 'Skipping ahead' });
+      post({ type: 'busy', label: SKIP_LABEL });
       engine.skipTo(msg.time);
       post({ type: 'busy', label: null });
       sendSnapshot();

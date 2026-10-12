@@ -133,7 +133,7 @@ export function forecastText(f: Forecast): string {
 
 /** "9,420 came by subway · 610 arrived late · 120 gave up". */
 export function outcomeText(o: EventOutcome): string {
-  const parts = [`${fmtCount(o.byTransit)} came by ${city().transitWord}`];
+  const parts = [o.byTransit > 0 ? `${fmtCount(o.byTransit)} came by ${city().transitWord}` : `No fans came by ${city().transitWord}`];
   if (o.late > 0) parts.push(`${fmtCount(o.late)} arrived late`);
   if (o.gaveUp > 0) parts.push(`${fmtCount(o.gaveUp)} gave up`);
   return parts.join(' · ');

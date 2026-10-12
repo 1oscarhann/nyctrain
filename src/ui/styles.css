@@ -889,6 +889,23 @@ input[type='checkbox'] {
 }
 .ticker-more {
   font-weight: 700;
+  flex: none;
+}
+/* Reduced motion: one item, cut to fit, then "+N". */
+.ticker-track.fit {
+  display: flex;
+  width: 100%;
+}
+.ticker-track.fit .ticker-strip {
+  flex: 1;
+  min-width: 0;
+}
+.ticker-track.fit .ticker-item {
+  min-width: 0;
+}
+.ticker-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .ticker .dot,
 .alert-row .dot,

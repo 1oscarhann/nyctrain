@@ -24,6 +24,7 @@ From the title screen: pick the city (New York / London; remembered), then **New
 (career, $6B in New York, £5B in London), **Sandbox** (unlimited money, instant construction),
 **Load game**, **Settings** (units, agent scale) and **Continue** (the autosave). Saves remember
 their city, so loading a London save from the New York title screen switches over. A new game
+asks for the city chaos level (Off / Calm / Normal / Wild, remembered; Normal by default) and
 offers an 8-step tutorial.
 
 ### Data
@@ -82,14 +83,17 @@ Open Government Licence v3.0.
 | Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) | Undo / redo (blueprints) |
 | Enter / double-click | Finish a track stroke; save a route draft |
 | Backspace | Remove the last track point |
+| A | Service alerts panel (toggle): incidents, weather, events, event service, chaos level |
+| Bell button (toolbar) | Service alerts; the red badge counts active incidents |
+| Weather chip / ticker item (top bar) | Opens Service alerts at that item |
+| Incident / venue marker (map) | Tooltip; a click opens Service alerts focused on it |
+| Menu → City chaos | Off / Calm / Normal / Wild (applies from the next 3 am) |
 
 All toolbar buttons have tooltips that show their shortcut.
 
-**City chaos** (special events, disruptions and weather; see [City chaos](#city-chaos)) runs in
-the simulation. New games start at the Normal level, and saves keep their level and seed. The
-in-game controls are not built yet. They will be the Service alerts panel (`A`, or a bell
-button), the weather chip and news ticker, and the chaos level (Off / Calm / Normal / Wild) in
-the menu. In the scripts, `chaos=` and `seed=` set the level and seed.
+**City chaos** (special events, disruptions and weather; see [City chaos](#city-chaos)) is on
+by default (Normal). Saves keep their level and seed. In the scripts, `chaos=` and `seed=` set
+the level and seed.
 
 ## Architecture
 
@@ -99,13 +103,13 @@ src/
   cities/         New York and London: regions, goals, copy, naming style; applyCity() switches everything
   core/           geo (local metres around City Hall), calendar (weekdays only), city chaos calendar and weather, units, game state, goals
   data/           world loading, tract index, land mask
-  map/            MapLibre style recolouring, network/station/elevated layers, overlays, naming
+  map/            MapLibre style recolouring, network/station/elevated layers, overlays, naming, city chaos markers
   construction/   track graph with arc fillets, levels and ramps, validation and costs, tools
-  routes/         route pathfinding on track, compilation for the sim, fleet sizing, route tool
+  routes/         route pathfinding on track, compilation for the sim, fleet sizing, route tool, event service estimates
   trains/         kinematics (run profiles), interpolated train layer
   sim/            worker, engine, train sim (moving block, merge locks), commuters, mode choice, transit graph, city chaos (incidents, event trips)
   economy/        finance: daily settlement, monthly reports, bonds, bankruptcy
-  ui/             app shell, panels, charts, tutorial, menus
+  ui/             app shell, panels, charts, tutorial, menus, city chaos (alert feed, news ticker, Service alerts)
   save/           save format, migrations, IndexedDB store, export and import
 scripts/          data pipeline, headless sim, balance tuning, performance check
 tests/            Vitest unit tests and the headless simulation tests
@@ -119,7 +123,9 @@ at game start on the main thread, at init in the worker, and first thing in scri
 
 The worker steps a fixed 2 s game timestep in 14 ms slices and posts compact snapshots about
 10 times per second: train positions and loads, platform queues and live counters. The main
-thread interpolates train positions between snapshots. Agents are never saved. A save stores
+thread interpolates train positions between snapshots. Edits are compiled and sent to the worker
+200 ms after they stop (`SimClient.setNetworkSoon`). A compile still pending is sent before any
+skip or speed change, so the night and the 3 am mode choice always run on the network on screen. Agents are never saved. A save stores
 the network, routes, finances, goals, the day's mode shares and observations, and the city chaos
 level, seed and planned event service (save format v3). The commuters are rebuilt from the data
 when the save is loaded.
@@ -127,11 +133,13 @@ when the save is loaded.
 ## Testing each part
 
 ```bash
-npm test                 # all 80 tests (unit + headless, both cities)
-npm run test:unit        # geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
-                         # chaos (calendar, weather, incidents, train-sim hooks, event trips, save v3)
-npm run test:headless    # 3 days on the test network, plus chaos end to end (closures, event agents,
-                         # determinism, snow, breakdowns, Off is inert, a London venue event)
+npm test                 # all 90 tests (unit + headless, both cities)
+npm run test:unit        # 79: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+                         # chaos (calendar, weather, incidents, train-sim hooks, event trips, event service, save v3),
+                         # chaos UI (alert text, feed and ticker order, announcements, London wording and £)
+npm run test:headless    # 11: 3 days on the test network, plus chaos end to end (closures, event agents,
+                         # determinism, snow, breakdowns, Off is inert, a London venue event) and the
+                         # browser's message order (an edit followed at once by a skip)
 npm run sim -- days=3    # headless run of the test network, with a daily summary
 npm run sim -- days=3 chaos=normal           # the same with city chaos: weather, incidents and events per day
 npm run balance -- scenario=core days=12     # ~40-station core: ridership and daily money
@@ -162,6 +170,12 @@ To check each milestone by hand in `npm run dev`:
    crowding and flows overlays help you see what is missing.
 6. **Polish:** goals panel (flag), tutorial (? button), saving (menu: three slots, autosave at
    midnight, export and import JSON), Sandbox, units toggle.
+7. **City chaos:** start at Wild, build a line past a venue (34 St–Penn for the Midtown arena,
+   North Greenwich for the Greenwich arena) and skip to the morning. The weather chip and the
+   ticker show the day. **A** lists incidents, weather and events. **Event service…** on a
+   card plans extra trains around an event. Incidents pulse on the map: a closed station turns
+   red with "CLOSED", a stalled train gets a red casing, and a signal problem shows an amber
+   dashed stretch.
 
 ## Balance
 
@@ -248,9 +262,45 @@ disruptions and weather. Each one goes through mechanics the sim already has:
 - walking and driving times.
 
 So it shows up in observed door-to-door times and crowding, and in the next day's mode choice.
-The design is `docs/v2/events-chaos.md` (its top section has the implementation notes). The
-simulation side is done; the UI (Service alerts panel, ticker, map markers, event service editor)
-comes next.
+The design is `docs/v2/events-chaos.md` (its top sections have the implementation notes for the
+sim and the UI).
+
+### In the game
+
+- **Top bar.** A weather chip shows today's weather and the next day's forecast ("Tmrw: snow
+  90%"). Its tooltip lists the effects in your units. A news ticker scrolls the active incidents,
+  today's events (with the 3 am estimate by subway or metro), the weather and forecast,
+  announcements and recently cleared incidents. It pauses on hover, and each item opens Service
+  alerts at that item. Below 1,180 px the ticker hides and the chip stays. With reduced motion it
+  shows one item and "+N", rotating every 5 s. With chaos Off, both are hidden.
+- **Service alerts** (`A`, the bell, the chip, a ticker item, a marker or a toast). The sections
+  are:
+  - **Now:** active incidents. A click flies the map there, and **Show** opens the station,
+    train or route.
+  - **Weather:** today's effects and tomorrow's forecast.
+  - **Events:** today's and the announced ones, with the stations within 1.5 km, the routes
+    serving the venue and today's split by mode.
+  - **Earlier today:** cleared incidents and event wrap-ups.
+  - **City chaos:** the level control, which applies from 3 am.
+- **Event service.** "Event service…" on an event card opens an inline editor:
+  - routes stopping within 1.2 km of the venue are ticked;
+  - a window before and one after the event (15-minute steps), and a headway;
+  - per route: trains needed against owned, the effective headway if the fleet is short, and
+    the extra car-km and their cost in dollars or pounds.
+
+  Planned service shows under the event card and in the route panel (Frequency), with
+  **Remove**. Planned before 3 am on the day, it also brings more fans by train.
+- **Map.** Venue markers are lavender dots sized by attendance, solid for today and faded for
+  announced days, with labels from zoom 11.5. Incident markers pulse even while paused: red for
+  breakdowns and police, amber otherwise. Closed stations get a red ring and "CLOSED". Stalled
+  or held trains get a red casing with a white rim. Signal problems are amber dashed stretches
+  of track. A focused event shows its 1.5 km catchment ring.
+- **Panels and toasts.** The station panel shows a red "Closed: police activity until…"
+  banner. The train panel shows "Stalled…" or "Held at…", and the route panel lists its active
+  incidents. New incidents toast at 1× and 5× (severity 3 at any speed, at most one every 20 real
+  seconds). Announcements and event wrap-ups always toast, except for alerts from hours that
+  were skipped, which go to the feed only. Loading a save from before city chaos shows a
+  one-off "New: city events…" toast.
 
 **Determinism.** Everything comes from the game's chaos seed:
 - the event calendar, the weather and its one-day forecast, and the incident plan are pure
@@ -365,11 +415,18 @@ of 311. The 3 am event injection takes 2–8 ms for a typical event and 22–57 
 day with a 150,000-person parade. The first snow day adds a one-off ~150 ms to the 3 am step,
 because the weather baseline is cached per kind and severity.
 
+Re-measured after the UI work, on a quieter moment of the same machine (3 interleaved runs each):
+the code before chaos took 132–215 ms and chaos Off 132–141 ms, with the same 40,320 boardings
+and 1,090 waiting. Single runs gave 178 ms at Normal and 179 ms for
+`chaos=wild weather=snow outdoor=1`. The UI adds no sim work.
+
 ## Known issues
 
-- City chaos has no UI yet. Its alerts, daily info and event service are fully exposed by the
-  worker, client and game state, but new browser games run at Normal without the Service alerts
-  panel, ticker or map markers that explain what is happening.
+- Changing the city chaos level redraws the announced events from that level's calendar at
+  once (Wild draws more, and a venue can draw a different kind), while today's events stay as
+  the worker planned them at 3 am.
+- Units are one setting for both cities (miles by default), so London shows miles until you
+  switch to kilometres in the menu.
 - London uses 2011 census flows, because the 2021 census was taken in lockdown. Its commuter
   totals are 2011's, and its earnings bands are modelled from area income rather than measured.
 

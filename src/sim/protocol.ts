@@ -110,6 +110,8 @@ export interface Snapshot {
 }
 
 export const TRAIN_STRIDE = 9; // id, route, dir, s, v, load, late, state, nextStop
+/** Busy label while the worker runs a skip; messages posted until the label clears came from the skipped hours. */
+export const SKIP_LABEL = 'Skipping ahead';
 
 export interface LiveStats {
   ridersToday: number;

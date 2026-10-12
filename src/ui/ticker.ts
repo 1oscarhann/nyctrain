@@ -34,7 +34,7 @@ export class NewsTicker {
       this.sig = sig;
       this.rotateAt = idx;
       this.items = items;
-      this.renderStatic(items.length ? [items[idx]] : [], quiet, items.length > 1 ? `+${items.length - 1}` : '');
+      this.renderStatic(items.length ? [items[idx]] : [], quiet, items.length > 1 ? `+${items.length - 1}` : '', true);
       return;
     }
     if (sig === this.sig) return;
@@ -44,11 +44,13 @@ export class NewsTicker {
   }
 
   private item(i: TickerItem): HTMLElement {
-    return h('button', { class: `ticker-item tone-${i.tone}`, type: 'button', title: 'Open Service alerts', onclick: () => this.onPick(i) }, h('span', { class: 'dot' }), i.text);
+    return h('button', { class: `ticker-item tone-${i.tone}`, type: 'button', title: 'Open Service alerts', onclick: () => this.onPick(i) }, h('span', { class: 'dot' }), h('span', { class: 'ticker-text' }, i.text));
   }
 
-  private renderStatic(items: TickerItem[], quiet: string, more: string): void {
+  /** fit: one line that never overflows (the item is cut with an ellipsis, so "+N" stays visible). */
+  private renderStatic(items: TickerItem[], quiet: string, more: string, fit = false): void {
     this.track.classList.remove('scrolling');
+    this.track.classList.toggle('fit', fit);
     this.track.style.animationDuration = '';
     const strip = h('div', { class: 'ticker-strip' }, ...(items.length ? items.map((i) => this.item(i)) : [h('span', { class: 'ticker-quiet' }, h('span', { class: 'dot' }), quiet)]));
     if (more) strip.append(h('span', { class: 'ticker-more' }, more));

@@ -1,17 +1,19 @@
 /**
  * City chaos, end to end on real data (headless engine): station closures, event agents, the
  * determinism of a Wild run, snow on elevated track reaching the next day's choice, an incident's
- * life cycle, chaos Off being inert, and a London venue event.
+ * life cycle, chaos Off being inert, a London venue event, and the browser's message order (a
+ * network edit followed at once by a skip).
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { CHAOS_BY_CITY, TRAINS } from '../src/balance';
 import { applyCity } from '../src/cities';
-import { CLEAR } from '../src/core/cityCalendar';
+import { CLEAR, eventsForDay } from '../src/core/cityCalendar';
 import type { Game } from '../src/core/game';
 import { compileNetwork } from '../src/routes/compile';
-import type { Engine } from '../src/sim/engine';
+import { SimClient } from '../src/sim/client';
+import { Engine } from '../src/sim/engine';
 import { buildTestNetwork, createHeadlessGame, drawLine, makeRoute, midtownArenaEvent, runDays, startEngine, stationNear, stepUntil, venueEvent } from '../src/sim/headless';
-import type { Alert, DayChaosInfo, DayReport } from '../src/sim/protocol';
+import type { Alert, DayChaosInfo, DayReport, FromWorker, ToWorker } from '../src/sim/protocol';
 import { TState, type Train } from '../src/sim/trainSim';
 import { loadLandFromDisk, loadWorldFromDisk } from '../scripts/nodeData';
 
@@ -303,4 +305,128 @@ describe('city chaos, headless (London)', () => {
     const londonLabels = new Set(CHAOS_BY_CITY.london.kinds.map((k) => k.label));
     for (const i of infos) for (const e of i.events) expect(londonLabels.has(e.label)).toBe(true);
   }, 180_000);
+});
+
+/**
+ * The worker, in process: each message is applied to a real Engine in arrival order, as
+ * src/sim/worker.ts does (only the messages these tests send).
+ */
+class InProcessWorker {
+  static last: InProcessWorker | null = null;
+  onmessage: ((e: { data: FromWorker }) => void) | null = null;
+  onerror: ((e: { message: string }) => void) | null = null;
+  engine: Engine | null = null;
+  readonly received: ToWorker['type'][] = [];
+  readonly infos: DayChaosInfo[] = [];
+  constructor() {
+    InProcessWorker.last = this;
+  }
+  private post(m: FromWorker) {
+    this.onmessage?.({ data: m });
+  }
+  postMessage(m: ToWorker) {
+    this.received.push(m.type);
+    switch (m.type) {
+      case 'init':
+        this.engine = new Engine(world, { agentScale: m.agentScale, seed: m.seed, time: m.time, fare: m.fare, chaos: m.chaos, service: m.service }, {
+          alert: (alert) => this.post({ type: 'alert', alert }),
+          dayChaos: (info) => {
+            this.infos.push(info);
+            this.post({ type: 'dayChaos', info });
+          },
+        });
+        break;
+      case 'network':
+        this.engine!.setNetwork(m.net);
+        break;
+      case 'skipTo':
+        if (!this.engine) break;
+        this.post({ type: 'busy', label: 'Skipping ahead' });
+        this.engine!.skipTo(m.time);
+        this.post({ type: 'busy', label: null });
+        this.post({ type: 'snapshot', snap: this.engine!.snapshot(0) });
+        break;
+      case 'chaosLevel':
+        this.engine!.setChaosLevel(m.level);
+        break;
+      case 'service':
+        this.engine!.setService(m.overrides);
+        break;
+      case 'speed':
+      case 'fare':
+      case 'query':
+        break;
+    }
+  }
+  terminate() {}
+}
+
+describe('city chaos, browser message order (New York)', () => {
+  beforeEach(() => {
+    applyCity('nyc');
+  });
+
+  // Regression: in the browser a network edit reached the worker 200 ms after the skip that
+  // followed it (the edit debounce), so the night and the 3 am mode choice ran with no network:
+  // on day 1 nobody rode, and the Midtown arena game got 0 fans by subway.
+  it('a network edit followed at once by a skip reaches the worker first, so day 1 has riders and fans', () => {
+    const g = globalThis as unknown as { Worker?: unknown; document?: unknown };
+    const saved = { Worker: g.Worker, document: g.document };
+    g.Worker = InProcessWorker;
+    g.document = { baseURI: 'http://localhost/' };
+    try {
+      // One of the seeds that failed in the browser: a Midtown arena game on days 0 and 1 at Wild.
+      const seed = 4224591899;
+      expect(eventsForDay(seed, 1, 'wild').map((e) => e.label)).toEqual(['Midtown arena game']);
+      const game = createHeadlessGame(world, land, { sandbox: true, chaos: 'normal', chaosSeed: seed });
+      const client = new SimClient();
+      const host = InProcessWorker.last!;
+      // As the App does: init at 05:00 on day 0, then the player sets Wild and builds a network.
+      client.init({ agentScale: 10, seed: 1885, time: game.time, fare: game.fare, chaos: { level: game.chaos.level, seed }, service: [] });
+      client.setChaosLevel('wild');
+      buildTestNetwork(game, { r1: 3, r2: 4 });
+      client.setNetworkSoon(() => client.setNetwork(compileNetwork(game).net));
+      // ...and skips straight away (before the debounce fires).
+      client.skipTo(D + 17.5 * H);
+      expect(host.received.indexOf('network')).toBeGreaterThan(-1);
+      expect(host.received.indexOf('network')).toBeLessThan(host.received.indexOf('skipTo'));
+      expect(client.latest!.time).toBeGreaterThanOrEqual(D + 17.5 * H - 2);
+      expect(client.skipping).toBe(false);
+      // Regular commuters rode on day 1, and the game's fans came by subway.
+      expect(client.latest!.live.ridersToday).toBeGreaterThan(100_000);
+      expect(client.latest!.live.tripsInProgress).toBeGreaterThan(1000);
+      const day1 = host.infos.find((i) => i.day === 1)!;
+      expect(day1.level).toBe('wild');
+      expect(day1.events.map((e) => e.label)).toEqual(['Midtown arena game']);
+      expect(day1.events[0].byTransit).toBeGreaterThan(1000);
+      // A flushed edit is sent once: nothing is left to fire later.
+      client.flushNetwork();
+      expect(host.received.filter((t) => t === 'network')).toHaveLength(1);
+      client.terminate();
+    } finally {
+      g.Worker = saved.Worker;
+      g.document = saved.document;
+    }
+  }, 120_000);
+
+  it('coalesces a burst of edits into one compile, sent before a speed change', () => {
+    const g = globalThis as unknown as { Worker?: unknown; document?: unknown };
+    const saved = g.Worker;
+    g.Worker = InProcessWorker;
+    try {
+      const client = new SimClient();
+      const host = InProcessWorker.last!;
+      let builds = 0;
+      for (let i = 0; i < 5; i++) client.setNetworkSoon(() => builds++);
+      client.setSpeed(60);
+      expect(builds).toBe(1);
+      client.setSpeed(0);
+      client.skipTo(D);
+      expect(builds).toBe(1);
+      expect(host.received).toEqual(['speed', 'speed', 'skipTo']);
+      client.terminate();
+    } finally {
+      g.Worker = saved;
+    }
+  });
 });

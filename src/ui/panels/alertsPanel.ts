@@ -131,8 +131,10 @@ export function alertsPanel(app: App, focus?: number, focusEvent?: number): Pane
         h(
           'div',
           { class: 'ev-line' },
-          h('b', { class: 'num' }, `~${fmtK(s.byTransit)} by ${word}`),
-          ` (${Math.round((s.byTransit / total) * 100)}%) · ${fmtK(s.byDrive)} drive · ${fmtK(s.byWalk)} walk`,
+          s.byTransit > 0
+            ? [h('b', { class: 'num' }, `~${fmtK(s.byTransit)} by ${word}`), ` (${Math.round((s.byTransit / total) * 100)}%) · `]
+            : h('span', { class: 'hw-muted' }, `None by ${word} · `),
+          `${fmtK(s.byDrive)} drive · ${fmtK(s.byWalk)} walk`,
           s.overflow > 0 ? h('span', { class: 'hw-amber' }, ` · ${fmtK(s.overflow)} more couldn't fit`) : null,
         ),
       );
@@ -170,7 +172,8 @@ export function alertsPanel(app: App, focus?: number, focusEvent?: number): Pane
     }
     // Event service editor (until the after window has passed).
     const over = t >= ev.day * DAY + ev.end + EVENTS.serviceAfter[1];
-    const canPlan = !over && !!net && net.routes.length > 0;
+    // Only where fans can come by train: a station within the access walk (or a route stopping near).
+    const canPlan = !over && !!net && net.routes.length > 0 && (near.length > 0 || serving.length > 0);
     const isOpen = editor?.id === ev.id;
     const btn = canPlan && !isOpen
       ? h('button', {
@@ -180,7 +183,15 @@ export function alertsPanel(app: App, focus?: number, focusEvent?: number): Pane
             focusEv = ev.id;
             app.setFocusEvent(ev.id);
             app.flyTo(vx, vy);
-            editor = { id: ev.id, el: serviceEditor(app, ev, () => { editor = null; render(true); }) };
+            editor = {
+              id: ev.id,
+              el: serviceEditor(app, ev, () => {
+                editor = null;
+                render(true);
+                // Keep the card (and the service just planned) in view.
+                body.querySelector<HTMLElement>(`[data-event="${ev.id}"]`)?.scrollIntoView({ block: 'nearest' });
+              }),
+            };
             render(true);
           },
         }, svgIcon(ICONS.ticket), 'Event service…')
@@ -320,6 +331,12 @@ export function alertsPanel(app: App, focus?: number, focusEvent?: number): Pane
 
 const STEP = 15 * 60;
 
+/** Minutes, with one decimal under 10 ("3.4", "12"). */
+function fmtHeadway(s: number): string {
+  const m = s / 60;
+  return m < 10 ? String(Math.round(m * 10) / 10) : String(Math.round(m));
+}
+
 function timeSelect(value: number, onChange: (v: number) => void): HTMLSelectElement {
   const sel = h('select', { class: 'num', onchange: (e: Event) => onChange(Number((e.target as HTMLSelectElement).value)) }) as HTMLSelectElement;
   for (let t = 0; t <= 26 * 3600; t += STEP) sel.append(h('option', { value: String(t) }, fmtClock(t) + (t >= DAY ? ' +1' : '')));
@@ -381,7 +398,7 @@ function serviceEditor(app: App, ev: FeedEvent, close: () => void): HTMLElement 
             'span',
             { class: 'grow' },
             `${needed} trains needed, ${owned} owned`,
-            short ? h('span', { class: 'hw-amber' }, ` → effectively every ~${Math.max(1, Math.round(eff / 60))} min`) : null,
+            short ? h('span', { class: 'hw-amber' }, ` → effectively every ~${fmtHeadway(eff)} min`) : null,
             ` · +${fmtCarDistance(km)} ≈ ${fmtMoney(cost)}`,
           ),
         ),
