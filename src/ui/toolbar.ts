@@ -98,6 +98,6 @@ export class Toolbar {
     const n = this.app.feed.activeCount();
     this.badge.textContent = n > 9 ? '9+' : String(n);
     this.badge.style.display = n > 0 ? '' : 'none';
-    this.alertsBtn.classList.toggle('active', this.app.game.selection?.kind === 'alerts');
+    this.alertsBtn.classList.toggle('active', this.app.alertsShowing());
   }
 }

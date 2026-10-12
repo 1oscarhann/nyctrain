@@ -92,8 +92,8 @@ Open Government Licence v3.0.
 All toolbar buttons have tooltips that show their shortcut.
 
 **City chaos** (special events, disruptions and weather; see [City chaos](#city-chaos)) is on
-by default (Normal). Saves keep their level and seed. In the scripts, `chaos=` and `seed=` set
-the level and seed.
+by default (Normal). Saves keep their level and seed, and the level in force today. In the
+scripts, `chaos=` and `seed=` set the level and seed.
 
 ## Architecture
 
@@ -127,19 +127,21 @@ thread interpolates train positions between snapshots. Edits are compiled and se
 200 ms after they stop (`SimClient.setNetworkSoon`). A compile still pending is sent before any
 skip or speed change, so the night and the 3 am mode choice always run on the network on screen. Agents are never saved. A save stores
 the network, routes, finances, goals, the day's mode shares and observations, and the city chaos
-level, seed and planned event service (save format v3). The commuters are rebuilt from the data
-when the save is loaded.
+level (today's and the one from the next 3 am), seed, today's incident-plan basis and planned
+event service (save format v3). The commuters are rebuilt from the data when the save is loaded.
 
 ## Testing each part
 
 ```bash
-npm test                 # all 90 tests (unit + headless, both cities)
-npm run test:unit        # 79: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
-                         # chaos (calendar, weather, incidents, train-sim hooks, event trips, event service, save v3),
-                         # chaos UI (alert text, feed and ticker order, announcements, London wording and £)
-npm run test:headless    # 11: 3 days on the test network, plus chaos end to end (closures, event agents,
-                         # determinism, snow, breakdowns, Off is inert, a London venue event) and the
-                         # browser's message order (an edit followed at once by a skip)
+npm test                 # all 97 tests (unit + headless, both cities)
+npm run test:unit        # 84: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+                         # chaos (calendar, weather, incidents, train-sim hooks and the watchdog's scope, event
+                         # trips, event service, save v3 with today's level), chaos UI (alert text, feed and
+                         # ticker order, announcements, cancelled service, wrap-up toasts, London wording and £)
+npm run test:headless    # 13: 3 days on the test network, plus chaos end to end (closures, event agents,
+                         # determinism, snow, breakdowns, Off is inert, mid-day loads after a level change,
+                         # an edit or an event, a London venue event) and the browser's message order
+                         # (an edit followed at once by a skip)
 npm run sim -- days=3    # headless run of the test network, with a daily summary
 npm run sim -- days=3 chaos=normal           # the same with city chaos: weather, incidents and events per day
 npm run balance -- scenario=core days=12     # ~40-station core: ridership and daily money
@@ -271,7 +273,8 @@ sim and the UI).
   90%"). Its tooltip lists the effects in your units. A news ticker scrolls the active incidents,
   today's events (with the 3 am estimate by subway or metro), the weather and forecast,
   announcements and recently cleared incidents. It pauses on hover, and each item opens Service
-  alerts at that item. Below 1,180 px the ticker hides and the chip stays. With reduced motion it
+  alerts at that item. When its slot is narrower than 220 px (about 1,366 px wide and below) the
+  ticker hides and the chip stays. With reduced motion it
   shows one item and "+N", rotating every 5 s. With chaos Off, both are hidden.
 - **Service alerts** (`A`, the bell, the chip, a ticker item, a marker or a toast). The sections
   are:
@@ -289,18 +292,23 @@ sim and the UI).
     the extra car-km and their cost in dollars or pounds.
 
   Planned service shows under the event card and in the route panel (Frequency), with
-  **Remove**. Planned before 3 am on the day, it also brings more fans by train.
+  **Remove**, until its last window ends. Planned before 3 am on the day, it also brings more
+  fans by train. Deleting a route drops its event service. If a level change takes an announced
+  event off the calendar, its service is cancelled (with a toast), so you never pay for service
+  you can't see.
 - **Map.** Venue markers are lavender dots sized by attendance, solid for today and faded for
-  announced days, with labels from zoom 11.5. Incident markers pulse even while paused: red for
+  announced days, with labels above them from zoom 11.5 (drawn over stations and trains).
+  Venue and incident dots face the camera in 3D. Incident markers pulse even while paused: red for
   breakdowns and police, amber otherwise. Closed stations get a red ring and "CLOSED". Stalled
   or held trains get a red casing with a white rim. Signal problems are amber dashed stretches
   of track. A focused event shows its 1.5 km catchment ring.
 - **Panels and toasts.** The station panel shows a red "Closed: police activity until…"
   banner. The train panel shows "Stalled…" or "Held at…", and the route panel lists its active
   incidents. New incidents toast at 1× and 5× (severity 3 at any speed, at most one every 20 real
-  seconds). Announcements and event wrap-ups always toast, except for alerts from hours that
-  were skipped, which go to the feed only. Loading a save from before city chaos shows a
-  one-off "New: city events…" toast.
+  seconds). Announcements always toast. Event wrap-ups toast where fans could come by train
+  (some did, or a station is within 1.5 km of the venue); the others go to the feed only, as do
+  alerts from hours that were skipped. Loading a save from before city chaos shows a one-off
+  "New: city events…" toast.
 
 **Determinism.** Everything comes from the game's chaos seed:
 - the event calendar, the weather and its one-day forecast, and the incident plan are pure
@@ -310,9 +318,13 @@ sim and the UI).
 
 The commuter RNG is never touched. With chaos **Off** the simulation is bit-identical to the
 code before chaos: the same `DayReport`s, finances and mode shares, checked by hashing the
-headless and balance runs. Headless runs and scripts default to Off. A save stores the level,
-the seed and the planned event service, and a load mid-day replans the rest of the day from
-the seed.
+headless and balance runs. Headless runs and scripts default to Off. A save stores the level
+from the next 3 am and the level in force today, the seed, the exposure today's incidents were
+planned from at 3 am, and the planned event service. A load mid-day replans the rest of the day
+from the seed at today's level and from that exposure, so it matches the uninterrupted day even
+after a level change or a network edit since 3 am. Fans already on their way to (or at) an event
+count as arrived at their expected trip time, and wrap-ups posted before the save are not posted
+again.
 
 | Level | Incidents | Weather | Events |
 |---|---|---|---|
@@ -321,7 +333,7 @@ the seed.
 | Normal (new games) | ×1 | normal | normal |
 | Wild | ×2.5 | chances ×1.5 | chances ×1.25 |
 
-A level change takes effect at the next 3 am.
+A level change takes effect at the next 3 am, including after a save and load.
 
 ### Incidents
 
@@ -335,8 +347,10 @@ the ~40-station core that is about 7–9 a day at Normal and about 21 at Wild.
 | Sick passenger | 1 per 12,000 train-km | 3–8 min | the train is held at its next stop (never at a terminal) |
 | Police activity | 0.02 per station a day, busy stations likelier | 10–40 min | the station closes. Trains run through, and riders for it get off at the next stop and walk back. People waiting come back when it reopens if that is within 15 min; otherwise they take a cab |
 
-The deadlock watchdog ignores stall time while an incident is active. There is no separate
-incident cost: it shows up as lost fares, crowding, give-ups and the next day's choices.
+While an incident is active, the deadlock watchdog ignores stall time on its routes and on every
+route sharing track or a junction with them; a stall anywhere else is still caught after 30 min.
+There is no separate incident cost: it shows up as lost fares, crowding, give-ups and the next
+day's choices.
 
 ### Weather
 
@@ -420,11 +434,19 @@ the code before chaos took 132–215 ms and chaos Off 132–141 ms, with the sam
 and 1,090 waiting. Single runs gave 178 ms at Normal and 179 ms for
 `chaos=wild weather=snow outdoor=1`. The UI adds no sim work.
 
+After the review fixes (per-route watchdog grace, saves keeping today's plan), 3 interleaved runs
+on a busier moment: Off 206–260 ms against 202–278 ms just before the fixes, Normal 245 ms
+(241 before) and `chaos=wild weather=snow outdoor=1` 346 ms (341 before), with identical
+boardings and waiting. All well inside the 1,000 ms budget.
+
 ## Known issues
 
 - Changing the city chaos level redraws the announced events from that level's calendar at
   once (Wild draws more, and a venue can draw a different kind), while today's events stay as
-  the worker planned them at 3 am.
+  the worker planned them at 3 am. Event service planned for an announced event that the redraw
+  removes is cancelled, with a toast.
+- After a mid-day load, the day's report counts boardings from the load onwards only (as in v1),
+  so event fans' trips to the venue made before the save are missing from its event riders.
 - Units are one setting for both cities (miles by default), so London shows miles until you
   switch to kilometres in the menu.
 - London uses 2011 census flows, because the 2021 census was taken in lockdown. Its commuter

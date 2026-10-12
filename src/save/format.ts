@@ -8,7 +8,7 @@ import type { RouteSetData } from '../routes/routeSet';
 import type { GoalState } from '../core/goals';
 import type { UnitSystem } from '../core/units';
 import type { ChaosLevel, CityId } from '../balance';
-import type { ServiceOverride } from '../sim/protocol';
+import type { DayExposure, ServiceOverride } from '../sim/protocol';
 
 /** v3: city chaos (events, disruptions, weather). */
 export const SAVE_VERSION = 3;
@@ -16,13 +16,18 @@ export const SAVE_VERSION = 3;
 /**
  * City chaos: the level, the seed (calendar, weather and the incident plan all derive from it) and
  * the planned event service. Active incidents, alerts and event agents are not saved: a load
- * replans the rest of the day from the same seed.
+ * replans the rest of the day from the same seed, at today's level and from today's 3 am exposure.
  */
 export interface SavedChaos {
+  /** The player's level, from the next 3 am. */
   level: ChaosLevel;
+  /** The level in force today, if it differs from the next 3 am's (missing: `level`). */
+  levelToday?: ChaosLevel;
   seed: number;
   service: ServiceOverride[];
   nextServiceId: number;
+  /** What today's incidents were planned from at 3 am (missing: the loaded network's exposure). */
+  dayExposure?: DayExposure;
 }
 
 export interface SaveSettings {

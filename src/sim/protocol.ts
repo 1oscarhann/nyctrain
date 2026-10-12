@@ -4,6 +4,7 @@
  */
 import type { ChaosLevel, CityId, IncidentKind, TrackClass, WeatherKind } from '../balance';
 import type { DayWeather } from '../core/cityCalendar';
+import type { Exposure } from './incidents';
 
 export type { ChaosLevel, DayWeather, IncidentKind, WeatherKind };
 
@@ -137,8 +138,8 @@ export type ToWorker =
       time: number;
       fare: number;
       modeState?: ModeState;
-      /** City chaos level and seed (calendar, weather and incidents all derive from the seed). */
-      chaos: { level: ChaosLevel; seed: number };
+      /** City chaos (calendar, weather and incidents all derive from the seed). */
+      chaos: ChaosInit;
       /** Planned event service. */
       service: ServiceOverride[];
     }
@@ -281,6 +282,26 @@ export interface DayChaosInfo {
   /** Weather factors in force (walk/drive/outdoor speeds, dwell, crowding, incident rates). */
   mods: { walkSpeed: number; walkPenalty: number; driveSpeed: number; outdoorSpeed: number; dwell: number; crowd: number };
   events: EventDayInfo[];
+  /** The network exposure today's incidents were planned from (saved, so a mid-day load replans the same ones). */
+  exposure?: Exposure;
+}
+
+/** Today's incident plan basis: the exposure measured at 3 am on `day`. */
+export interface DayExposure {
+  day: number;
+  exposure: Exposure;
+}
+
+/**
+ * City chaos settings for the worker. `level` is in force today; `nextLevel` (default: the same)
+ * applies from the next 3 am. A start after 3 am on `dayExposure.day` plans the rest of the day's
+ * incidents from that exposure instead of the loaded network's.
+ */
+export interface ChaosInit {
+  level: ChaosLevel;
+  seed: number;
+  nextLevel?: ChaosLevel;
+  dayExposure?: DayExposure;
 }
 
 /** Real people. */

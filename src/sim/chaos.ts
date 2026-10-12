@@ -9,7 +9,7 @@ import { dayIndex, SECONDS_PER_DAY } from '../core/calendar';
 import { CLEAR, CLEAR_MODS, eventsForDay, venueOf, venueXY, weatherForDay, weatherMods, type CityEvent, type DayWeather, type FullWeatherMods } from '../core/cityCalendar';
 import type { Commuters } from './commuters';
 import { cdfIndex, measureExposure, planIncidents, trackSpans, type Exposure, type PlannedIncident, type TrackSpan } from './incidents';
-import type { Alert, ChaosState, CompiledNetwork, CRouteDir, DayChaos, DayChaosInfo, EventDayInfo, EventOutcome, ServiceOverride } from './protocol';
+import type { Alert, ChaosInit, ChaosState, CompiledNetwork, CRouteDir, DayChaos, DayChaosInfo, DayExposure, EventDayInfo, EventOutcome, ServiceOverride } from './protocol';
 import { TState, type TrackRestriction, type Train, type TrainSim } from './trainSim';
 
 export interface ChaosCallbacks {
@@ -48,6 +48,10 @@ export class ChaosController {
   readonly seed: number;
   private net: CompiledNetwork | null = null;
   private exposure: Exposure = { trainKmByPeriod: [0, 0, 0, 0, 0], trainKm: 0, trackKm: 0, stations: 0 };
+  /** What today's incidents were planned from (the network at 3 am). */
+  private planExposure: Exposure = this.exposure;
+  /** A load's saved plan basis, used once by a start after 3 am on its day. */
+  private savedExposure: DayExposure | null;
   private spans: TrackSpan[] = [];
   private spanCdf = new Float64Array(0);
   /** Closed stations by compiled index (shared with the train sim and commuters). */
@@ -72,14 +76,15 @@ export class ChaosController {
   private now = 0;
 
   constructor(
-    opts: { level: ChaosLevel; seed: number },
+    opts: ChaosInit,
     private trains: TrainSim,
     private commuters: Commuters | null,
     private cb: ChaosCallbacks = {},
   ) {
     this.level = opts.level;
-    this.nextLevel = opts.level;
+    this.nextLevel = opts.nextLevel ?? opts.level;
     this.seed = opts.seed >>> 0;
+    this.savedExposure = opts.dayExposure ?? null;
     trains.onHold = (tr, si, t) => this.onHold(tr, si, t);
   }
 
@@ -114,14 +119,21 @@ export class ChaosController {
   }
 
   // ------------------------------------------------------------------ daily cycle
-  /** 3 am (or on start after 3 am): the day's weather, events and incident plan. Returns the events. */
-  beginDay(day: number, now: number): CityEvent[] {
+  /**
+   * 3 am (fresh: the next level takes over), or a start after 3 am (a load: today's level and,
+   * if saved, the 3 am exposure, so the rest of the day replans as it was). The day's weather,
+   * events and incident plan. Returns the events.
+   */
+  beginDay(day: number, now: number, fresh = true): CityEvent[] {
     this.day = day;
-    this.level = this.nextLevel;
+    if (fresh) this.level = this.nextLevel;
     this.weather = this.forcedWeather.get(day) ?? weatherForDay(this.seed, day, this.level);
     this.applyWeather();
     const events = this.forcedEvents.get(day) ?? eventsForDay(this.seed, day, this.level);
-    this.plan = planIncidents(this.seed, day, this.exposure, CHAOS.rate[this.level], this.mods.rates, now);
+    const saved = this.savedExposure;
+    this.savedExposure = null;
+    this.planExposure = !fresh && saved && saved.day === day ? saved.exposure : this.exposure;
+    this.plan = planIncidents(this.seed, day, this.planExposure, CHAOS.rate[this.level], this.mods.rates, now);
     this.planIdx = 0;
     this.weatherAlert = null;
     if (this.weather.kind !== 'clear') {
@@ -137,18 +149,26 @@ export class ChaosController {
     this.commuters?.setWeather(this.weather);
   }
 
-  /** After injection: post today's info and schedule the event wrap-ups. */
-  setEventInfo(day: number, events: CityEvent[], info: EventDayInfo[]): void {
+  /**
+   * After injection: post today's info and schedule the event wrap-ups. On a load (`postedBy` =
+   * the start time) wrap-ups due by then already went out before the save, so they are skipped.
+   */
+  setEventInfo(day: number, events: CityEvent[], info: EventDayInfo[], postedBy = -Infinity): void {
     const m = this.mods;
+    const ex = this.planExposure;
     this.info = {
       day,
       level: this.level,
       weather: { ...this.weather },
       mods: { walkSpeed: m.walkSpeed, walkPenalty: m.walkPenalty, driveSpeed: m.driveSpeed, outdoorSpeed: m.outdoorSpeed, dwell: m.dwell, crowd: m.crowd },
       events: info,
+      exposure: { trainKmByPeriod: ex.trainKmByPeriod.slice(), trainKm: ex.trainKm, trackKm: ex.trackKm, stations: ex.stations },
     };
     this.cb.dayChaos?.(this.info);
-    [...events].sort((a, b) => a.id - b.id).forEach((ev, idx) => this.wrapups.push({ at: day * DAY + ev.end + EVENTS.wrapUpAfter, day, idx, ev }));
+    [...events].sort((a, b) => a.id - b.id).forEach((ev, idx) => {
+      const at = day * DAY + ev.end + EVENTS.wrapUpAfter;
+      if (at > postedBy) this.wrapups.push({ at, day, idx, ev });
+    });
     this.wrapups.sort((a, b) => a.at - b.at || a.idx - b.idx);
   }
 
@@ -301,7 +321,9 @@ export class ChaosController {
       pos,
       path,
     };
-    this.started({ alert, kind: 'signal', until, restr }, dur);
+    // Every route on the restricted track (the sampled points may miss one using another part of it).
+    const onTrack = net.routes.filter((r) => r.dirs.some((d) => d.elems.some((e) => e.track === sp.track))).map((r) => r.id);
+    this.started({ alert, kind: 'signal', until, restr }, dur, [...new Set([...alert.routes, ...onTrack])]);
     return id;
   }
 
@@ -395,9 +417,9 @@ export class ChaosController {
     return id;
   }
 
-  private started(a: Active, dur: number): void {
-    // Trains queued behind an incident aren't deadlocked.
-    this.trains.graceUntil = Math.max(this.trains.graceUntil, a.until);
+  private started(a: Active, dur: number, graceRoutes: readonly number[] = a.alert.routes): void {
+    // Trains queued behind an incident aren't deadlocked: on its routes and those sharing their track.
+    this.trains.extendGrace(graceRoutes, a.until);
     this.counts[a.kind]++;
     this.minutes += dur / 60;
     this.active.push(a);

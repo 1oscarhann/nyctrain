@@ -87,8 +87,8 @@ export class ChaosLayers {
     return this.incidents.length > 0;
   }
 
-  /** Under the trains: signal segments, the focused venue's ring, venue markers and labels. */
-  venueLayers(zoom: number): Layer[] {
+  /** Under the trains: signal segments, the focused venue's ring and venue markers (labels: venueLabelLayers). */
+  venueLayers(): Layer[] {
     const v = this.version;
     const out: Layer[] = [];
     if (this.signals.length) {
@@ -151,36 +151,45 @@ export class ChaosLayers {
           getLineColor: (d) => [...INK, d.today ? 255 : 170],
           getLineWidth: 2,
           lineWidthUnits: 'pixels',
+          // Round dots facing the camera in 3D, not ellipses on the ground.
+          billboard: true,
           pickable: true,
           parameters: DEPTH,
           updateTriggers: { getPosition: v, getRadius: v, getFillColor: v, getLineColor: v },
         }),
       );
-      if (zoom >= 11.5) {
-        out.push(
-          new TextLayer<VenueMarker>({
-            id: 'chaos-venue-labels',
-            data: this.venues,
-            getPosition: (d) => d.pos,
-            getText: (d) => d.text,
-            getSize: 12,
-            getColor: (d) => [...EVENT_RGB, d.today ? 255 : 170],
-            getPixelOffset: (d) => [0, d.radius + 10],
-            getTextAnchor: 'middle',
-            getAlignmentBaseline: 'top',
-            fontFamily: 'Overpass, sans-serif',
-            fontWeight: 700,
-            fontSettings: { sdf: true, fontSize: 48, buffer: 6 },
-            outlineWidth: 3,
-            outlineColor: [...INK, 235],
-            characterSet: 'auto',
-            parameters: DEPTH,
-            updateTriggers: { getText: v, getColor: v, getPixelOffset: v, getPosition: v },
-          }),
-        );
-      }
     }
     return out;
+  }
+
+  /**
+   * Venue labels from zoom 11.5, drawn above the stations and trains (a station label or a
+   * passing train would otherwise cover them), above the dot: station labels sit to the right.
+   */
+  venueLabelLayers(zoom: number): Layer[] {
+    if (!this.venues.length || zoom < 11.5) return [];
+    const v = this.version;
+    return [
+      new TextLayer<VenueMarker>({
+        id: 'chaos-venue-labels',
+        data: this.venues,
+        getPosition: (d) => d.pos,
+        getText: (d) => d.text,
+        getSize: 12,
+        getColor: (d) => [...EVENT_RGB, d.today ? 255 : 170],
+        getPixelOffset: (d) => [0, -(d.radius + 6)],
+        getTextAnchor: 'middle',
+        getAlignmentBaseline: 'bottom',
+        fontFamily: 'Overpass, sans-serif',
+        fontWeight: 700,
+        fontSettings: { sdf: true, fontSize: 48, buffer: 6 },
+        outlineWidth: 3,
+        outlineColor: [...INK, 235],
+        characterSet: 'auto',
+        parameters: DEPTH,
+        updateTriggers: { getText: v, getColor: v, getPixelOffset: v, getPosition: v },
+      }),
+    ];
   }
 
   /** Above the stations: pulsing halo, a solid dot (red for severity 3) and a "!" glyph. */
@@ -198,6 +207,8 @@ export class ChaosLayers {
         getRadius: 10 + 10 * pulse,
         radiusUnits: 'pixels',
         getFillColor: (d) => [...col(d), 150 * (1 - pulse)],
+        // Face the camera in 3D, so the marker and its "!" stay round and readable when tilted.
+        billboard: true,
         parameters: DEPTH,
         updateTriggers: { getRadius: q, getFillColor: [v, q], getPosition: v },
       }),
@@ -212,6 +223,7 @@ export class ChaosLayers {
         getLineColor: [255, 255, 255, 255],
         getLineWidth: 1.5,
         lineWidthUnits: 'pixels',
+        billboard: true,
         pickable: true,
         parameters: DEPTH,
         updateTriggers: { getFillColor: v, getPosition: v },
@@ -221,7 +233,7 @@ export class ChaosLayers {
         data: this.incidents,
         getPosition: (d) => d.pos,
         getText: () => '!',
-        getSize: 13,
+        getSize: 14,
         getColor: (d) => (d.severity >= 3 ? [255, 255, 255, 255] : [...INK, 255]),
         getTextAnchor: 'middle',
         getAlignmentBaseline: 'center',

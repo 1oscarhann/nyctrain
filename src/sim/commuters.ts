@@ -1332,11 +1332,22 @@ export class Commuters implements PassengerHooks {
         if (depart >= now) {
           this.aState[a] = S_HOME;
           this.push(depart, a, E_DEPART);
-        } else if (dayStart + leave >= now) {
-          // Loaded mid-event: they're at the venue.
-          this.aState[a] = S_WORK;
-          this.push(dayStart + leave, a, E_RETURN);
-        } else this.aState[a] = S_DONE;
+        } else {
+          // Loaded after they set off: the trip to the venue happened before the save, so it
+          // counts for the outcome at its expected time (door to door, no queues).
+          tally.arrived += scale;
+          if (depart + path.time > dayStart + ev.start) tally.late += scale;
+          tally.timeSum += path.time * scale;
+          tally.timeN += scale;
+          if (dayStart + leave >= now) {
+            // Mid-event: they're at the venue.
+            this.aState[a] = S_WORK;
+            this.push(dayStart + leave, a, E_RETURN);
+          } else {
+            this.aState[a] = S_DONE;
+            tally.home += scale;
+          }
+        }
         tally.planned[MODE_TRANSIT] += scale;
       }
       out.push({

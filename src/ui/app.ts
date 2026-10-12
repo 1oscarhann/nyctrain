@@ -52,7 +52,7 @@ import { edgePanel, tractPanel, trainPanel } from './panels/inspectPanels';
 import { financePanel } from './panels/financePanel';
 import { goalsPanel } from './panels/goalsPanel';
 import { alertsPanel } from './panels/alertsPanel';
-import { AlertFeed, describeAlert, eventWhen, fmtK, isIncident, LEVEL_HINT, LEVEL_LABEL, outcomeText, plainDetail, type RouteRef } from './alertFeed';
+import { AlertFeed, describeAlert, eventWhen, fmtK, isIncident, LEVEL_HINT, LEVEL_LABEL, outcomeText, plainDetail, wrapUpToasts, type RouteRef } from './alertFeed';
 import { openMenu } from './menu';
 import { Tutorial } from './tutorial';
 import { showGameOver, showMonthReport } from './reports';
@@ -161,7 +161,7 @@ export class App implements AppContext {
     } else {
       // A new game draws its own city chaos seed (calendar, weather and incidents derive from it).
       this.game.chaos.seed = newChaosSeed();
-      if (opts.chaos) this.game.chaos.level = opts.chaos;
+      if (opts.chaos) this.game.chaos.level = this.game.chaos.levelToday = opts.chaos;
     }
     this.feed = new AlertFeed(this.game);
 
@@ -206,10 +206,11 @@ export class App implements AppContext {
     view.addLayers('overlays', () => this.overlays.layers());
     view.addLayers('crowding', () => this.crowdLayers());
     view.addLayers('elevated', () => this.elevated.layers(this.network, view.is3D, view.map.getZoom()));
-    view.addLayers('venues', () => this.chaosLayers.venueLayers(view.map.getZoom()));
+    view.addLayers('venues', () => this.chaosLayers.venueLayers());
     view.addLayers('flows', () => this.flowLayers());
     view.addLayers('trains', () => this.trainLayers());
     view.addLayers('stations', () => this.stations.layers(view.map.getZoom(), performance.now()));
+    view.addLayers('venue-labels', () => this.chaosLayers.venueLabelLayers(view.map.getZoom()));
     view.addLayers('incidents', () => this.chaosLayers.incidentLayers(performance.now()));
     view.addLayers('construction', () => this.constructionLabels());
     view.addLayers('tool', () => this.tools.layers());
@@ -240,7 +241,12 @@ export class App implements AppContext {
     this.sim.events.on('error', (m) => this.toast('Simulation error', m, 'red'));
     this.sim.events.on('alert', (a) => this.onAlert(a));
     this.sim.events.on('dayChaos', (info) => {
+      // Kept for saves: a mid-day load plans the rest of today at this level, from this exposure.
+      this.game.setChaosToday(info);
       this.feed.setInfo(info);
+      // Event service that ended overnight goes now, not at midnight.
+      this.game.pruneService(Math.max(this.game.time, info.day * SECONDS_PER_DAY + TIME.modeChoiceAt));
+      this.dropOrphanService();
       this.refreshChaos();
     });
 
@@ -250,7 +256,7 @@ export class App implements AppContext {
       time: this.game.time,
       fare: this.game.fare,
       modeState,
-      chaos: { level: this.game.chaos.level, seed: this.game.chaos.seed },
+      chaos: this.game.chaosInit(),
       service: this.game.chaos.service,
     });
     this.recompile();
@@ -348,6 +354,8 @@ export class App implements AppContext {
   // ------------------------------------------------------------------ design changes
   private onDesignChange(): void {
     this.game.routes.pruneMissing(this.game.network);
+    // Event service on a deleted route would still be saved and listed: drop it.
+    if (this.game.pruneServiceRoutes().length) this.sim.setService(this.game.chaos.service);
     const sel = this.game.selection;
     if (sel?.kind === 'station' && !this.game.network.stations.has(sel.id)) this.game.select(null);
     else if (sel?.kind === 'edge' && !this.game.network.edges.has(sel.id)) this.game.select(null);
@@ -756,14 +764,35 @@ export class App implements AppContext {
     // Events a new level reveals aren't announcements.
     this.feed.markSeen();
     this.toast(`City chaos: ${LEVEL_LABEL[level]} from 3 am`, `${LEVEL_HINT[level]}.`, 'amber');
+    // The announced days are redrawn at the new level: service for events that vanished goes.
+    this.dropOrphanService();
+  }
+
+  /**
+   * Cancel event service planned for an event that is no longer on the calendar (today's
+   * events as the worker planned them, then the announced days at the player's level). It would
+   * otherwise run and be billed with no event card to show or remove it.
+   */
+  private dropOrphanService(): void {
+    const gone = this.feed.orphanService(this.game.chaos.service);
+    if (!gone.length) return;
+    for (const o of gone) this.game.removeService(o.id);
+    this.sim.setService(this.game.chaos.service);
+    const routes = [...new Set(gone.map((o) => this.routeRef(o.routeId)?.bullet ?? '?'))].join(' ');
+    this.toast('Event service cancelled', `${routes}: its event is no longer on the calendar at this chaos level.`, 'amber');
   }
 
   openAlerts(f: { focus?: number; event?: number } = {}): void {
     this.game.select({ kind: 'alerts', ...(f.focus !== undefined ? { focus: f.focus } : {}), ...(f.event !== undefined ? { event: f.event } : {}) });
   }
 
+  /** Service alerts is on screen (the route tool takes the side panel while it is active). */
+  alertsShowing(): boolean {
+    return this.game.selection?.kind === 'alerts' && this.tools.active?.id !== 'route';
+  }
+
   toggleAlerts(): void {
-    if (this.game.selection?.kind === 'alerts') this.game.select(null);
+    if (this.alertsShowing()) this.game.select(null);
     else this.openAlerts();
   }
 
@@ -802,7 +831,8 @@ export class App implements AppContext {
         const d = describeAlert(a, this.routeRef);
         this.toasts.show(d.title, `${plainDetail(d)} · ${d.when}`, a.severity === 3 ? 'red' : 'amber', 6000, () => this.openAlerts({ focus: a.id }));
       }
-    } else if (a.kind === 'event' && a.outcome) {
+    } else if (wrapUpToasts(a, this.compiled?.net)) {
+      // Wrap-ups toast only where fans could come by train; the rest go to the feed.
       const d = describeAlert(a, this.routeRef);
       this.toasts.show(d.title, d.detail, 'event', 6000, () => this.openAlerts({ focus: a.id }));
     }

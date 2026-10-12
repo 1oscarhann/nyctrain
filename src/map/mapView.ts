@@ -8,6 +8,7 @@ import type { Layer } from '@deck.gl/core';
 import { MAP } from '../balance';
 import { city } from '../cities';
 import { Emitter } from '../core/emitter';
+import { getUnits, onUnitsChange } from '../core/units';
 import { BUILDING_HEIGHT_STATE, BUILDING_LAYER, loadStyle } from './style';
 
 export interface MapViewEvents extends Record<string, unknown> {
@@ -29,6 +30,7 @@ export class MapView {
   private buildingScale = 0;
   private tiltToken = 0;
   private destroyed = false;
+  private unsubUnits: (() => void) | null = null;
 
   private constructor(map: MLMap) {
     this.map = map;
@@ -68,9 +70,14 @@ export class MapView {
     map.doubleClickZoom.disable(); // double-click finishes track
     map.keyboard.disable(); // game shortcuts own the keyboard
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
-    map.addControl(new maplibregl.ScaleControl({ unit: 'imperial' }), 'bottom-left');
+    // The scale bar follows the units setting (miles or kilometres).
+    const scaleUnit = () => (getUnits() === 'metric' ? 'metric' : 'imperial');
+    const scale = new maplibregl.ScaleControl({ unit: scaleUnit() });
+    map.addControl(scale, 'bottom-left');
     await new Promise<void>((resolve) => map.once('load', () => resolve()));
-    return new MapView(map);
+    const view = new MapView(map);
+    view.unsubUnits = onUnitsChange(() => scale.setUnit(scaleUnit()));
+    return view;
   }
 
   get is3D(): boolean {
@@ -145,6 +152,7 @@ export class MapView {
   /** Stop the render loop and any tilt animation, then remove the map. */
   destroy(): void {
     this.destroyed = true;
+    this.unsubUnits?.();
     this.tiltToken++;
     this.animating = 0;
     this.map.remove();

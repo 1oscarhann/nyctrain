@@ -5,13 +5,13 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { CHAOS } from '../src/balance';
 import { applyCity } from '../src/cities';
-import { announcedEvents, eventsForDay } from '../src/core/cityCalendar';
+import { announcedEvents, eventsForDay, MAX_VENUES, weatherForDay } from '../src/core/cityCalendar';
 import { Game } from '../src/core/game';
 import { fmtMoney, setUnits } from '../src/core/units';
 import type { Terrain } from '../src/construction/validate';
 import type { World } from '../src/data/world';
-import type { Alert, DayChaosInfo } from '../src/sim/protocol';
-import { AlertFeed, describeAlert, eventWhen, nextDayWord, outcomeText, plainDetail, RECENT, type RouteRef } from '../src/ui/alertFeed';
+import type { Alert, CompiledNetwork, DayChaosInfo, EventOutcome } from '../src/sim/protocol';
+import { AlertFeed, describeAlert, eventWhen, nextDayWord, outcomeText, plainDetail, RECENT, wrapUpToasts, type RouteRef } from '../src/ui/alertFeed';
 
 const D = 86400;
 const H = 3600;
@@ -145,6 +145,65 @@ describe('alert feed', () => {
     // Already-seen events are not announced again.
     const d = feed.day;
     expect(feed.rollDay(d, d * D + 60)).toEqual([]);
+  });
+});
+
+describe('event service and wrap-ups', () => {
+  it('cancels only service whose event a level change took off the calendar', () => {
+    applyCity('nyc');
+    const seed = 3;
+    // A day whose announced events at Wild include one that Calm doesn't have.
+    let day = 1;
+    const ids = (lv: 'wild' | 'calm', d: number) => announcedEvents(seed, d, lv).filter((e) => e.day > d).map((e) => e.id);
+    while (!ids('wild', day).some((id) => !ids('calm', day).includes(id))) day++;
+    const g = game('wild', seed);
+    const feed = new AlertFeed(g);
+    feed.rollDay(day, day * D + 10 * H);
+    const gone = ids('wild', day).find((id) => !ids('calm', day).includes(id))!;
+    const stays = ids('calm', day)[0];
+    const svc = (eventId: number, from: number) => g.addService({ routeId: 1, from, to: from + 2 * H, headwayMin: 3, eventId });
+    const a = svc(gone, day * D + 20 * H);
+    if (stays !== undefined) svc(stays, day * D + 20 * H);
+    // Service for yesterday's event, still running after midnight, is left alone.
+    svc((day - 1) * MAX_VENUES + 2, day * D - H);
+    expect(feed.orphanService(g.chaos.service)).toEqual([]);
+    g.setChaosLevel('calm');
+    expect(feed.orphanService(g.chaos.service)).toEqual([a]);
+  });
+
+  it("shows today at today's level after a mid-day load, before the worker's 3 am info comes in", () => {
+    applyCity('nyc');
+    const seed = 2030;
+    // A day whose weather or events differ between Wild and Off (Off: clear, none).
+    let day = 1;
+    while (weatherForDay(seed, day, 'wild').kind === 'clear' && !eventsForDay(seed, day, 'wild').length) day++;
+    const g = game('wild', seed);
+    g.setChaosLevel('off');
+    // Loaded at 10:00: Wild today (as the worker planned it at 3 am), Off from the next 3 am.
+    g.time = day * D + 10 * H;
+    const feed = new AlertFeed(g);
+    feed.rollDay(day, g.time);
+    expect(feed.levels()).toEqual({ today: 'wild', next: 'off' });
+    expect(feed.off).toBe(false);
+    expect(feed.weather()).toEqual(weatherForDay(seed, day, 'wild'));
+    expect(feed.events().filter((e) => e.day === day).map((e) => e.id)).toEqual(eventsForDay(seed, day, 'wild').map((e) => e.id));
+    // Before 3 am the calendar follows the level 3 am will apply.
+    g.time = day * D + 1 * H;
+    expect(feed.weather()).toEqual(weatherForDay(seed, day, 'off'));
+    expect(feed.events().filter((e) => e.day === day)).toEqual([]);
+  });
+
+  it('toasts a wrap-up only where fans could come by train', () => {
+    applyCity('nyc');
+    const out = (byTransit: number): EventOutcome => ({ id: 18, label: 'Midtown arena game', attendance: 19_400, byTransit, arrived: byTransit, late: 0, gaveUp: 0, avgTripMin: 40 });
+    const wrap = (byTransit: number) => alert({ id: 1900, kind: 'event', status: 'info', severity: 1, routes: [], eventId: 18, pos: [0, 0], outcome: out(byTransit) });
+    const net = (x: number) => ({ version: 1, stations: [{ id: 5, x, y: 0, name: '34 St', group: 0 }], routes: [], trackCount: 0, lockCount: 0 }) as unknown as CompiledNetwork;
+    expect(wrapUpToasts(wrap(7320), null)).toBe(true);
+    // Nobody came: toast only if a station is within the access walk (the player can do something).
+    expect(wrapUpToasts(wrap(0), net(900))).toBe(true);
+    expect(wrapUpToasts(wrap(0), net(6600))).toBe(false);
+    expect(wrapUpToasts(wrap(0), null)).toBe(false);
+    expect(wrapUpToasts(alert({}), net(0))).toBe(false);
   });
 });
 

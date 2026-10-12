@@ -8,12 +8,14 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { CHAOS_BY_CITY, TRAINS } from '../src/balance';
 import { applyCity } from '../src/cities';
 import { CLEAR, eventsForDay } from '../src/core/cityCalendar';
+import { migrate } from '../src/save/migrate';
+import { applySave, buildSave } from '../src/save/serialize';
 import type { Game } from '../src/core/game';
 import { compileNetwork } from '../src/routes/compile';
 import { SimClient } from '../src/sim/client';
 import { Engine } from '../src/sim/engine';
 import { buildTestNetwork, createHeadlessGame, drawLine, makeRoute, midtownArenaEvent, runDays, startEngine, stationNear, stepUntil, venueEvent } from '../src/sim/headless';
-import type { Alert, DayChaosInfo, DayReport, FromWorker, ToWorker } from '../src/sim/protocol';
+import type { Alert, DayChaosInfo, DayReport, FromWorker, ModeState, ToWorker } from '../src/sim/protocol';
 import { TState, type Train } from '../src/sim/trainSim';
 import { loadLandFromDisk, loadWorldFromDisk } from '../scripts/nodeData';
 
@@ -257,6 +259,92 @@ describe('city chaos, headless (New York)', () => {
     expect(a.run.engine.commuters!.eventAgentCount()).toBe(0);
     expect(JSON.stringify(a.run.reports)).toBe(JSON.stringify(b.run.reports));
     expect(a.run.reports[1].riders).toBeGreaterThan(0);
+  }, 180_000);
+
+  /** Save the game at the engine's time and load it into a fresh game, through the real save code. */
+  const saveAndLoad = (game: Game, engine: Engine) => {
+    game.time = engine.time;
+    const settings = { units: 'imperial' as const, agentScale: 10, seed: 1885 };
+    const file = buildSave(game, { name: 't', goals: {} as never, lastReport: null, tutorialDone: true, settings, modeState: engine.commuters!.modeState() });
+    const loaded = createHeadlessGame(world, land);
+    const r = applySave(loaded, migrate(JSON.parse(JSON.stringify(file))));
+    return { loaded, modeState: r.modeState };
+  };
+
+  it("a mid-day load keeps today as planned at 3 am, after a level change and an edit since then", () => {
+    const seed = 2030;
+    // A day whose events differ between Normal and Wild, so a load at the wrong level shows.
+    const ids = (lv: 'normal' | 'wild', d: number) => eventsForDay(seed, d, lv).map((e) => e.id).join();
+    let day = 1;
+    while (ids('normal', day) === ids('wild', day)) day++;
+    const game = createHeadlessGame(world, land, { chaos: 'normal', chaosSeed: seed });
+    const { r1 } = buildTestNetwork(game);
+    game.time = day * D + 2 * H;
+    const infoA: DayChaosInfo[] = [];
+    const a = startEngine(game, { dayChaos: (i) => infoA.push(i) });
+    stepUntil(a, day * D + 9 * H);
+    // An edit after 3 am (more midday trains: more train-km), then Wild from the next 3 am.
+    game.routes.update(r1.id, { headways: { ...game.routes.get(r1.id)!.headways, midday: 4 } });
+    a.setNetwork(compileNetwork(game).net);
+    stepUntil(a, day * D + 10 * H);
+    game.setChaosLevel('wild');
+    a.setChaosLevel('wild');
+    const { loaded, modeState } = saveAndLoad(game, a);
+    expect(loaded.chaos).toMatchObject({ level: 'wild', levelToday: 'normal', dayExposure: { day } });
+    const infoB: DayChaosInfo[] = [];
+    const b = startEngine(loaded, { modeState, dayChaos: (i) => infoB.push(i) });
+    a.step();
+    b.step();
+    // The rest of today: Normal, the same weather, events, fans and incidents still to come.
+    expect(b.chaos.level).toBe('normal');
+    expect(b.chaos.state().nextLevel).toBe('wild');
+    expect(b.chaos.todayWeather().weather).toEqual(a.chaos.todayWeather().weather);
+    expect(infoB.at(-1)!.events.map((e) => e.id)).toEqual(infoA.at(-1)!.events.map((e) => e.id));
+    expect(b.commuters!.eventAgentCount()).toBe(a.commuters!.eventAgentCount());
+    expect(b.chaos.remainingPlan()).toEqual(a.chaos.remainingPlan());
+    // Wild from the next 3 am, in both.
+    stepUntil(a, (day + 1) * D + 3 * H + 60);
+    stepUntil(b, (day + 1) * D + 3 * H + 60);
+    expect([a.chaos.level, b.chaos.level]).toEqual(['wild', 'wild']);
+    expect(b.chaos.remainingPlan()).toEqual(a.chaos.remainingPlan());
+  }, 180_000);
+
+  it('a load during an event keeps its outcome, and a load after its wrap-up does not post it again', () => {
+    const game = createHeadlessGame(world, land, { chaos: 'normal' });
+    buildTestNetwork(game);
+    // 13:00–16:00 at the Midtown arena (by the test line); the wrap-up goes out at 18:00.
+    const ev = midtownArenaEvent(1, 12_000, 13);
+    const wrapAt = D + ev.end + 2 * H;
+    const run = (from: number, modeState?: ModeState, stops: number[] = []) => {
+      game.time = from;
+      const alerts: Alert[] = [];
+      const reports: DayReport[] = [];
+      const e = startEngine(game, { alert: (x) => alerts.push(x), reports, modeState });
+      e.chaos.forceEvents(1, [ev]);
+      e.chaos.forceWeather(1, CLEAR);
+      const states = stops.map((t) => {
+        stepUntil(e, t);
+        return e.commuters!.modeState();
+      });
+      stepUntil(e, 2 * D + 60);
+      const wraps = alerts.filter((x) => x.kind === 'event' && x.eventId === ev.id);
+      return { states, wraps, outcome: reports.find((r) => r.day === 1)!.chaos!.events.find((o) => o.id === ev.id)! };
+    };
+    const midEvent = D + 14.5 * H, afterWrap = wrapAt + 1800;
+    const a = run(D + 2 * H, undefined, [midEvent, afterWrap]);
+    expect(a.outcome.arrived).toBeGreaterThan(1000);
+    expect(a.wraps).toHaveLength(1);
+    // Loaded mid-event: the fans already at the venue count as arrived, with a trip time.
+    const b = run(midEvent, a.states[0]);
+    expect(b.outcome.byTransit).toBe(a.outcome.byTransit);
+    expect(b.outcome.arrived).toBe(a.outcome.arrived);
+    expect(b.outcome.avgTripMin).toBeGreaterThan(a.outcome.avgTripMin * 0.6);
+    expect(b.wraps).toHaveLength(1);
+    expect(b.wraps[0].outcome!.arrived).toBe(a.outcome.arrived);
+    // Loaded after the wrap-up went out: it isn't posted again, and the day's report still has the outcome.
+    const c = run(afterWrap, a.states[1]);
+    expect(c.wraps).toEqual([]);
+    expect(c.outcome.arrived).toBe(a.outcome.arrived);
   }, 180_000);
 });
 

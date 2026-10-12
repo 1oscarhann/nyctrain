@@ -85,13 +85,18 @@ section lists where things live, what differs from the design below, and the hoo
   - Commands: `setChaosLevel(level)` (applies from the next 3 am) and `setService(list)` (the full
     list).
   - Query: `query<ChaosState>({ kind: 'chaos' })`.
-  - `init` already sends `chaos: { level, seed }` and `service` from `game.chaos`.
+  - `init` sends `chaos: game.chaosInit()` and `service` from `game.chaos`. `ChaosInit` is
+    `{ level, seed, nextLevel?, dayExposure? }`: `level` is the one in force today, `nextLevel` the
+    one from the next 3 am, and `dayExposure` today's 3 am plan basis (see "Review fixes").
 - **App**: `app.setChaosLevel(level)`, `app.addEventService(list)` → `ServiceOverride[]`, and
   `app.removeEventService(id)`. Each updates `game.chaos` and the worker together.
 - **Game**:
-  - State: `game.chaos: ChaosSettings` (`{ level, seed, service, nextServiceId }`).
-  - Methods: `setChaosLevel`, `addService(o)`, `removeService(id)`, `pruneService(now)`. Each emits
-    `'chaos'`.
+  - State: `game.chaos: ChaosSettings` (`{ level, levelToday, seed, service, nextServiceId,
+    dayExposure? }`). `level` is the player's level (from the next 3 am); `levelToday` and
+    `dayExposure` come from the worker's `dayChaos` (`setChaosToday(info)`).
+  - Methods: `setChaosLevel`, `addService(o)`, `removeService(id)`, `pruneService(now)`,
+    `pruneServiceRoutes()`. Each emits `'chaos'` when it changes something. `chaosInit()` gives the
+    worker's `ChaosInit`.
   - `Selection` gains `{ kind: 'alerts'; focus?: number }`.
   - New games draw a seed with `newChaosSeed()` (`crypto.getRandomValues`). Loaded games keep
     theirs.
@@ -185,6 +190,33 @@ synchronously.
   subway") at 17:30 on day 1.
 - The regression test is the "browser message order" test in `tests/chaos.headless.test.ts`. It
   drives the real `SimClient` against a real `Engine` in process.
+
+**Review fixes.**
+- **Saves keep today as the worker planned it.** A level change applies from the next 3 am, but a
+  save used to store only that next level, and the reload planned the rest of today with it: a
+  player could dodge a snow day (or conjure an event) by switching level, saving and loading.
+  Saves now also store `levelToday` and `dayExposure` (the network exposure today's incidents were
+  drawn from at 3 am). On a start after 3 am, `ChaosController.beginDay(day, now, fresh = false)`
+  keeps today's level and plans from the saved exposure, so the rest of the day is the same even
+  after edits made since 3 am. Both fields are optional in `SavedChaos` (still v3): missing means
+  `level` and the loaded network. Until the worker's info for today comes in, `AlertFeed` shows
+  today's calendar at `levelToday` after 3 am (and at `level` before it).
+- **A load during an event keeps its outcome.** Fans whose outbound trip started before the load
+  count as arrived at their expected trip time (`path.time`; late if that is after the start).
+  Wrap-ups due before the load already went out before the save, so `setEventInfo` skips them.
+- **The watchdog grace is per route group.** `TrainSim.extendGrace(routeIds, until)` covers the
+  incident's routes and every route sharing a directed track or a junction lock with them
+  (union–find in `setNetwork`), instead of one network-wide `graceUntil`. A real stall elsewhere
+  is still caught after 30 min.
+- **Event service hygiene.** Service on a deleted route is dropped (`pruneServiceRoutes`, also on
+  load). A level change that takes an announced event off the calendar cancels its service with
+  a toast (`AlertFeed.orphanService`). Ended windows no longer show in the route panel or on event
+  cards, and `pruneService` also runs at 3 am.
+- **UI.** Wrap-ups toast only where fans could come by train (`wrapUpToasts`: some did, or a
+  station is within the access walk); the rest go to the feed. `A` and the bell open Service
+  alerts when the route tool holds the side panel (`App.alertsShowing`). Venue labels sit above
+  their dot and are drawn above stations and trains; venue and incident dots face the camera in
+  3D. The map's scale bar follows the units setting.
 
 ## 0. Summary
 
@@ -320,7 +352,8 @@ Ticker (flex: 1, replaces .tb-spacer) | Daily riders | Transit share | Avg commu
   40 px/s using a CSS transform animation, and the strip is duplicated so the loop is seamless.
   It pauses on hover. Clicking an item opens Service alerts, focused on that item. With
   `prefers-reduced-motion` it does not scroll: it shows the first item with "+N" and rotates
-  every 5 s. It is hidden below 1,180 px width (`@media`); the chip stays. It is rebuilt only
+  every 5 s. It is hidden when its slot is narrower than 220 px (a container query; about 1,366 px
+  wide and below); the chip stays. It is rebuilt only
   when the item list changes (a signature string), never on each 250 ms top bar tick, so the
   animation does not restart.
 - Item order: active incidents (severity, then newest), today's events not yet over, today's
@@ -1171,7 +1204,14 @@ export type FromWorker =
 ### `src/save/format.ts`
 ```ts
 export const SAVE_VERSION = 3;
-export interface SavedChaos { level: ChaosLevel; seed: number; service: ServiceOverride[]; nextServiceId: number }
+export interface SavedChaos {
+  level: ChaosLevel;              // the player's, from the next 3 am
+  levelToday?: ChaosLevel;        // in force today (missing: level)
+  seed: number;
+  service: ServiceOverride[];
+  nextServiceId: number;
+  dayExposure?: DayExposure;      // today's 3 am plan basis (missing: the loaded network's)
+}
 // SaveFile.game += chaos: SavedChaos;
 ```
 Saved: the level, the seed (the calendar, weather and incident plan all derive from it) and the

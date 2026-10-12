@@ -4,7 +4,7 @@
  */
 import { city } from '../cities';
 import { Emitter } from '../core/emitter';
-import type { Alert, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, FromWorker, ModeState, Query, ServiceOverride, Snapshot, ToWorker } from './protocol';
+import type { Alert, ChaosInit, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, FromWorker, ModeState, Query, ServiceOverride, Snapshot, ToWorker } from './protocol';
 import { SKIP_LABEL, TRAIN_STRIDE } from './protocol';
 
 export interface SimEvents extends Record<string, unknown> {
@@ -66,7 +66,7 @@ export class SimClient {
     time: number;
     fare: number;
     modeState?: ModeState;
-    chaos: { level: ChaosLevel; seed: number };
+    chaos: ChaosInit;
     service: ServiceOverride[];
   }): void {
     const c = city();

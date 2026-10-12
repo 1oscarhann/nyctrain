@@ -141,10 +141,11 @@ export function alertsPanel(app: App, focus?: number, focusEvent?: number): Pane
     } else {
       lines.push(h('div', { class: 'ev-line hw-muted' }, ev.day === today ? 'Estimate at 3 am' : 'Estimate at 3 am on the day'));
     }
-    // Planned event service for it: one row per headway and set of windows, listing its routes.
+    // Planned event service for it (not yet ended): one row per headway and set of windows, listing its routes.
     const groups = new Map<string, ServiceOverride[]>();
-    for (const o of game.chaos.service.filter((x) => x.eventId === ev.id)) {
-      const wins = game.chaos.service.filter((x) => x.eventId === ev.id && x.routeId === o.routeId).sort((a, b) => a.from - b.from);
+    const svc = game.chaos.service.filter((x) => x.eventId === ev.id && x.to > t);
+    for (const o of svc) {
+      const wins = svc.filter((x) => x.routeId === o.routeId).sort((a, b) => a.from - b.from);
       const k = `${o.headwayMin}|${wins.map((w) => `${w.from}-${w.to}`).join(',')}`;
       groups.set(k, [...(groups.get(k) ?? []), o]);
     }

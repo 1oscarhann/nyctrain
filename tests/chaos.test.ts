@@ -411,6 +411,24 @@ function lineNet(opts: { outdoor?: boolean; headways?: number[]; fleet?: number 
   };
 }
 
+/** Three copies of the line: A (id 1) and C (id 3) on tracks 0/1, B (id 2) on tracks 2/3. */
+function threeLines(): CompiledNetwork {
+  const base = lineNet({ headways: [900, 900, 900, 900, 900], fleet: 4 });
+  const r0 = base.routes[0];
+  const on = (dir: CRouteDir, track: number, sb: number): CRouteDir => ({
+    ...dir,
+    elems: dir.elems.map((e) => ({ ...e, track, edge: 1 + (track >> 1) })),
+    stopStation: dir.stopStation.map((s) => s + sb),
+  });
+  const mk = (id: number, t0: number, sb: number): CRoute => ({ ...r0, id, name: `R${id}`, dirs: [on(r0.dirs[0], t0, sb), on(r0.dirs[1], t0 + 1, sb)] });
+  return {
+    ...base,
+    stations: [0, 1, 2, 3, 4, 5].map((i) => ({ id: 101 + i, x: STOPS[i % 3], y: i < 3 ? 0 : 500, name: `S${i}`, group: i })),
+    routes: [mk(1, 0, 0), mk(2, 2, 3), mk(3, 0, 0)],
+    trackCount: 4,
+  };
+}
+
 function stubHooks() {
   const calls = { pass: [] as { train: number; k: number }[], dispatch: [] as { t: number; dir: number }[] };
   const hooks: PassengerHooks = {
@@ -509,7 +527,7 @@ describe('train sim chaos hooks (hand-built line)', () => {
       if (leader && held < 0 && leader.s > 1200) {
         held = t;
         leader.holdUntil = t + 600;
-        sim.graceUntil = t + 600;
+        sim.extendGrace([leader.routeId], t + 600);
       }
       if (held >= 0 && t > held + 60 && t < held + 590) {
         movedWhileHeld = Math.max(movedWhileHeld, Math.abs(leader!.s - lastS));
@@ -534,6 +552,30 @@ describe('train sim chaos hooks (hand-built line)', () => {
     expect(leaderOn).toBe(true);
     expect(followerOn).toBe(true);
     expect(sim.day.deadlocks).toBe(0);
+  });
+
+  it("scopes the watchdog's incident grace to the incident's routes and those sharing their track", () => {
+    // A (1) and C (3) share tracks 0/1; B (2) runs alone on tracks 2/3.
+    const go = (graceFor: number[]) => {
+      const sim = new TrainSim(stubHooks().hooks);
+      sim.setNetwork(threeLines(), 0);
+      let held = false;
+      run(sim, 0, 7200, (t) => {
+        if (held) return;
+        const b = sim.trains.find((x) => x.routeId === 2 && x.state === TState.Running && x.s > 500);
+        const c = sim.trains.find((x) => x.routeId === 3 && x.state === TState.Running && x.s > 500);
+        if (!b || !c) return;
+        held = true;
+        // Both stall 35 min; the incident is on A only, until both are free.
+        b.holdUntil = c.holdUntil = t + 2100;
+        sim.extendGrace(graceFor, t + 2100);
+      });
+      expect(held).toBe(true);
+      return sim.day.deadlocks;
+    };
+    // An incident on A covers C (shared track) but not B: B's stall is caught after 30 min.
+    expect(go([1])).toBe(1);
+    expect(go([1, 2])).toBe(0);
   });
 
   it('a sick passenger holds the train at its next stop, never at the terminal', () => {
@@ -718,6 +760,7 @@ describe('save v3', () => {
   it('round-trips level, seed and event service; drops finished service and bad values', () => {
     const game = new Game({} as World, {} as Terrain, { sandbox: true, fare: 3, chaos: 'wild', chaosSeed: 4242 });
     game.time = 10 * 86400 + 12 * 3600;
+    for (const b of ['A', 'B', 'C']) game.routes.create({ name: b, bullet: b, color: '#fff', cls: 'heavy', stops: [], cars: 4, headways: { night: 0, am: 4, midday: 8, pm: 4, evening: 10 } });
     game.addService({ routeId: 3, from: game.time - 7200, to: game.time - 60, headwayMin: 3, eventId: 160 });
     const live = game.addService({ routeId: 3, from: game.time + 3600, to: game.time + 7200, headwayMin: 2.5, eventId: 161 });
     const save = buildSave(game, { name: 't', goals: {} as never, lastReport: null, tutorialDone: true, settings: { units: 'metric', agentScale: 10, seed: 1885 }, modeState: null });
@@ -725,12 +768,41 @@ describe('save v3', () => {
     expect(save.game.chaos.service).toEqual([live]);
     const loaded = new Game({} as World, {} as Terrain, { sandbox: true, fare: 3 });
     applySave(loaded, migrate(JSON.parse(JSON.stringify(save))));
-    expect(loaded.chaos).toEqual({ level: 'wild', seed: 4242, service: [live], nextServiceId: live.id + 1 });
+    expect(loaded.chaos).toEqual({ level: 'wild', levelToday: 'wild', seed: 4242, service: [live], nextServiceId: live.id + 1 });
     // Bad values.
     const bad = sanitizeChaos({ level: 'chaotic', seed: 'x', service: [{ id: 2, routeId: 1, from: 0, to: 'later', headwayMin: 3 }, { id: 7, routeId: 1, from: 0, to: 50, headwayMin: 3 }] }, 100);
-    expect(bad).toEqual({ level: 'normal', seed: CHAOS.defaultSeed, service: [], nextServiceId: 1 });
+    expect(bad).toEqual({ level: 'normal', levelToday: 'normal', seed: CHAOS.defaultSeed, service: [], nextServiceId: 1 });
     expect(sanitizeChaos({ level: 'calm', seed: -1, service: [] }, 0).seed).toBe(4294967295);
     expect(sanitizeChaos(undefined, 0).level).toBe('normal');
+  });
+
+  it("keeps today's level and plan basis apart from the next 3 am's level, and drops service on deleted routes", () => {
+    const game = new Game({} as World, {} as Terrain, { sandbox: true, fare: 3, chaos: 'normal', chaosSeed: 7 });
+    game.time = 4 * 86400 + 10 * 3600;
+    const exposure: Exposure = { trainKmByPeriod: [0, 4000, 5000, 4000, 996], trainKm: 13_996, trackKm: 31.5, stations: 16 };
+    // The worker planned today at Normal from this exposure; the player then picked Wild (from 3 am).
+    game.setChaosToday({ day: 4, level: 'normal', exposure });
+    game.setChaosLevel('wild');
+    expect(game.chaos.level).toBe('wild');
+    expect(game.chaos.levelToday).toBe('normal');
+    expect(game.chaosInit()).toEqual({ level: 'normal', nextLevel: 'wild', seed: 7, dayExposure: { day: 4, exposure } });
+    const r = game.routes.create({ name: 'A', bullet: 'A', color: '#fff', cls: 'heavy', stops: [], cars: 4, headways: { night: 0, am: 4, midday: 8, pm: 4, evening: 10 } });
+    const keep = game.addService({ routeId: r.id, from: game.time + 3600, to: game.time + 7200, headwayMin: 3, eventId: 80 });
+    game.addService({ routeId: 99, from: game.time + 3600, to: game.time + 7200, headwayMin: 3, eventId: 80 });
+    const save = migrate(JSON.parse(JSON.stringify(buildSave(game, { name: 't', goals: {} as never, lastReport: null, tutorialDone: true, settings: { units: 'metric', agentScale: 10, seed: 1885 }, modeState: null }))));
+    expect(save.game.chaos.levelToday).toBe('normal');
+    const loaded = new Game({} as World, {} as Terrain, { sandbox: true, fare: 3 });
+    applySave(loaded, save);
+    // Today stays Normal (planned from the 3 am exposure); Wild from the next 3 am. Route 99 is gone.
+    expect(loaded.chaosInit()).toEqual({ level: 'normal', nextLevel: 'wild', seed: 7, dayExposure: { day: 4, exposure } });
+    expect(loaded.chaos.service).toEqual([keep]);
+    // Deleting a route drops its event service.
+    loaded.routes.remove(r.id);
+    expect(loaded.pruneServiceRoutes()).toEqual([keep]);
+    expect(loaded.chaos.service).toEqual([]);
+    // Saves without the new fields (or with bad ones): today's level is the level, no plan basis.
+    expect(sanitizeChaos({ level: 'calm', seed: 1, service: [] }, 0)).toEqual({ level: 'calm', levelToday: 'calm', seed: 1, service: [], nextServiceId: 1 });
+    expect(sanitizeChaos({ level: 'calm', levelToday: 'mad', seed: 1, service: [], dayExposure: { day: 2, exposure: { trainKmByPeriod: ['x'] } } }, 0)).toEqual({ level: 'calm', levelToday: 'calm', seed: 1, service: [], nextServiceId: 1 });
   });
 
   it('loads a v2 report without chaos', () => {
@@ -762,6 +834,7 @@ describe('game chaos settings', () => {
     expect(game.removeService(b.id)).toBe(false);
     game.setChaosLevel('calm');
     expect(game.chaos.level).toBe('calm');
+    expect(game.chaos.levelToday).toBe(CHAOS.defaultLevel);
     expect(n).toBe(5);
   });
 });

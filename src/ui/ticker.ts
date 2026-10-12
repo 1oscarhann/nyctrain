@@ -18,11 +18,22 @@ export class NewsTicker {
   private items: TickerItem[] = [];
   private rotateAt = -1;
   private reduced: MediaQueryList | null;
+  private quiet = '';
+  private width = 0;
 
   constructor(private onPick: (item: TickerItem) => void) {
     this.track = h('div', { class: 'ticker-track' });
     this.el = h('div', { class: 'ticker', role: 'marquee', 'aria-label': 'Service news' }, this.track);
     this.reduced = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+    // Re-measure when the bar resizes (or the ticker reappears): scroll only when the line doesn't fit.
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(() => {
+        const w = this.el.clientWidth;
+        if (Math.abs(w - this.width) < 8) return;
+        this.width = w;
+        if (w > 0 && this.items.length && !this.reduced?.matches) this.render(this.quiet);
+      }).observe(this.el);
+    }
   }
 
   set(items: TickerItem[], quiet = 'Good service on all lines'): void {
@@ -40,6 +51,7 @@ export class NewsTicker {
     if (sig === this.sig) return;
     this.sig = sig;
     this.items = items;
+    this.quiet = quiet;
     this.render(quiet);
   }
 

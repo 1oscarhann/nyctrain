@@ -7,7 +7,7 @@ import { dayIndex, SECONDS_PER_DAY, timeOfDay } from '../core/calendar';
 import type { World } from '../data/world';
 import { ChaosController } from './chaos';
 import { Commuters } from './commuters';
-import type { Alert, CompiledNetwork, DayChaosInfo, DayReport, LiveStats, ModeState, ServiceOverride, Snapshot } from './protocol';
+import type { Alert, ChaosInit, CompiledNetwork, DayChaosInfo, DayReport, LiveStats, ModeState, ServiceOverride, Snapshot } from './protocol';
 import { TRAIN_STRIDE } from './protocol';
 import { TrainSim, TState } from './trainSim';
 
@@ -27,8 +27,8 @@ export interface EngineOptions {
   time: number;
   fare: number;
   modeState?: ModeState;
-  /** City chaos level and seed (default Off: the sim is exactly v1). */
-  chaos?: { level: ChaosLevel; seed: number };
+  /** City chaos level and seed (default Off: the sim is exactly v1), and a load's level from 3 am and plan basis. */
+  chaos?: ChaosInit;
   /** Planned event service. */
   service?: ServiceOverride[];
 }
@@ -75,16 +75,19 @@ export class Engine {
     else this.commuters?.startDay(this.time);
   }
 
-  /** 3 am (choose = true: daily mode choice), or a start after 3 am (schedule without re-choosing). */
+  /**
+   * 3 am (choose = true: daily mode choice, and the next level takes over), or a start after
+   * 3 am (schedule without re-choosing; today's level and plan stay as they were at 3 am).
+   */
   private beginDay(day: number, now: number, choose: boolean): void {
     const c = this.commuters;
     // Yesterday's late wrap-ups go out before the event pool resets.
     this.chaos.flushWrapups();
-    const events = this.chaos.beginDay(day, now);
+    const events = this.chaos.beginDay(day, now, choose);
     if (choose) c?.dailyModeChoice(now);
     else c?.startDay(now);
     const info = c ? c.injectEvents(events, day * SECONDS_PER_DAY, now, { seed: this.chaos.seed, service: this.chaos.serviceList() }) : [];
-    this.chaos.setEventInfo(day, events, info);
+    this.chaos.setEventInfo(day, events, info, choose ? -Infinity : now);
   }
 
   setNetwork(net: CompiledNetwork): void {

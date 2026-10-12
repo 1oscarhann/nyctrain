@@ -3,13 +3,14 @@
  * today's info from 3 am, and the announced events from the shared calendar. It turns them into
  * ticker items, alert cards and map markers. No DOM, so it is unit-tested.
  */
-import { TRAINS, type ChaosLevel } from '../balance';
+import { EVENTS, TIME, TRAINS, type ChaosLevel } from '../balance';
 import { city } from '../cities';
-import { dateOfDay, SECONDS_PER_DAY } from '../core/calendar';
+import { dateOfDay, SECONDS_PER_DAY, timeOfDay } from '../core/calendar';
 import {
   announcedEvents,
   eventsForDay,
   forecastFor,
+  MAX_VENUES,
   weatherForDay,
   weatherLabel,
   weatherMods,
@@ -19,7 +20,8 @@ import {
 } from '../core/cityCalendar';
 import type { Game } from '../core/game';
 import { fmtClock, fmtCount, fmtSpeed } from '../core/units';
-import type { Alert, DayChaos, DayChaosInfo, EventDayInfo, EventOutcome, IncidentKind } from '../sim/protocol';
+import { stationsNear } from '../routes/eventService';
+import type { Alert, CompiledNetwork, DayChaos, DayChaosInfo, EventDayInfo, EventOutcome, IncidentKind, ServiceOverride } from '../sim/protocol';
 
 export type Tone = 'red' | 'amber' | 'green' | 'event' | 'info';
 
@@ -137,6 +139,16 @@ export function outcomeText(o: EventOutcome): string {
   if (o.late > 0) parts.push(`${fmtCount(o.late)} arrived late`);
   if (o.gaveUp > 0) parts.push(`${fmtCount(o.gaveUp)} gave up`);
   return parts.join(' · ');
+}
+
+/**
+ * Does an event wrap-up deserve a toast? Only where fans could come by train: some did, or a
+ * station is within the access walk. The rest go to the feed (the player can't act on them).
+ */
+export function wrapUpToasts(a: Alert, net: CompiledNetwork | null | undefined): boolean {
+  if (a.kind !== 'event' || !a.outcome) return false;
+  if (a.outcome.byTransit > 0) return true;
+  return !!net && !!a.pos && stationsNear(net, a.pos[0], a.pos[1], EVENTS.venueAccess).length > 0;
 }
 
 /** Title, detail and timing of an alert, composed here so units follow the player's setting. */
@@ -327,7 +339,7 @@ export class AlertFeed {
 
   /** The level in force today (the worker's), and the level from the next 3 am (the game's). */
   levels(): { today: ChaosLevel; next: ChaosLevel } {
-    return { today: this.info?.level ?? this.game.chaos.level, next: this.game.chaos.level };
+    return { today: this.info?.level ?? this.game.chaos.levelToday, next: this.game.chaos.level };
   }
 
   /** True when chaos is off today and stays off. */
@@ -341,10 +353,18 @@ export class AlertFeed {
     return !!this.info && this.info.day === this.day;
   }
 
+  /**
+   * The level today's calendar follows until the worker's 3 am info for today is in: after 3 am
+   * (just after a mid-day load) today's level, before it the level 3 am will apply.
+   */
+  private calendarLevelToday(): ChaosLevel {
+    return timeOfDay(this.game.time) >= TIME.modeChoiceAt ? this.game.chaos.levelToday : this.game.chaos.level;
+  }
+
   /** The weather in force now: the worker's, else the calendar's. */
   weather(): DayWeather {
     if (this.info) return this.info.weather;
-    return weatherForDay(this.seed, Math.max(0, this.day), this.game.chaos.level);
+    return weatherForDay(this.seed, Math.max(0, this.day), this.calendarLevelToday());
   }
 
   /**
@@ -366,10 +386,20 @@ export class AlertFeed {
     if (this.infoIsToday) {
       for (const e of this.info!.events) out.push({ id: e.id, day: today, venue: e.venue, label: e.label, attendance: e.attendance, start: e.start, end: e.end, split: e });
     } else {
-      for (const e of eventsForDay(this.seed, today, level)) out.push({ ...pick(e), split: null });
+      for (const e of eventsForDay(this.seed, today, this.calendarLevelToday())) out.push({ ...pick(e), split: null });
     }
     for (const e of announcedEvents(this.seed, today, level)) if (e.day > today) out.push({ ...pick(e), split: null });
     return out.sort((a, b) => a.day - b.day || a.start - b.start || a.id - b.id);
+  }
+
+  /**
+   * Event service planned for an event that is no longer on the calendar: today's events as the
+   * worker planned them, then the announced days at the player's level (a level change redraws them).
+   */
+  orphanService(service: readonly ServiceOverride[]): ServiceOverride[] {
+    if (this.day < 0) return [];
+    const ids = new Set(this.events().map((e) => e.id));
+    return service.filter((o) => o.eventId > 0 && Math.floor(o.eventId / MAX_VENUES) >= this.day && !ids.has(o.eventId));
   }
 
   /** Up to ten ticker items, in the doc's order. */

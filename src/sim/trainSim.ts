@@ -110,8 +110,13 @@ export class TrainSim {
   // ---- city chaos (all inert at their defaults)
   /** Closed stations by compiled station index (game time they reopen); trains run through. */
   closedUntil: Float64Array = new Float64Array(0);
-  /** The deadlock watchdog ignores stall time before this (incidents in progress). */
-  graceUntil = -Infinity;
+  /**
+   * The deadlock watchdog ignores a route's stall time before this (an incident in progress on it,
+   * or on a route it shares track or a junction with), by compiled route index.
+   */
+  private graceByRoute = new Float64Array(0);
+  /** Routes that share track or a junction get the same group (compiled route index → group). */
+  private routeGroup: Int32Array = new Int32Array(0);
   /** A sick-passenger hold has started at a station (compiled index). */
   onHold: ((tr: Train, stationIdx: number, t: number) => void) | null = null;
   private outdoorFactor = 1;
@@ -128,6 +133,12 @@ export class TrainSim {
   setNetwork(net: CompiledNetwork, t: number): void {
     const old = this.net;
     const oldTrains = this.trains;
+    const oldGrace = new Map<number, number>();
+    old?.routes.forEach((r, i) => {
+      if (this.graceByRoute[i] > t) oldGrace.set(r.id, this.graceByRoute[i]);
+    });
+    this.graceByRoute = Float64Array.from(net.routes, (r) => oldGrace.get(r.id) ?? -Infinity);
+    this.routeGroup = routeGroups(net);
     this.net = net;
     this.trains = [];
     this.dispatch = [];
@@ -203,6 +214,20 @@ export class TrainSim {
     this.dispatchById = newById;
     // Routes that vanished: deliver anyone on board.
     for (const trs of oldByRoute.values()) for (const tr of trs) if (tr.load > 0) this.hooks.evacuate(tr, t);
+  }
+
+  /**
+   * An incident on these routes (ids) until `until`: trains on them, and on every route sharing
+   * track or a junction with them (they can queue behind it), aren't counted as deadlocked meanwhile.
+   */
+  extendGrace(routeIds: readonly number[], until: number): void {
+    const net = this.net;
+    if (!net || !routeIds.length) return;
+    const groups = new Set<number>();
+    net.routes.forEach((r, ri) => {
+      if (routeIds.includes(r.id)) groups.add(this.routeGroup[ri]);
+    });
+    for (let ri = 0; ri < net.routes.length; ri++) if (groups.has(this.routeGroup[ri]) && this.graceByRoute[ri] < until) this.graceByRoute[ri] = until;
   }
 
   private newTrain(ri: number, r: CRoute, dir: 0 | 1): Train {
@@ -590,8 +615,8 @@ export class TrainSim {
     if (tr.s - tr.lastS > 1) {
       tr.lastS = tr.s;
       tr.stoppedSince = t;
-    } else if (t - Math.max(tr.stoppedSince, this.graceUntil) > OPERATIONS.deadlockAfter) {
-      // (Stall time during incidents doesn't count: graceUntil.)
+    } else if (t - Math.max(tr.stoppedSince, this.graceByRoute[tr.route]) > OPERATIONS.deadlockAfter) {
+      // (Stall time during an incident on this route or one sharing its track doesn't count.)
       this.day.deadlocks++;
       if (tr.load > 0) this.hooks.evacuate(tr, t);
       this.toReady(tr, tr.dir === 0 ? 1 : 0);
@@ -688,3 +713,28 @@ export function periodIndex(t: number): number {
 }
 
 export const SIM_STEP = TIME.simStep;
+
+/** Connected groups of routes that share a directed track or a junction lock (union–find over compiled route indices). */
+function routeGroups(net: CompiledNetwork): Int32Array {
+  const parent = Int32Array.from(net.routes, (_, i) => i);
+  const find = (i: number): number => {
+    while (parent[i] !== i) i = parent[i] = parent[parent[i]];
+    return i;
+  };
+  const byTrack = new Map<number, number>();
+  const byLock = new Map<number, number>();
+  const join = (m: Map<number, number>, key: number, ri: number) => {
+    const o = m.get(key);
+    if (o === undefined) m.set(key, ri);
+    else parent[find(o)] = find(ri);
+  };
+  net.routes.forEach((r, ri) => {
+    for (const dir of r.dirs) {
+      for (const el of dir.elems) {
+        join(byTrack, el.track, ri);
+        if (el.lock >= 0) join(byLock, el.lock, ri);
+      }
+    }
+  });
+  return Int32Array.from(net.routes, (_, i) => find(i));
+}

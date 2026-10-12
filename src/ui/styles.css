@@ -822,6 +822,8 @@ input[type='checkbox'] {
   min-width: 0;
   display: flex;
   align-items: center;
+  /* The ticker hides when its slot is too narrow to read (see the container query below). */
+  container-type: inline-size;
 }
 .ticker {
   flex: 1;
@@ -931,7 +933,8 @@ input[type='checkbox'] {
 .tone-event > .dot {
   background: var(--event);
 }
-@media (max-width: 1180px) {
+/* Too narrow to read a scrolling line (about 1366 px wide and below): the weather chip stays. */
+@container (max-width: 220px) {
   .ticker {
     display: none;
   }

@@ -141,8 +141,12 @@ export function routePanel(app: App, id: number): Panel {
   renderFleet();
   // Event service planned on this route (temporary headway overrides).
   const service = h('div');
+  // Only service still to run or running (ended windows go at 3 am and midnight).
+  const liveService = () => game.chaos.service.filter((o) => o.routeId === r.id && o.to > app.sim.time()).sort((a, b) => a.from - b.from);
+  let serviceKey = '';
   const renderService = () => {
-    const list = game.chaos.service.filter((o) => o.routeId === r.id).sort((a, b) => a.from - b.from);
+    const list = liveService();
+    serviceKey = list.map((o) => o.id).join(',');
     service.replaceChildren(
       ...list.map((o) =>
         h(
@@ -230,7 +234,7 @@ export function routePanel(app: App, id: number): Panel {
         feedVersion = app.feed.version;
         renderIncidents();
         renderService();
-      }
+      } else if (liveService().map((o) => o.id).join(',') !== serviceKey) renderService();
     },
     dayEnd: fetch,
     destroy: () => chartObjs.forEach((c) => c.destroy()),

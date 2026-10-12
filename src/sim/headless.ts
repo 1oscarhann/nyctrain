@@ -18,7 +18,7 @@ import { purchaseFleet } from '../routes/fleet';
 import { defaultHeadways } from '../routes/routeSet';
 import { ROUTE_COLORS, type PeriodId, type Route } from '../routes/types';
 import { Engine, type EngineCallbacks } from './engine';
-import type { DayReport } from './protocol';
+import type { DayReport, ModeState } from './protocol';
 import type { Snap } from '../construction/types';
 import { edgeReport } from '../construction/validate';
 
@@ -173,6 +173,8 @@ export interface EngineRunOptions {
   /** City chaos callbacks. */
   alert?: EngineCallbacks['alert'];
   dayChaos?: EngineCallbacks['dayChaos'];
+  /** Mode shares from a save (as the browser passes them after a load). */
+  modeState?: ModeState;
 }
 
 /**
@@ -187,7 +189,8 @@ export function startEngine(game: Game, opts: EngineRunOptions & { reports?: Day
       seed: opts.seed ?? 1885,
       time: game.time,
       fare: game.fare,
-      chaos: { level: game.chaos.level, seed: game.chaos.seed },
+      modeState: opts.modeState,
+      chaos: game.chaosInit(),
       service: game.chaos.service,
     },
     {
@@ -197,7 +200,11 @@ export function startEngine(game: Game, opts: EngineRunOptions & { reports?: Day
         opts.onDay?.(r);
       },
       alert: opts.alert,
-      dayChaos: opts.dayChaos,
+      // Like the browser: the game keeps today's level and plan basis for saves.
+      dayChaos: (info) => {
+        game.setChaosToday(info);
+        opts.dayChaos?.(info);
+      },
     },
   );
   engine.setNetwork(compileNetwork(game).net);

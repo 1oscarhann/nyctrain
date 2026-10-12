@@ -17,15 +17,20 @@ import type { World } from '../data/world';
 import { Emitter } from './emitter';
 import { dayIndex } from './calendar';
 import { RouteSet } from '../routes/routeSet';
-import type { ServiceOverride } from '../sim/protocol';
+import type { ChaosInit, DayExposure, ServiceOverride } from '../sim/protocol';
 
 /** City chaos settings (saved). The calendar, weather and incident plan all derive from the seed. */
 export interface ChaosSettings {
+  /** The player's level: the sim applies it from the next 3 am. */
   level: ChaosLevel;
+  /** The level in force today (the worker's since its last 3 am), so a mid-day load keeps today as it was. */
+  levelToday: ChaosLevel;
   seed: number;
   /** Planned event service (temporary headway overrides). */
   service: ServiceOverride[];
   nextServiceId: number;
+  /** What today's incidents were planned from at 3 am (a mid-day load replans the same ones). */
+  dayExposure?: DayExposure;
 }
 
 /** A fresh chaos seed for a new game (main thread only; the sim never draws its own). */
@@ -82,7 +87,8 @@ export class Game {
     this.sandbox = opts.sandbox;
     this.fare = opts.fare;
     this.finance = new Finance(opts.sandbox, dayIndex(this.time));
-    this.chaos = { level: opts.chaos ?? CHAOS.defaultLevel, seed: (opts.chaosSeed ?? CHAOS.defaultSeed) >>> 0, service: [], nextServiceId: 1 };
+    const level = opts.chaos ?? CHAOS.defaultLevel;
+    this.chaos = { level, levelToday: level, seed: (opts.chaosSeed ?? CHAOS.defaultSeed) >>> 0, service: [], nextServiceId: 1 };
   }
 
   // ------------------------------------------------------------------ city chaos
@@ -90,6 +96,19 @@ export class Game {
   setChaosLevel(level: ChaosLevel): void {
     this.chaos.level = level;
     this.events.emit('chaos', undefined);
+  }
+
+  /** For the sim worker: today's level (a mid-day load keeps it), the player's from the next 3 am, and today's plan basis. */
+  chaosInit(): ChaosInit {
+    const c = this.chaos;
+    return { level: c.levelToday, nextLevel: c.level, seed: c.seed, ...(c.dayExposure ? { dayExposure: c.dayExposure } : {}) };
+  }
+
+  /** The worker's 3 am plan for a day: the level in force and the exposure its incidents were drawn from (kept for saves). */
+  setChaosToday(info: { day: number; level: ChaosLevel; exposure?: DayExposure['exposure'] }): void {
+    this.chaos.levelToday = info.level;
+    if (info.exposure) this.chaos.dayExposure = { day: info.day, exposure: info.exposure };
+    else delete this.chaos.dayExposure;
   }
 
   /** Plan event service (one override per route and window). */
@@ -108,7 +127,16 @@ export class Game {
     return true;
   }
 
-  /** Drop event service that has ended (at midnight and on save). Returns how many were dropped. */
+  /** Drop event service on routes that no longer exist. Returns the dropped overrides. */
+  pruneServiceRoutes(): ServiceOverride[] {
+    const gone = this.chaos.service.filter((o) => !this.routes.get(o.routeId));
+    if (!gone.length) return gone;
+    this.chaos.service = this.chaos.service.filter((o) => this.routes.get(o.routeId));
+    this.events.emit('chaos', undefined);
+    return gone;
+  }
+
+  /** Drop event service that has ended (at midnight, 3 am and on save). Returns how many were dropped. */
   pruneService(now: number): number {
     const n = this.chaos.service.length;
     this.chaos.service = this.chaos.service.filter((o) => o.to > now);
