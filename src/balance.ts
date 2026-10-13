@@ -276,6 +276,7 @@ export const ECONOMY = {
   bondChunk: 1e9,
   bondMax: 20e9,
   /**
+   * v1's fixed rate; v2's market mean (BONDS.mean) and the coupon of bonds from older saves.
    * Tuned from the spec's starting 4%: at 4% the interest on the ~$17B a 40-station core needs
    * exceeds what ~1.5M daily riders pay at a $3 fare. At 2.5% such a core breaks even (fares ≈
    * operations + staffing + maintenance + interest) around 1.5M riders. See README → Balance.
@@ -283,6 +284,125 @@ export const ECONOMY = {
   bondRate: 0.025,
   bondYears: 30,
   bankruptcyDays: 30,
+};
+
+// ---------------------------------------------------------------------------
+// Operations control (v2): holding, timepoints, recovery, short turnarounds
+export const OPS_CONTROL = {
+  /** New routes hold departures at their first stop (routes from older saves start with it off). */
+  defaultHold: true,
+  /** Hold while the gap to the train ahead is under this × the scheduled headway; 0.6–0.8 performed best in the prototype. */
+  holdFraction: 0.7,
+  holdFractionChoices: [0.5, 0.6, 0.7, 0.8, 0.9],
+  /** Longest hold at one timepoint, seconds: long enough to fix a bunch, short enough not to block a trunk. */
+  maxHoldPerStop: 90,
+  /** A held train leaves at once if another route's train is queued this close behind it, metres (≈ 2½ train lengths). */
+  yieldLookback: 400,
+  /** Default recovery for new routes: 10% of run time gave +1 train per core route and halved bunching. */
+  defaultRecovery: 0.1,
+  recoveryChoices: [0, 0.05, 0.1, 0.15, 0.2],
+  /** Crews turn a train this fast, seconds, when the next departure is already due (v1 always took 3 min). */
+  turnaroundMin: 120,
+  /** Headways under this × scheduled count as bunched (the transit-industry "bunch" threshold). */
+  bunchFactor: 0.5,
+  /** Headways over this × scheduled count as gaps. */
+  gapFactor: 1.5,
+  /** Headways over this × scheduled are clamped in the statistics, so one service gap doesn't dominate. */
+  maxHeadwayFactor: 4,
+  /** Regularity grades for the route panel: CV under 0.25 "even", under 0.45 "uneven" (v1 core is 0.52). */
+  cvGood: 0.25,
+  cvFair: 0.45,
+  /** Suggested recovery covers this multiple of the mean terminal lateness (headroom for spread). */
+  recoverySuggestFactor: 1.5,
+  /** Suggested timepoints: stops nearest these fractions along the route. */
+  suggestTimepointsAt: [1 / 3, 2 / 3],
+  /** Routes with fewer stops than this get one suggested timepoint, at the midpoint. */
+  suggestOneBelow: 6,
+};
+
+// ---------------------------------------------------------------------------
+// Fleet sales (v2)
+export const FLEET = {
+  /** Used cars sell for 40% of new: a cash lever, not free money (maintenance saved is only 1%/yr). */
+  resaleFraction: 0.4,
+};
+
+// ---------------------------------------------------------------------------
+// Fares (v2). Each city's default policy for new games is CITY_BALANCE[city].fares; the range and
+// step are ECONOMY.fareMin / fareMax / fareStep (per city).
+export const FARES = {
+  /** Periods (OPERATIONS.periods ids) billed at the peak fare: 96% of commuter trips start in these. */
+  peakPeriods: ['am', 'pm'] as readonly string[],
+  /** Low-income fare multipliers offered for the lowest earnings band: full, half, free. */
+  lowIncomeChoices: [1, 0.5, 0],
+  /** Earnings band that gets the low-income fare (New York SE01, ≤ $1,250/month; London's lowest modelled band). */
+  lowIncomeBand: 0,
+  /** For classifying the trip home as peak or off-peak: the morning trip length assumed (as the mid-day-load rule in commuters.ts). */
+  amTripEstimate: 30 * MIN,
+};
+
+// ---------------------------------------------------------------------------
+// Bond market (v2)
+export const BONDS = {
+  /** Long-run mean of the base rate: v1's tuned fixed rate, so the economy is centred where it was. */
+  mean: 0.025,
+  /** Base rate in the first month (month 1 borrowing is exactly v1). */
+  start: 0.025,
+  /** Share of the gap to the mean closed each month (half-life ≈ 5.4 months). */
+  reversion: 0.12,
+  /** Monthly σ of the base rate; stationary sd ≈ 0.42%, so most months are between 1.7% and 3.3%. */
+  volatility: 0.002,
+  /** Hard bounds on the base rate. */
+  minRate: 0.01,
+  maxRate: 0.06,
+  /** About one shock every two years, of 0.75%, three in five upward. */
+  shockChance: 0.04,
+  shockSize: 0.0075,
+  shockUpShare: 0.6,
+  /** Market seed for headless games without a chaos seed and for tests (games derive theirs from the game seed). */
+  defaultSeed: 20300107,
+  /** Bond term in months (= ECONOMY.bondYears × 12). */
+  termMonths: 360,
+  /** Prepayment penalty on the amount prepaid: small enough to use idle cash, big enough to think about. */
+  prepayPenalty: 0.01,
+  /** Refinancing fee on the balance: a 0.5% rate cut pays it back in about 2 years. */
+  refinanceFee: 0.01,
+  /** Refinance only when the new rate is at least this much lower (avoids pointless churn). */
+  refinanceMinGain: 0.0005,
+  /** Prepayment amounts offered (plus "all"). */
+  prepayChoices: [250e6, 500e6],
+  /** Months of market history kept for charts and reviews. */
+  historyMonths: 360,
+};
+
+// ---------------------------------------------------------------------------
+// Credit rating (v2). Scores are 0–100 per metric, piecewise-linear between anchors. Every metric is a
+// ratio or a number of months, so the same anchors work in any currency.
+export const CREDIT = {
+  ratings: ['AAA', 'AA', 'A', 'BBB', 'BB', 'B', 'CCC'] as const,
+  /** Minimum score per notch (AAA … B); below the last is CCC. The README core lands at BBB. */
+  thresholds: [85, 75, 65, 52, 40, 28],
+  /** Spread over the base rate per notch: AAA borrows at the market rate, CCC at +4.5%. */
+  spreads: [0, 0.001, 0.0025, 0.006, 0.0125, 0.025, 0.045],
+  /** Score margin needed to move a notch (stops month-to-month flapping). */
+  hysteresis: 2,
+  /** Settled days used for the review (about 3 months). */
+  windowDays: 60,
+  /** Fewer service days than this and farebox and coverage are "not rated" (construction phase). */
+  minServiceDays: 10,
+  /** Points for a metric that is not rated yet: new authorities are trusted until fares flow. */
+  notRatedPoints: 80,
+  weights: { farebox: 0.3, coverage: 0.3, leverage: 0.25, liquidity: 0.15 },
+  /** Fare revenue ÷ operating costs (v1 core: 1.59). */
+  farebox: { x: [0.5, 1.0, 1.5, 2.0], y: [0, 50, 80, 100] },
+  /** Net operating income ÷ (interest + one new bond's interest) (v1 core: 0.75). */
+  coverage: { x: [0, 0.5, 1.0, 1.5, 3.0], y: [0, 30, 55, 75, 100] },
+  /** Debt ÷ (assets + cash) (v1 core: 0.72). */
+  leverage: { x: [0, 0.3, 0.6, 0.8, 1.0], y: [100, 85, 55, 30, 0] },
+  /** Months of operating costs + debt service covered by cash. */
+  liquidity: { x: [0, 3, 12], y: [0, 50, 100] },
+  /** Weekdays per month for the liquidity denominator. */
+  daysPerMonth: 21.75,
 };
 
 // ---------------------------------------------------------------------------
@@ -296,6 +416,13 @@ export const GOALS = {
   /** New York: Midtown (Bryant Park) to the JFK terminal area. */
   tripFrom: [-73.9832, 40.7536] as [number, number],
   tripTo: [-73.7781, 40.6413] as [number, number],
+  /** 'rating-a' goal: this rating or better while owing at least this much. */
+  ratingGoal: 'A' as (typeof CREDIT.ratings)[number],
+  ratingGoalMinDebt: 5e9,
+  /** 'clockwork' goal: network bunched share under this, with this many routes and riders. */
+  clockworkBunched: 0.05,
+  clockworkMinRoutes: 3,
+  clockworkMinRiders: 500_000,
 };
 
 // ---------------------------------------------------------------------------
@@ -552,6 +679,12 @@ export interface CityBalance {
   cbd: ZoneRule;
   commuters: Partial<Pick<typeof COMMUTERS, 'driveSpeedCore' | 'driveSpeedOther' | 'parkingCbdTime' | 'parkingCbdCost' | 'parkingOtherTime' | 'valueOfTime' | 'driveCostPerKm' | 'modeConstant'>>;
   economy: Partial<Pick<typeof ECONOMY, 'startingCash' | 'fareDefault' | 'fareMin' | 'fareMax' | 'fareStep'>>;
+  /**
+   * The fare policy of a new game (v2): peak (FARES.peakPeriods) and off-peak fares, and the
+   * low-income multiplier for FARES.lowIncomeBand (1 = full fare). `ECONOMY.fareDefault` stays the
+   * flat fare of older saves and of the all-off configuration.
+   */
+  fares: { peak: number; offPeak: number; lowIncome: number };
   goals: Partial<typeof GOALS>;
   /** Event venues and kinds, and the climate (CHAOS_BY_CITY). */
   chaos: CityChaos;
@@ -569,6 +702,8 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
     cbd: { kind: 'region-south-of', region: 'Manhattan', lat: 40.7644 }, // below 60th St
     commuters: {},
     economy: {},
+    /** New York: one fare all day (the subway has no peak pricing); the low-income discount is the player's lever. */
+    fares: { peak: 3.0, offPeak: 3.0, lowIncome: 1 },
     goals: {},
     chaos: CHAOS_BY_CITY.nyc,
   },
@@ -607,6 +742,8 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
       fareMax: 5,
       fareStep: 0.1,
     },
+    /** London-style pay-as-you-go: a small peak premium (06–10, 16–20), full fare for all bands until the player adds a discount. */
+    fares: { peak: 2.8, offPeak: 2.7, lowIncome: 1 },
     goals: {
       tripMinutes: 45,
       /** Bank junction to the Heathrow central terminal area. */

@@ -2,13 +2,15 @@
  * The simulation engine: clock, trains and commuters. Pure TypeScript with no DOM, so it runs
  * inside the Web Worker and directly in Node for the headless test.
  */
-import { CHAOS, TIME, type ChaosLevel } from '../balance';
+import { CHAOS, ECONOMY, TIME, type ChaosLevel } from '../balance';
 import { dayIndex, SECONDS_PER_DAY, timeOfDay } from '../core/calendar';
 import type { World } from '../data/world';
 import { ChaosController } from './chaos';
 import { Commuters } from './commuters';
+import { flatFares, type FarePolicy } from '../economy/fares';
+import { emptyStats } from './regularity';
 import type { Alert, ChaosInit, CompiledNetwork, DayChaosInfo, DayReport, LiveStats, ModeState, ServiceOverride, Snapshot } from './protocol';
-import { TRAIN_STRIDE } from './protocol';
+import { SNAP_HELD, TRAIN_STRIDE } from './protocol';
 import { TrainSim, TState } from './trainSim';
 
 export interface EngineCallbacks {
@@ -25,7 +27,10 @@ export interface EngineOptions {
   agentScale: number;
   seed: number;
   time: number;
-  fare: number;
+  /** Fare policy (v2). */
+  fares?: FarePolicy;
+  /** Legacy flat fare (used when `fares` is missing; default ECONOMY.fareDefault). */
+  fare?: number;
   modeState?: ModeState;
   /** City chaos level and seed (default Off: the sim is exactly v1), and a load's level from 3 am and plan basis. */
   chaos?: ChaosInit;
@@ -45,7 +50,8 @@ export class Engine {
   constructor(world: World | null, opts: EngineOptions, cb: EngineCallbacks = {}) {
     this.time = opts.time;
     this.cb = cb;
-    this.commuters = world ? new Commuters(world, opts, cb) : null;
+    const fares = opts.fares ?? flatFares(opts.fare ?? ECONOMY.fareDefault);
+    this.commuters = world ? new Commuters(world, { ...opts, fares }, cb) : null;
     this.trains = new TrainSim(
       this.commuters ?? {
         arrive: () => ({ alight: 0, board: 0 }),
@@ -97,8 +103,9 @@ export class Engine {
     this.chaos.setNetwork(net, this.time);
   }
 
-  setFare(f: number): void {
-    this.commuters?.setFare(f);
+  /** Fare policy: billing from the next boarding, mode choice from the next 3 am. */
+  setFares(p: FarePolicy): void {
+    this.commuters?.setFares(p);
   }
 
   /** Event service overrides (the full list). */
@@ -146,6 +153,8 @@ export class Engine {
     const chaosStats = c?.chaosStats() ?? { eventRiders: 0, diverted: 0, carriedPast: 0 };
     const outcomes = c?.eventOutcomes() ?? [];
     const base = c?.dayReport(day) ?? emptyReport(day);
+    // Operations control: the day's regularity (the accumulators roll over to tomorrow).
+    const reg = this.trains.closeDayRegularity();
     const report: DayReport = {
       ...base,
       carKm: tr.carKm,
@@ -154,6 +163,8 @@ export class Engine {
       routeLateness,
       stationsOpen: this.net?.stations.length ?? 0,
       chaos: this.chaos.daySummary(outcomes, chaosStats),
+      routeRegularity: reg.routes,
+      regularity: reg.network,
     };
     this.chaos.endDay();
     this.trains.resetDay();
@@ -172,7 +183,7 @@ export class Engine {
       arr[o + 4] = t.v;
       arr[o + 5] = t.load;
       arr[o + 6] = t.late;
-      arr[o + 7] = t.state;
+      arr[o + 7] = this.trains.isHeld(t) ? SNAP_HELD : t.state;
       arr[o + 8] = t.stop;
     });
     const waiting = this.commuters?.waitingByStation(this.net?.stations.length ?? 0) ?? new Float64Array(this.net?.stations.length ?? 0);
@@ -204,5 +215,9 @@ function emptyReport(day: number): DayReport {
     stationBoardings: {},
     goalTrip: null,
     boroughsServed: [],
+    fares: { trips: [0, 0, 0, 0, 0, 0], revenue: [0, 0, 0, 0, 0, 0] },
+    bandShare: [0, 0, 0],
+    routeRegularity: {},
+    regularity: emptyStats(),
   };
 }

@@ -24,6 +24,7 @@ import type { World } from '../src/data/world';
 import { defaultWindows, routesNearVenue, serviceEstimate } from '../src/routes/eventService';
 import { migrate } from '../src/save/migrate';
 import { applySave, buildSave, sanitizeChaos } from '../src/save/serialize';
+import { SAVE_VERSION } from '../src/save/format';
 import type { GroupPath } from '../src/sim/commuters';
 import { checkKinds, eventCosts, reverseLegs, sampleCdf } from '../src/sim/eventTrips';
 import { INCIDENT_KINDS, planIncidents, type Exposure } from '../src/sim/incidents';
@@ -740,12 +741,13 @@ describe('save v3', () => {
 
   it('migrates v2 and v1 saves with chaos defaults, idempotently', () => {
     const m = migrate(v2());
-    expect(m.version).toBe(3);
+    // (v4 since operations control and the money market: the chaos step still runs on the way.)
+    expect(m.version).toBe(SAVE_VERSION);
     expect(m.city).toBe('london');
     expect(m.migratedFrom).toBe(2);
     expect(m.game.chaos).toEqual({ level: CHAOS.defaultLevel, seed: CHAOS.defaultSeed, service: [], nextServiceId: 1 });
     const v1 = migrate({ format: 'headway-ny', goals: { a: 1 }, game: { network: {}, routes: {}, finance: {} } });
-    expect(v1.version).toBe(3);
+    expect(v1.version).toBe(SAVE_VERSION);
     expect(v1.game.tutorialDone).toBe(true);
     expect(v1.game.chaos.level).toBe('normal');
     expect(v1.city).toBe('nyc');
@@ -764,7 +766,7 @@ describe('save v3', () => {
     game.addService({ routeId: 3, from: game.time - 7200, to: game.time - 60, headwayMin: 3, eventId: 160 });
     const live = game.addService({ routeId: 3, from: game.time + 3600, to: game.time + 7200, headwayMin: 2.5, eventId: 161 });
     const save = buildSave(game, { name: 't', goals: {} as never, lastReport: null, tutorialDone: true, settings: { units: 'metric', agentScale: 10, seed: 1885 }, modeState: null });
-    expect(save.version).toBe(3);
+    expect(save.version).toBe(SAVE_VERSION);
     expect(save.game.chaos.service).toEqual([live]);
     const loaded = new Game({} as World, {} as Terrain, { sandbox: true, fare: 3 });
     applySave(loaded, migrate(JSON.parse(JSON.stringify(save))));

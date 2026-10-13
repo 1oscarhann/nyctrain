@@ -3,6 +3,24 @@ import type { TrackClass } from '../balance';
 export type PeriodId = 'night' | 'am' | 'midday' | 'pm' | 'evening';
 export const PERIOD_IDS: PeriodId[] = ['night', 'am', 'midday', 'pm', 'evening'];
 
+/** Operations control (v2): headway holding, timepoints, recovery time and short turnarounds. */
+export interface RouteControl {
+  /** Hold departures whose gap to the train ahead is below holdFraction × the scheduled headway. */
+  hold: boolean;
+  /** One of OPS_CONTROL.holdFractionChoices. */
+  holdFraction: number;
+  /** Station ids where trains may be held mid-route (the first stop always counts when hold is on). */
+  timepoints: number[];
+  /** Recovery added to each terminal layover, as a share of the one-way run time (OPS_CONTROL.recoveryChoices). */
+  recoveryPct: number;
+  /**
+   * Crews turn a train in OPS_CONTROL.turnaroundMin instead of OPERATIONS.turnaround when its next
+   * departure is already due. On for every new and migrated route; off only in the all-off
+   * configuration (offControl), which reproduces the code before operations control.
+   */
+  shortTurn: boolean;
+}
+
 export interface Route {
   id: number;
   name: string;
@@ -15,8 +33,10 @@ export interface Route {
   cars: number;
   /** Minutes between trains per period; 0 = no service. */
   headways: Record<PeriodId, number>;
-  /** Cars purchased for this route (never sold). */
+  /** Cars owned by this route (idle ones can be sold, routes/fleet.ts). */
   ownedCars: number;
+  /** Operations control (v2). */
+  control: RouteControl;
 }
 
 /** One piece of a route path: traverse `edge` from u0 to u1 (edge coordinates from node a). */

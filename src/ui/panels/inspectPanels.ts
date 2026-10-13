@@ -6,6 +6,7 @@ import { fmtClock, fmtCount, fmtDensity, fmtSpeed } from '../../core/units';
 import type { App } from '../app';
 import { bullet, h } from '../dom';
 import { kv, section, shareBar, shell, SHARE_COLORS, statCard, type Panel } from './common';
+import { SNAP_HELD } from '../../sim/protocol';
 
 export function trainPanel(app: App, id: number): Panel {
   const sh = shell('Train', '—', () => app.game.select(null));
@@ -37,20 +38,24 @@ export function trainPanel(app: App, id: number): Panel {
             : `Held at ${inc.place}: sick passenger, ~${Math.max(1, Math.round((inc.until - app.sim.time()) / 60))} min`,
         )
       : null;
+    // Operations control: held at a timepoint for an even gap behind the train ahead.
+    const held = t.state === SNAP_HELD;
+    const dwelling = t.state === 2 || held;
     body.replaceChildren(
       banner ?? '',
+      held && !banner ? h('div', { class: 'warn' }, h('b', null, `Held at ${next}`), ' · Waiting for an even gap behind the train ahead') : '',
       h('div', { class: 'hw-muted', style: 'margin-bottom:8px' }, `Towards ${terminal}`),
       h(
         'div',
         { class: 'stat-grid' },
         statCard('On board', fmtCount(people), lf > 1.4 ? 'red' : lf > 1 ? 'amber' : undefined),
         statCard('Load', `${Math.round(lf * 100)}%`, lf > 1.4 ? 'red' : lf > 1 ? 'amber' : undefined),
-        statCard(t.state === 2 ? 'At' : 'Next stop', next),
+        statCard(held ? 'Held at' : dwelling ? 'At' : 'Next stop', next, held ? 'amber' : undefined),
         statCard('Lateness', t.late > 30 ? `${Math.round(t.late / 60)} min late` : 'On time', t.late > 180 ? 'red' : t.late > 60 ? 'amber' : 'green'),
       ),
       section('Train'),
       kv([
-        ['Speed', t.state === 2 ? 'Dwelling' : fmtSpeed(t.v)],
+        ['Speed', held ? 'Held by the dispatcher' : dwelling ? 'Dwelling' : fmtSpeed(t.v)],
         ['Cars', String(r.cars)],
         ['Capacity', `${fmtCount(r.capComfort)} comfortable · ${fmtCount(r.capCrush)} crush`],
         ['Top speed', fmtSpeed(TRAINS[r.cls].topSpeed)],

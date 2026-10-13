@@ -14,6 +14,7 @@ import { migrate } from '../src/save/migrate';
 import type { WorldTerrain } from '../src/construction/terrain';
 import { loadLandFromDisk, loadWorldFromDisk } from '../scripts/nodeData';
 import { createHeadlessGame, drawLine, makeRoute, runDays, stationNear } from '../src/sim/headless';
+import { defaultFares, fareAt, fareSummary, isFlat, normalizeFares } from '../src/economy/fares';
 
 afterAll(() => {
   applyCity('nyc');
@@ -140,5 +141,54 @@ describe('London data', () => {
     expect(done).toContain('first-line');
     expect(done).toContain('cross-thames');
     expect(done).not.toContain('all-boroughs');
+  });
+});
+
+describe('London fare policy', () => {
+  const world = (applyCity('london'), loadWorldFromDisk());
+  const land = loadLandFromDisk();
+  beforeEach(() => {
+    applyCity('london');
+  });
+
+  it('defaults to a small peak premium in pounds, on a 10p grid', () => {
+    expect(CITY_BALANCE.london.fares).toEqual({ peak: 2.8, offPeak: 2.7, lowIncome: 1 });
+    expect(defaultFares()).toEqual({ peak: 2.8, offPeak: 2.7, lowIncome: 1 });
+    expect(isFlat(defaultFares())).toBe(false);
+    expect(fareSummary(defaultFares())).toBe('£2.80 peak / £2.70 off-peak');
+    expect(normalizeFares({ peak: 2.84, offPeak: 2.66, lowIncome: 0.6 })).toEqual({ peak: 2.8, offPeak: 2.7, lowIncome: 0.5 });
+    expect(normalizeFares({ peak: 3.07, offPeak: 3.3 })).toEqual({ peak: 3.1, offPeak: 3.1, lowIncome: 1 });
+    const game = createHeadlessGame(world, land);
+    expect(game.fares).toEqual({ peak: 2.8, offPeak: 2.7, lowIncome: 1 });
+    expect(createHeadlessGame(world, land, { ops: 'off' }).fares).toEqual({ peak: 2.8, offPeak: 2.8, lowIncome: 1 });
+    applyCity('nyc');
+    expect(defaultFares()).toEqual({ peak: 3, offPeak: 3, lowIncome: 1 });
+    applyCity('london');
+  });
+
+  it('bills peak and off-peak boardings at their fares, with a half fare for the lowest band', () => {
+    const game = createHeadlessGame(world, land, { sandbox: true });
+    game.setFares({ lowIncome: 0.5 });
+    expect(game.fares).toEqual({ peak: 2.8, offPeak: 2.7, lowIncome: 0.5 });
+    drawLine(game, [[-0.1131, 51.5031], [-0.1000, 51.5100], [-0.0886, 51.5133], [-0.0823, 51.5180]], 'deep');
+    const stops = [
+      stationNear(game, [-0.1131, 51.5031], 'Waterloo'),
+      stationNear(game, [-0.0975, 51.5120], 'Blackfriars'),
+      stationNear(game, [-0.0886, 51.5133], 'Bank'),
+      stationNear(game, [-0.0823, 51.5180], 'Liverpool Street'),
+    ];
+    expect(game.build(true).ok).toBe(true);
+    makeRoute(game, 'Waterloo & City', 'W', '#2F7FE0', stops, 8, { am: 3, pm: 3 });
+    const r = runDays(game, 2).reports[1];
+    const { trips, revenue } = r.fares;
+    for (let i = 0; i < 6; i++) {
+      const band = i >> 1, peak = (i & 1) === 1;
+      if (trips[i] > 0) expect(revenue[i] / trips[i]).toBeCloseTo(fareAt(game.fares, band, peak), 9);
+    }
+    expect(revenue[1] / trips[1]).toBeCloseTo(1.4, 9); // lowest band at the peak: half of £2.80
+    expect(revenue[5] / trips[5]).toBeCloseTo(2.8, 9);
+    expect(trips[4] + trips[2]).toBeGreaterThan(0);
+    expect(revenue.reduce((a, b) => a + b, 0)).toBeCloseTo(r.fareRevenue, 3);
+    expect(r.deadlocks).toBe(0);
   });
 });

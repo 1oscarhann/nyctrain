@@ -9,9 +9,10 @@ import type { GoalState } from '../core/goals';
 import type { UnitSystem } from '../core/units';
 import type { ChaosLevel, CityId } from '../balance';
 import type { DayExposure, ServiceOverride } from '../sim/protocol';
+import type { FarePolicy } from '../economy/fares';
 
-/** v3: city chaos (events, disruptions, weather). */
-export const SAVE_VERSION = 3;
+/** v3: city chaos (events, disruptions, weather). v4: operations control and the money market. */
+export const SAVE_VERSION = 4;
 
 /**
  * City chaos: the level, the seed (calendar, weather and the incident plan all derive from it) and
@@ -53,7 +54,8 @@ export interface SaveFile {
   game: {
     time: number;
     sandbox: boolean;
-    fare: number;
+    /** Fare policy (v4; v3 had one flat `fare`). */
+    fares: FarePolicy;
     network: NetworkData;
     routes: RouteSetData;
     finance: FinanceData;

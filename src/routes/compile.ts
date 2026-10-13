@@ -12,7 +12,7 @@ import type { CElement, CompiledNetwork, CRoute, CRouteDir, CStation } from '../
 import { runProfile, type SpeedLimit } from '../trains/kinematics';
 import { computeInterchanges } from './interchange';
 import { trainLength } from './routeSet';
-import { PERIOD_IDS, type PathLeg, type Route } from './types';
+import { PERIOD_IDS, type PathLeg, type Route, type RouteControl } from './types';
 import { platformLength } from '../construction/network';
 
 const ALIGN = Math.cos((25 * Math.PI) / 180);
@@ -66,6 +66,7 @@ function buildDir(
   trackIdx: (edge: number, dir: 0 | 1) => number,
   locks: Map<string, number>,
   stationIndex: Map<number, number>,
+  timepoints: ReadonlySet<number> = new Set(),
 ): CRouteDir {
   // Extend the first and last legs so the train fits at the terminal platforms.
   const legs = legsIn.map((l) => ({ ...l }));
@@ -198,15 +199,39 @@ function buildDir(
     runTime: prof.total,
     outS0: new Float64Array(outS0),
     outS1: new Float64Array(outS1),
+    // Timepoints: never the first or last stop (the first stop has terminal holding).
+    timepoint: Uint8Array.from(stopIds, (id, k) => (k > 0 && k < stopIds.length - 1 && timepoints.has(id) ? 1 : 0)),
   };
 }
 
-export function trainsNeeded(r: Route, runTimes: [number, number]): number {
+type FleetRoute = Pick<Route, 'headways'> & { control?: Partial<Pick<RouteControl, 'recoveryPct'>> };
+
+/**
+ * Scheduled round trip, s: both one-way runs plus recovery (a share of the run time, split over
+ * the two terminal layovers) plus two standard turnarounds.
+ */
+export function roundTripTime(r: FleetRoute, runTimes: [number, number]): number {
+  const run = runTimes[0] + runTimes[1];
+  const rec = r.control?.recoveryPct ?? 0;
+  return (rec ? run * (1 + rec) : run) + 2 * OPERATIONS.turnaround;
+}
+
+/** Recovery time at each terminal, s (the mean of the two ends). */
+export function recoveryPerTerminal(r: FleetRoute, runTimes: [number, number]): number {
+  return ((runTimes[0] + runTimes[1]) * (r.control?.recoveryPct ?? 0)) / 2;
+}
+
+/** Trains for the shortest headway: round trip (with recovery) ÷ headway, rounded up, plus spares. */
+export function trainsNeeded(r: FleetRoute, runTimes: [number, number]): number {
   let minHw = Infinity;
   for (const p of PERIOD_IDS) if (r.headways[p] > 0) minHw = Math.min(minHw, r.headways[p] * 60);
   if (!isFinite(minHw)) return 0;
-  const roundTrip = runTimes[0] + runTimes[1] + 2 * OPERATIONS.turnaround;
-  return Math.ceil(roundTrip / minHw) + OPERATIONS.spareTrains;
+  return Math.ceil(roundTripTime(r, runTimes) / minHw) + OPERATIONS.spareTrains;
+}
+
+/** Fingerprint of the settings that reach the sim but not the fleet (App.recompile's signature). */
+export function opsKey(c: RouteControl): string {
+  return `${c.hold ? c.holdFraction : 0}|${[...c.timepoints].sort((a, b) => a - b).join(',')}|${c.shortTurn ? 1 : 0}`;
 }
 
 /** Scheduled one-way run times for a route (for the UI and fleet sizing), or null if no path. */
@@ -246,8 +271,9 @@ function compileRoute(
     Math.min(platformLength(firstSt.cars, r.cls) / 2, tl / 2 + 5),
     Math.min(platformLength(lastSt.cars, r.cls) / 2, tl / 2 + 5),
   ];
-  const d0 = buildDir(net, path.legs, r.stops, stopEdgeU, ext, r, trackIdx, locks, stationIndex);
-  const d1 = buildDir(net, reverseLegs(path.legs), [...r.stops].reverse(), [...stopEdgeU].reverse(), [ext[1], ext[0]], r, trackIdx, locks, stationIndex);
+  const tps = new Set(r.control.timepoints);
+  const d0 = buildDir(net, path.legs, r.stops, stopEdgeU, ext, r, trackIdx, locks, stationIndex, tps);
+  const d1 = buildDir(net, reverseLegs(path.legs), [...r.stops].reverse(), [...stopEdgeU].reverse(), [ext[1], ext[0]], r, trackIdx, locks, stationIndex, tps);
   const spec = TRAINS[r.cls];
   return {
     id: r.id,
@@ -265,6 +291,9 @@ function compileRoute(
     headways: PERIOD_IDS.map((p) => r.headways[p] * 60),
     fleet: Math.floor(r.ownedCars / Math.max(1, r.cars)),
     dirs: [d0, d1],
+    hold: r.control.hold ? r.control.holdFraction : 0,
+    shortTurn: r.control.shortTurn,
+    opsKey: opsKey(r.control),
   };
 }
 

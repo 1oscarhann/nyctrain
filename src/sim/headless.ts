@@ -2,7 +2,7 @@
  * Headless game harness (no rendering, no worker): used by the headless test and the balance
  * tuning script. Builds networks in code, runs the engine at full speed and settles finances.
  */
-import { ECONOMY, EVENTS, STATION, TIME, type ChaosLevel, type TrackClass, type TrackLevel } from '../balance';
+import { ECONOMY, EVENTS, OPERATIONS, STATION, TIME, TRAINS, type ChaosLevel, type TrackClass, type TrackLevel } from '../balance';
 import { cityBalance } from '../cities';
 import { MAX_VENUES, type CityEvent } from '../core/cityCalendar';
 import { Game } from '../core/game';
@@ -13,22 +13,52 @@ import { WorldTerrain } from '../construction/terrain';
 import { pickEdge } from '../construction/pick';
 import { sampleAt } from '../construction/geometry';
 import { stationReport } from '../construction/validate';
-import { compileNetwork } from '../routes/compile';
+import { compileNetwork, trainsNeeded } from '../routes/compile';
+import { offControl } from '../routes/control';
 import { purchaseFleet } from '../routes/fleet';
 import { defaultHeadways } from '../routes/routeSet';
-import { ROUTE_COLORS, type PeriodId, type Route } from '../routes/types';
+import { ROUTE_COLORS, type PeriodId, type Route, type RouteControl } from '../routes/types';
+import { defaultFares, flatFares, type FarePolicy } from '../economy/fares';
+import { dayKpi } from '../economy/finance';
+import { runProfile } from '../trains/kinematics';
 import { Engine, type EngineCallbacks } from './engine';
-import type { DayReport, ModeState } from './protocol';
+import type { CompiledNetwork, CRoute, CRouteDir, DayReport, ModeState } from './protocol';
 import type { Snap } from '../construction/types';
 import { edgeReport } from '../construction/validate';
 
+export interface HeadlessGameOptions {
+  sandbox?: boolean;
+  /** Legacy: one flat fare (default: the city's fare policy). */
+  fare?: number;
+  /** Fare policy (default: the city's, CITY_BALANCE[city].fares). */
+  fares?: FarePolicy;
+  chaos?: ChaosLevel;
+  chaosSeed?: number;
+  /** Bond market seed (default: derived from the chaos seed, as in a real game). */
+  marketSeed?: number;
+  /**
+   * Operations control and the money market: 'default' plays like a new game (routes hold at the
+   * first stop with 10% recovery, short turnarounds, the city's fare policy, the bond market);
+   * 'off' turns every new mechanic off (standard turnarounds, no holding or recovery, one flat fare
+   * ECONOMY.fareDefault for every period and band, and the fixed bond rate with no spread), which
+   * reproduces the code before operations control bit for bit.
+   */
+  ops?: 'default' | 'off';
+}
+
 /**
  * A game for headless runs. City chaos defaults to Off here (unlike a new game in the browser),
- * so the tests and the README balance numbers reproduce v1 exactly; the seed is CHAOS.defaultSeed.
+ * so the tests and the README balance numbers are free of seed noise; the seed is CHAOS.defaultSeed.
+ * Operations control and the money market default to a new game's settings (`ops: 'off'` for the
+ * code before them).
  */
-export function createHeadlessGame(world: World, land: LandCollection, opts: { sandbox?: boolean; fare?: number; chaos?: ChaosLevel; chaosSeed?: number } = {}): Game {
+export function createHeadlessGame(world: World, land: LandCollection, opts: HeadlessGameOptions = {}): Game {
   const terrain = new WorldTerrain(new LandMask(land), new TractIndex(world.tracts));
-  return new Game(world, terrain, { sandbox: opts.sandbox ?? false, fare: opts.fare ?? ECONOMY.fareDefault, chaos: opts.chaos ?? 'off', chaosSeed: opts.chaosSeed });
+  const off = opts.ops === 'off';
+  const fares = off ? flatFares(opts.fare ?? ECONOMY.fareDefault) : (opts.fares ?? (opts.fare !== undefined ? flatFares(opts.fare) : defaultFares()));
+  const game = new Game(world, terrain, { sandbox: opts.sandbox ?? false, fares, chaos: opts.chaos ?? 'off', chaosSeed: opts.chaosSeed, marketSeed: opts.marketSeed, fixedRate: off });
+  if (off) game.routes.newControl = offControl;
+  return game;
 }
 
 type LonLat = [number, number];
@@ -82,8 +112,9 @@ export function stationNear(game: Game, p: LonLat, name: string, cars = STATION.
   return game.editBlueprint(() => net.addStation(b.edge, b.u, cars, name).id);
 }
 
-export function makeRoute(game: Game, name: string, bullet: string, color: string, stops: number[], cars: number, headways: Partial<Record<PeriodId, number>> = {}, cls: TrackClass = 'heavy'): Route {
-  const r = game.routes.create({ name, bullet, color, cls, stops, cars, headways: { ...defaultHeadways(), ...headways } });
+/** A route with its fleet bought. `control` is merged over the game's control for new routes. */
+export function makeRoute(game: Game, name: string, bullet: string, color: string, stops: number[], cars: number, headways: Partial<Record<PeriodId, number>> = {}, cls: TrackClass = 'heavy', control?: Partial<RouteControl>): Route {
+  const r = game.routes.create({ name, bullet, color, cls, stops, cars, headways: { ...defaultHeadways(), ...headways }, ...(control ? { control } : {}) });
   const res = purchaseFleet(game, r);
   if (!res.ok) throw new Error(`can't buy trains for ${name}: ${res.reason}`);
   return r;
@@ -188,7 +219,7 @@ export function startEngine(game: Game, opts: EngineRunOptions & { reports?: Day
       agentScale: opts.agentScale ?? 10,
       seed: opts.seed ?? 1885,
       time: game.time,
-      fare: game.fare,
+      fares: game.fares,
       modeState: opts.modeState,
       chaos: game.chaosInit(),
       service: game.chaos.service,
@@ -196,7 +227,7 @@ export function startEngine(game: Game, opts: EngineRunOptions & { reports?: Day
     {
       dayEnd: (r) => {
         opts.reports?.push(r);
-        game.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen });
+        game.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen, kpi: dayKpi(r) });
         opts.onDay?.(r);
       },
       alert: opts.alert,
@@ -250,7 +281,7 @@ export function midtownArenaEvent(day: number, attendance: number, startHour: nu
  * Large synthetic network for performance checks (the spec's 300 stations / 25 routes / ~400
  * trains): a grid of straight deep-tunnel lines, a station about every kilometre on land.
  */
-export function buildPerfNetwork(game: Game, opts: { ns?: number; ew?: number; perLine?: number } = {}): { routes: Route[]; fleet: number } {
+export function buildPerfNetwork(game: Game, opts: { ns?: number; ew?: number; perLine?: number; control?: Partial<RouteControl> } = {}): { routes: Route[]; fleet: number } {
   const ns = opts.ns ?? 17, ew = opts.ew ?? 8, perLine = opts.perLine ?? 12;
   const net = game.network;
   const cars = STATION.cars.heavy.default;
@@ -280,6 +311,95 @@ export function buildPerfNetwork(game: Game, opts: { ns?: number; ew?: number; p
   game.build(true);
   const routes = lines
     .filter((s) => s.length >= 2)
-    .map((stops, i) => makeRoute(game, `Line ${i + 1}`, String(i + 1), ROUTE_COLORS[i % ROUTE_COLORS.length], stops, cars, { am: 2.5, pm: 2.5, midday: 5 }));
+    .map((stops, i) => makeRoute(game, `Line ${i + 1}`, String(i + 1), ROUTE_COLORS[i % ROUTE_COLORS.length], stops, cars, { am: 2.5, pm: 2.5, midday: 5 }, 'heavy', opts.control));
   return { routes, fleet: routes.reduce((s, r) => s + Math.floor(r.ownedCars / r.cars), 0) };
+}
+
+export interface SyntheticLineOptions {
+  /** Number of stops (≥ 2). */
+  stops: number;
+  /** Metres between stops. */
+  spacing: number;
+  /** Headway in every period, s. */
+  headway: number;
+  cars?: number;
+  /** Hold fraction (0 = holding off). */
+  hold?: number;
+  /** Stop indices (direction 0) that are timepoints; mirrored for direction 1. */
+  timepoints?: number[];
+  /** Recovery share used to size the fleet (when `fleet` isn't given). */
+  recoveryPct?: number;
+  /** Trains (default: trainsNeeded with the recovery). */
+  fleet?: number;
+  /** Short turnarounds (default true). */
+  shortTurn?: boolean;
+  /** Route id (default 1). */
+  id?: number;
+}
+
+/**
+ * Test fixture: a straight two-track line as a compiled network, with real elements (one per
+ * direction on tracks 0 and 1, no locks), run-profile timetables and optional timepoints. Used by
+ * tests/ops.test.ts and for trying holding rules without data files.
+ */
+export function syntheticLine(o: SyntheticLineOptions): { net: CompiledNetwork; route: CRoute; runTime: number } {
+  const spec = TRAINS.heavy;
+  const cars = o.cars ?? 8;
+  const L = cars * spec.carLength;
+  const ext = L / 2 + 5;
+  const length = (o.stops - 1) * o.spacing + 2 * ext;
+  const stopS = Array.from({ length: o.stops }, (_, k) => ext + k * o.spacing);
+  const prof = runProfile(length, [], stopS, spec.accel, spec.brake, spec.topSpeed, OPERATIONS.scheduledDwell);
+  const tps = new Set(o.timepoints ?? []);
+  const dir = (d: 0 | 1): CRouteDir => {
+    const st = Array.from({ length: o.stops }, (_, k) => (d === 0 ? k : o.stops - 1 - k));
+    const xs = d === 0 ? [0, length] : [length, 0];
+    return {
+      xs: new Float64Array(xs.map((x) => x - ext)),
+      ys: new Float64Array(2),
+      zs: new Float64Array(2),
+      cum: new Float64Array([0, length]),
+      length,
+      stopStation: Int32Array.from(st),
+      stopS: Float64Array.from(stopS),
+      limS0: new Float64Array(0),
+      limS1: new Float64Array(0),
+      limV: new Float64Array(0),
+      elems: [{ track: d, edge: d, edgeDir: 0, u0: 0, s0: 0, s1: length, lock: -1 }],
+      schedArrive: Float64Array.from(prof.arrive),
+      schedDepart: Float64Array.from(prof.depart),
+      runTime: prof.total,
+      timepoint: Uint8Array.from(st, (_, k) => (k > 0 && k < o.stops - 1 && tps.has(d === 0 ? k : o.stops - 1 - k) ? 1 : 0)),
+    };
+  };
+  const hwMin = o.headway / 60;
+  const fleet =
+    o.fleet ?? trainsNeeded({ headways: { night: hwMin, am: hwMin, midday: hwMin, pm: hwMin, evening: hwMin }, control: { recoveryPct: o.recoveryPct ?? 0 } }, [prof.total, prof.total]);
+  const route: CRoute = {
+    id: o.id ?? 1,
+    name: 'Synthetic',
+    bullet: 'S',
+    color: '#E8443A',
+    cls: 'heavy',
+    cars,
+    trainLength: L,
+    capComfort: spec.capacityComfort * cars,
+    capCrush: spec.capacityCrush * cars,
+    accel: spec.accel,
+    brake: spec.brake,
+    vmax: spec.topSpeed,
+    headways: [o.headway, o.headway, o.headway, o.headway, o.headway],
+    fleet,
+    dirs: [dir(0), dir(1)],
+    hold: o.hold ?? 0,
+    shortTurn: o.shortTurn ?? true,
+  };
+  const net: CompiledNetwork = {
+    version: 1,
+    stations: Array.from({ length: o.stops }, (_, k) => ({ id: 100 + k, x: k * o.spacing, y: 0, name: `S${k}`, group: k })),
+    routes: [route],
+    trackCount: 2,
+    lockCount: 0,
+  };
+  return { net, route, runTime: prof.total };
 }

@@ -104,6 +104,8 @@ export class RouteTool implements Tool {
       cars: d.cars,
       headways: d.headways,
       ownedCars: existing?.ownedCars ?? 0,
+      // New routes get the defaults (fleet sizing includes their recovery time).
+      control: existing?.control ?? this.ctx.game.routes.newControl(),
     };
   }
 
@@ -136,7 +138,7 @@ export class RouteTool implements Tool {
     let created = false;
     if (d.editing !== null && game.routes.get(d.editing)) {
       route = game.routes.get(d.editing)!;
-      const before = { ...route, stops: [...route.stops], headways: { ...route.headways } };
+      const before = { ...route, stops: [...route.stops], headways: { ...route.headways }, control: { ...route.control, timepoints: [...route.control.timepoints] } };
       game.routes.update(route.id, data);
       const res = purchaseFleet(game, route);
       if (!res.ok) {

@@ -60,3 +60,14 @@ export function weekdaysInMonth(day: number): number {
 }
 
 export const SECONDS_PER_DAY = DAY;
+
+/** Months since January 2030 (the bond market's month counter): (year − 2030)·12 + month. */
+export function monthIndex(day: number): number {
+  const d = dateOfDay(day);
+  return (d.getUTCFullYear() - 2030) * 12 + d.getUTCMonth();
+}
+
+/** Calendar year of a game day. */
+export function yearOf(day: number): number {
+  return dateOfDay(day).getUTCFullYear();
+}

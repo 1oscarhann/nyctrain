@@ -31,7 +31,7 @@ async function init(msg: Extract<ToWorker, { type: 'init' }>) {
   const world = await fetchWorld(msg.dataBase);
   engine = new Engine(
     world,
-    { agentScale: msg.agentScale, seed: msg.seed, time: msg.time, fare: msg.fare, modeState: msg.modeState, chaos: msg.chaos, service: msg.service },
+    { agentScale: msg.agentScale, seed: msg.seed, time: msg.time, fares: msg.fares, modeState: msg.modeState, chaos: msg.chaos, service: msg.service },
     {
       dayEnd: (report) => post({ type: 'dayEnd', report }),
       busy: (label) => post({ type: 'busy', label }),
@@ -71,8 +71,8 @@ function handle(msg: ToWorker) {
       post({ type: 'busy', label: null });
       sendSnapshot();
       break;
-    case 'fare':
-      engine.setFare(msg.fare);
+    case 'fares':
+      engine.setFares(msg.fares);
       break;
     case 'query':
       post({ type: 'reply', id: msg.id, data: answer(msg.q) });
@@ -97,7 +97,7 @@ function answer(q: Extract<ToWorker, { type: 'query' }>['q']): unknown {
       const d = c.routeDetail(q.route);
       if (!d) return null;
       const ri = engine!.net?.routes.findIndex((r) => r.id === q.route) ?? -1;
-      return { ...d, inService: ri >= 0 ? engine!.trains.inService(ri) : 0 };
+      return { ...d, inService: ri >= 0 ? engine!.trains.inService(ri) : 0, regularity: engine!.trains.regularityDetail(q.route) };
     }
     case 'tract':
       return c.tractDetail(q.tract);

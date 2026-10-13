@@ -1180,3 +1180,260 @@ input[type='checkbox'] {
   flex-direction: column;
   gap: 6px;
 }
+
+/* ---------------------------------------------------------------- operations control and the money market */
+/* Finance tabs: a full-width segmented strip. */
+.fin-tabs {
+  display: flex;
+  width: 100%;
+  margin-bottom: 8px;
+}
+.fin-tabs button {
+  flex: 1;
+  justify-content: center;
+}
+/* Credit rating letter. AAA–A green, BBB plain, BB–B amber, CCC red. */
+.rating-badge {
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.rating-badge.good {
+  color: var(--green);
+}
+.rating-badge.mid {
+  color: var(--ink);
+}
+.rating-badge.weak {
+  color: var(--amber);
+}
+.rating-badge.bad {
+  color: var(--red);
+}
+.rating-badge .outlook {
+  font-size: 0.8em;
+  font-weight: 700;
+  color: var(--muted);
+  margin-left: 6px;
+}
+/* Credit scorecard: one row per metric with a thin 0–100 meter. */
+.score-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--panel-line);
+  font-size: 12.5px;
+}
+.score-row:last-of-type {
+  border-bottom: 0;
+}
+.score-row .v {
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.score-row .hint {
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.score-bar {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--panel-line-strong);
+  overflow: hidden;
+  margin: 2px 0;
+}
+.score-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--muted);
+}
+.score-bar.good > i {
+  background: var(--green);
+}
+.score-bar.mid > i {
+  background: var(--amber);
+}
+.score-bar.bad > i {
+  background: var(--red);
+}
+/* Timepoint clock toggle in the route panel's stop list (amber when on). */
+.tp-toggle {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 0;
+}
+.tp-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+.tp-toggle:hover {
+  color: var(--ink);
+  background: rgba(231, 235, 239, 0.06);
+}
+.tp-toggle.on {
+  color: var(--amber);
+  border-color: rgba(255, 194, 74, 0.45);
+  background: rgba(255, 194, 74, 0.12);
+}
+.list-item.tp-on .grow {
+  color: var(--amber);
+}
+/* Operations section rows: label, controls, and a muted note underneath. */
+.ops-row {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 6px 0;
+  font-size: 12.5px;
+}
+.ops-row > .lbl {
+  color: var(--muted);
+}
+.ops-row > .note {
+  grid-column: 2;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.ops-row > .note.advice {
+  color: var(--amber);
+}
+.ops-row .seg button {
+  padding: 0 8px;
+}
+.ops-row .ctl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+/* Route panel footer: Apply sits under the scrolling body so timepoint toggles far down the stop list can be applied. */
+.side-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--panel-line);
+  font-size: 12px;
+}
+.side-foot .grow {
+  flex: 1;
+  min-width: 0;
+}
+.side-foot .dirty {
+  color: var(--amber);
+}
+/* Bond rows (Borrowing tab). */
+.bond-row {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--panel-line);
+  font-size: 12.5px;
+}
+.bond-row:last-child {
+  border-bottom: 0;
+}
+.bond-row .acts {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
+}
+.prepay-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+.prepay-opts button {
+  justify-content: space-between;
+  height: auto;
+  padding: 8px 12px;
+  text-align: left;
+}
+.prepay-opts button .hw-muted {
+  font-size: 12px;
+}
+/* Fleet tab table. */
+table.fleet {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+table.fleet th {
+  font-weight: 400;
+  color: var(--muted);
+  text-align: right;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+table.fleet th:first-child,
+table.fleet td:first-child {
+  text-align: left;
+}
+table.fleet td {
+  text-align: right;
+  padding: 4px;
+  border-top: 1px solid var(--panel-line);
+  font-weight: 600;
+}
+.fin-line {
+  font-size: 12.5px;
+  margin: 4px 0;
+  line-height: 1.45;
+}
+/* Year in review modal. */
+.modal.year-review {
+  width: min(620px, calc(100vw - 32px));
+}
+.yr-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.yr-head h2 {
+  margin-bottom: 4px;
+}
+.yr-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+  margin: 10px 0 6px;
+}
+.yr-cards .stat-card .value {
+  font-size: 20px;
+}
+.yr-grid {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 8px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  margin-top: 8px;
+}
+.yr-grid > .k {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.yr-grid .chart {
+  margin: 0 -4px;
+}

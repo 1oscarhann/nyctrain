@@ -103,3 +103,12 @@ export function logitShares(costs: readonly number[], theta = COMMUTERS.logitSca
 export function smoothShares(cur: number[], target: number[], k = COMMUTERS.dailySmoothing): number[] {
   return cur.map((c, i) => c + k * (target[i] - c));
 }
+
+/**
+ * Odds multiplier on the transit alternative when one agent's fare differs from the group's by
+ * dFare: exp(−θ · minutes(dFare)), the exact logit result of shifting one alternative's utility
+ * (fare policy v2: off-peak travellers in a group whose expected fare is mostly peak).
+ */
+export function fareOddsMultiplier(dFare: number, band: number, theta = COMMUTERS.logitScale): number {
+  return Math.exp(-theta * moneyToMinutes(dFare, band));
+}

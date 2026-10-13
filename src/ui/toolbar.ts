@@ -27,6 +27,7 @@ export class Toolbar {
   private overlayBtn: HTMLElement;
   private overlayMenu: HTMLElement;
   private alertsBtn: HTMLElement;
+  private finBtn: HTMLElement;
   private badge = h('span', { class: 'badge num', style: 'display:none' });
 
   constructor(private app: App) {
@@ -43,8 +44,8 @@ export class Toolbar {
     attachTip(this.overlayBtn, app.tooltip, 'Overlays', undefined, 'Residents, jobs, unserved demand, crowding, flows');
     const routes = h('button', { class: 'hw-btn ghost tool-btn', onclick: () => app.game.select({ kind: 'routes' }) }, svgIcon(ICONS.routes));
     attachTip(routes, app.tooltip, 'Routes', undefined, 'All routes and their ridership');
-    const fin = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-finance', onclick: () => app.game.select({ kind: 'finance' }) }, svgIcon(ICONS.finance));
-    attachTip(fin, app.tooltip, 'Finances', undefined, 'Income, costs, bonds and fare');
+    const fin = (this.finBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-finance', onclick: () => app.toggleFinance() }, svgIcon(ICONS.finance)));
+    attachTip(fin, app.tooltip, 'Finances', 'M', 'Income, costs, bonds, fares, fleet');
     const goals = h('button', { class: 'hw-btn ghost tool-btn', onclick: () => app.game.select({ kind: 'goals' }) }, svgIcon(ICONS.goals));
     attachTip(goals, app.tooltip, 'Goals', undefined, 'Milestones to aim for');
     this.alertsBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-alerts', onclick: () => app.toggleAlerts() }, svgIcon(ICONS.alert), this.badge);
@@ -99,5 +100,6 @@ export class Toolbar {
     this.badge.textContent = n > 9 ? '9+' : String(n);
     this.badge.style.display = n > 0 ? '' : 'none';
     this.alertsBtn.classList.toggle('active', this.app.alertsShowing());
+    this.finBtn.classList.toggle('active', this.app.game.selection?.kind === 'finance' && this.app.tools.active?.id !== 'route');
   }
 }

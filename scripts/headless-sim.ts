@@ -1,12 +1,15 @@
 /**
- * Headless simulation run for balance tuning:  npm run sim [-- days=3 scale=10 chaos=off|calm|normal|wild seed=2030]
- * Builds the spec's test network, runs it at full speed and prints a daily summary.
+ * Headless simulation run for balance tuning:  npm run sim [-- days=3 scale=10 chaos=off|calm|normal|wild seed=2030 ops=off dump=file.json]
+ * Builds the spec's test network, runs it at full speed and prints a daily summary. Operations
+ * control and the money market play as in a new game; ops=off turns them off (the output then
+ * matches the code before them exactly).
  */
 import { loadLandFromDisk, loadWorldFromDisk } from './nodeData';
 import { buildTestNetwork, createHeadlessGame, runDays } from '../src/sim/headless';
 import { fmtMoney } from '../src/core/units';
 import { CHAOS, type ChaosLevel } from '../src/balance';
 import { weatherLabel } from '../src/core/cityCalendar';
+import { dumpRun } from './dump';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=')));
 const days = Number(args.days ?? 3);
@@ -16,7 +19,8 @@ if (!CHAOS.levels.includes(chaos)) throw new Error(`Unknown chaos level ${chaos}
 
 const t0 = Date.now();
 const world = loadWorldFromDisk();
-const game = createHeadlessGame(world, loadLandFromDisk(), { chaos, chaosSeed: Number(args.seed ?? CHAOS.defaultSeed) });
+const opsOff = args.ops === 'off';
+const game = createHeadlessGame(world, loadLandFromDisk(), { chaos, chaosSeed: Number(args.seed ?? CHAOS.defaultSeed), ops: opsOff ? 'off' : 'default' });
 const { r1, r2, errors } = buildTestNetwork(game);
 console.log(`network: ${game.network.edges.size} edges, ${game.network.stations.size} stations, ${errors.length} invalid`);
 for (const e of errors) console.log('  ! ' + e);
@@ -31,6 +35,10 @@ const run = runDays(game, days, {
         ` · car-km ${Math.round(r.carKm).toLocaleString()} · late ${r.avgLateness.toFixed(0)} s · left behind ${Math.round(r.leftBehind)} · gave up ${Math.round(r.gaveUp)} · deadlocks ${r.deadlocks}` +
         `\n        revenue ${fmtMoney(f.revenue)} · operating ${fmtMoney(f.operating)} · staffing ${fmtMoney(f.staffing)} · maintenance ${fmtMoney(f.maintenance)} · cash ${fmtMoney(f.cash)}` +
         `\n        route riders ${JSON.stringify(r.routeRiders)} · goal trip ${r.goalTrip?.toFixed(0) ?? '—'}` +
+        (opsOff
+          ? ''
+          : `\n        ops: headway CV ${r.regularity.cv.toFixed(2)} · bunched ${(r.regularity.bunched * 100).toFixed(1)}% · excess wait ${r.regularity.ewt.toFixed(0)} s · ${r.regularity.holds} holds (${r.regularity.holds ? (r.regularity.holdSec / r.regularity.holds).toFixed(0) : 0} s each) · terminal lateness ${r.regularity.termLate.toFixed(0)} s` +
+            ` · fares ${fmtMoney(r.fares.revenue.reduce((a, b) => a + b, 0))} from ${Math.round(r.fares.trips.reduce((a, b) => a + b, 0)).toLocaleString()} trips · market ${(game.finance.newBondRate() * 100).toFixed(2)}% (${game.finance.market.rating ?? '—'})`) +
         (chaos !== 'off' && r.chaos
           ? `\n        chaos: ${weatherLabel(r.chaos.weather)} · incidents ${JSON.stringify(r.chaos.incidents)} (${r.chaos.incidentMinutes.toFixed(0)} min) · diverted ${r.chaos.diverted} · carried past ${r.chaos.carriedPast}` +
             ` · event riders ${r.chaos.eventRiders} · ${r.chaos.events.map((e) => `${e.label} ${e.attendance.toLocaleString()} (${e.byTransit.toLocaleString()} by transit, ${e.late} late)`).join(', ') || 'no events'}`
@@ -39,4 +47,5 @@ const run = runDays(game, days, {
   },
 });
 const c = run.engine.commuters!;
+if (args.dump) dumpRun(args.dump, run.reports, game, run.engine);
 console.log(`agents ${c.A.toLocaleString()} in ${c.G.toLocaleString()} groups · pathfinding ${c.lastPathMs} ms · sim ${run.ms} ms for ${days} days · in flight now ${c.inFlight()} · stuck ${c.stuckCount()}`);

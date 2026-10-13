@@ -4,9 +4,11 @@
  */
 import type { ChaosLevel, CityId, IncidentKind, TrackClass, WeatherKind } from '../balance';
 import type { DayWeather } from '../core/cityCalendar';
+import type { FarePolicy } from '../economy/fares';
 import type { Exposure } from './incidents';
+import type { RegularityStats } from './regularity';
 
-export type { ChaosLevel, DayWeather, IncidentKind, WeatherKind };
+export type { ChaosLevel, DayWeather, FarePolicy, IncidentKind, RegularityStats, WeatherKind };
 
 export interface CStation {
   id: number;
@@ -53,6 +55,8 @@ export interface CRouteDir {
    * Optional so hand-made test networks stay valid; missing means all underground. */
   outS0?: Float64Array;
   outS1?: Float64Array;
+  /** Operations control (v2): 1 where trains may be held (never the first or last stop). Missing: none. */
+  timepoint?: Uint8Array;
 }
 
 export interface CRoute {
@@ -72,6 +76,12 @@ export interface CRoute {
   headways: number[];
   fleet: number;
   dirs: [CRouteDir, CRouteDir];
+  /** Operations control (v2): hold fraction of the headway; 0 or missing = holding off. */
+  hold?: number;
+  /** Short turnaround when the next departure is already due (v2); missing = the standard turnaround. */
+  shortTurn?: boolean;
+  /** Settings fingerprint for App.recompile (holding, timepoints, short turns). */
+  opsKey?: string;
 }
 
 export interface CompiledNetwork {
@@ -111,6 +121,8 @@ export interface Snapshot {
 }
 
 export const TRAIN_STRIDE = 9; // id, route, dir, s, v, load, late, state, nextStop
+/** Snapshot train state (index 7): dwelling, held by the dispatcher at a timepoint (operations control). */
+export const SNAP_HELD = 4;
 /** Busy label while the worker runs a skip; messages posted until the label clears came from the skipped hours. */
 export const SKIP_LABEL = 'Skipping ahead';
 
@@ -136,7 +148,8 @@ export type ToWorker =
       agentScale: number;
       seed: number;
       time: number;
-      fare: number;
+      /** Fare policy (v2; replaces the flat `fare`). */
+      fares: FarePolicy;
       modeState?: ModeState;
       /** City chaos (calendar, weather and incidents all derive from the seed). */
       chaos: ChaosInit;
@@ -146,7 +159,8 @@ export type ToWorker =
   | { type: 'network'; net: CompiledNetwork }
   | { type: 'speed'; speed: number }
   | { type: 'skipTo'; time: number }
-  | { type: 'fare'; fare: number }
+  /** Applies from the next boarding (billing) and the next 3 am (mode choice). */
+  | { type: 'fares'; fares: FarePolicy }
   | { type: 'query'; id: number; q: Query }
   /** Applies from the next 3 am. */
   | { type: 'chaosLevel'; level: ChaosLevel }
@@ -209,6 +223,40 @@ export interface DayReport {
   boroughsServed: number[];
   /** City chaos summary (optional: reports saved before chaos existed don't have it). */
   chaos?: DayChaos;
+  // ---- operations control and the money market (v2). Reports saved before v2 lack these.
+  /** Fares by earnings band and period, real people and money (index band × 2 + (peak ? 1 : 0)). */
+  fares: FareBreakdown;
+  /** Transit share of each earnings band's commuters (as drawn today). */
+  bandShare: number[];
+  /** Service regularity per route id. */
+  routeRegularity: Record<number, RegularityStats>;
+  /** Service regularity of the whole network (the routes' sums pooled). */
+  regularity: RegularityStats;
+}
+
+export interface FareBreakdown {
+  /** Fare-paying journeys (first boardings), real people; length 6, index band × 2 + (peak ? 1 : 0). */
+  trips: number[];
+  /** Fares collected, length 6, same index. */
+  revenue: number[];
+}
+
+/** The 'route' query reply's regularity (v2). */
+export interface RouteRegularityDetail {
+  /** Today so far. */
+  today: RegularityStats;
+  /** Yesterday's (null before the first midnight on this route's path). */
+  yesterday: RegularityStats | null;
+  /** Headway CV per stop in direction-0 stop order (yesterday's, or today's so far); −1 = no data. */
+  cvByStop: [number[], number[]];
+  /** Stop indices (direction-0 order) that are timepoints. */
+  timepoints: number[];
+  /** Suggested recovery share from the mean terminal lateness (yesterday's, or today's). */
+  suggestRecovery: number;
+  /** Hold fraction in force (0 = holding off). */
+  hold: number;
+  /** Short turnarounds today so far on this route. */
+  shortTurns: number;
 }
 
 // ---------------------------------------------------------------------------

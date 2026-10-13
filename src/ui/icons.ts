@@ -24,6 +24,8 @@ export const ICONS = {
   snow: '<path d="M12 3v18 M4.2 7.5l15.6 9 M4.2 16.5l15.6-9"/><path d="M9.5 4.5 12 7l2.5-2.5 M9.5 19.5 12 17l2.5 2.5"/>',
   heat: '<path d="M10 4.5a2 2 0 0 1 4 0v9.3a4 4 0 1 1-4 0Z"/><path d="M12 9v6.5 M17.5 6h2.5 M17.5 9.5h2.5"/>',
   alert: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15Z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
+  // Operations control: timepoint toggles in the route panel's stop list.
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5 V12 L15 14"/>',
   ticket: '<path d="M4 8.5V6h16v2.5a2.5 2.5 0 0 0 0 5V18H4v-4.5a2.5 2.5 0 0 0 0-5Z"/><path d="M14 6.5v11" stroke-dasharray="2 2"/>',
 };
 

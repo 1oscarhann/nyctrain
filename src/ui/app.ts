@@ -6,12 +6,16 @@
 import { ArcLayer, ScatterplotLayer, TextLayer, PathLayer } from '@deck.gl/layers';
 import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
 import type { Layer } from '@deck.gl/core';
-import { CHAOS, COMMUTERS, ECONOMY, TIME, type ChaosLevel, type TrackLevel } from '../balance';
+import { BONDS, CHAOS, COMMUTERS, ECONOMY, TIME, type ChaosLevel, type TrackClass, type TrackLevel } from '../balance';
 import { city, cityBalance } from '../cities';
 import { Game, newChaosSeed, type Selection } from '../core/game';
 import { toLonLat } from '../core/geo';
-import { dayIndex, isNewMonth, SECONDS_PER_DAY, timeOfDay } from '../core/calendar';
-import { fmtCount, fmtDensity, fmtFare, fmtMoney, setUnits } from '../core/units';
+import { dayIndex, isNewMonth, monthKey, SECONDS_PER_DAY, timeOfDay, yearOf } from '../core/calendar';
+import { fmtCount, fmtDensity, fmtMoney, setUnits } from '../core/units';
+import { defaultFares, fareSummary, type FarePolicy } from '../economy/fares';
+import { dayKpi } from '../economy/finance';
+import { yearsWithData } from '../economy/yearReview';
+import { carSaleValue, fleetPlan, sellIdleCars, sellSpareCars } from '../routes/fleet';
 import { checkGoals, emptyGoals, goalTitle, type GoalState } from '../core/goals';
 import { LandMask } from '../data/landMask';
 import { TractIndex, type LandCollection, type World } from '../data/world';
@@ -44,18 +48,19 @@ import type { ToolId } from './toolTypes';
 import { TopBar } from './topbar';
 import { Toolbar } from './toolbar';
 import { SelectTool } from './selectTool';
-import { Busy, confirmDialog, Legend, Toasts, Tooltip } from './widgets';
+import { Busy, confirmDialog, Legend, modal, Toasts, Tooltip } from './widgets';
 import type { Panel } from './panels/common';
 import { stationPanel } from './panels/stationPanel';
 import { routeEditor, routePanel, routesList } from './panels/routePanel';
 import { edgePanel, tractPanel, trainPanel } from './panels/inspectPanels';
-import { financePanel } from './panels/financePanel';
+import { financePanel, type FinanceTab } from './panels/financePanel';
 import { goalsPanel } from './panels/goalsPanel';
 import { alertsPanel } from './panels/alertsPanel';
 import { AlertFeed, describeAlert, eventWhen, fmtK, isIncident, LEVEL_HINT, LEVEL_LABEL, outcomeText, plainDetail, wrapUpToasts, type RouteRef } from './alertFeed';
 import { openMenu } from './menu';
 import { Tutorial } from './tutorial';
-import { showGameOver, showMonthReport } from './reports';
+import { showGameOver, showMonthReport, showYearReview } from './reports';
+import { fareToastBody, fmtMoneyFine, fmtRate, holdingToast, prepayOptions, refinanceText, saleText } from './opsMoney';
 
 export interface AppOptions {
   sandbox: boolean;
@@ -131,6 +136,12 @@ export class App implements AppContext {
   private intervals: number[] = [];
   private gameOver = false;
   private stationCap = new Map<number, number>();
+  /** Selection the side panel shows (its scroll position is kept when it is rebuilt). */
+  private panelKey = '';
+  /** Finances tab open this session (not saved). */
+  financeTab: FinanceTab = 'overview';
+  /** Fares tab: "Same fare all day" unticked while the fares are still equal (session only). */
+  fareSplit = false;
 
   get agentScale(): number {
     return this.settings.agentScale;
@@ -147,7 +158,7 @@ export class App implements AppContext {
     setUnits(this.settings.units);
     this.tractIndex = new TractIndex(world.tracts);
     this.terrain = new WorldTerrain(new LandMask(land), this.tractIndex);
-    this.game = new Game(world, this.terrain, { sandbox: opts.sandbox, fare: ECONOMY.fareDefault });
+    this.game = new Game(world, this.terrain, { sandbox: opts.sandbox, fares: defaultFares() });
     this.goals = emptyGoals();
     this.tutorialDone = !opts.tutorial;
     let modeState: ModeState | undefined;
@@ -159,8 +170,9 @@ export class App implements AppContext {
       this.lastModeState = r.modeState ?? null;
       this.tutorialDone = r.tutorialDone || !opts.tutorial;
     } else {
-      // A new game draws its own city chaos seed (calendar, weather and incidents derive from it).
-      this.game.chaos.seed = newChaosSeed();
+      // A new game draws its own seed: city chaos (calendar, weather, incidents) and the bond
+      // market's walk both derive from it.
+      this.game.setGameSeed(newChaosSeed());
       if (opts.chaos) this.game.chaos.level = this.game.chaos.levelToday = opts.chaos;
     }
     this.feed = new AlertFeed(this.game);
@@ -254,7 +266,7 @@ export class App implements AppContext {
       agentScale: this.settings.agentScale,
       seed: this.settings.seed,
       time: this.game.time,
-      fare: this.game.fare,
+      fares: this.game.fares,
       modeState,
       chaos: this.game.chaosInit(),
       service: this.game.chaos.service,
@@ -399,7 +411,8 @@ export class App implements AppContext {
   private recompile(): void {
     const c = compileNetwork(this.game);
     const prev = this.compiled;
-    const sig = (x: CompileResult | null) => (x ? JSON.stringify(x.net.routes.map((r) => [r.id, r.fleet, r.cars, r.headways, r.dirs[0].length, r.dirs[0].stopS.length, r.color, r.name])) + x.net.stations.length : '');
+    // opsKey: holding, timepoints and short turns reach the worker only through a recompile.
+    const sig = (x: CompileResult | null) => (x ? JSON.stringify(x.net.routes.map((r) => [r.id, r.fleet, r.cars, r.headways, r.dirs[0].length, r.dirs[0].stopS.length, r.color, r.name, r.opsKey])) + x.net.stations.length : '');
     if (prev && sig(prev) === sig(c)) return;
     this.compiled = c;
     this.compiledByVersion.set(c.net.version, c);
@@ -464,15 +477,21 @@ export class App implements AppContext {
     // The worker is already past midnight; move the mirrored clock too, so the autosave below
     // can't hold a time from before the day it has settled.
     g.setTime(Math.max(g.time, (r.day + 1) * SECONDS_PER_DAY));
-    g.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen });
+    g.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen, kpi: dayKpi(r) });
     this.report = r;
+    // Rating changes and bond market shocks from this settle's month-end review.
+    for (const ev of g.finance.events) this.toasts.show(ev.title, ev.body, ev.tone, 7000, () => this.openFinance('borrowing'));
     g.events.emit('money', undefined);
     this.checkGoals(r);
     this.panel?.dayEnd?.();
     this.applyStationStats();
     this.stations.update(this.view.is3D);
     if (this.overlays.mode !== 'none') this.loadOverlayData(this.overlays.mode);
-    if (isNewMonth(r.day + 1) && g.finance.months.length) showMonthReport(this, g.finance.months[g.finance.months.length - 1]);
+    if (isNewMonth(r.day + 1) && g.finance.months.length) {
+      // The first weekday of January brings the year in review instead of December's report.
+      if (monthKey(r.day + 1).endsWith('-01')) showYearReview(this, yearOf(r.day));
+      else showMonthReport(this, g.finance.months[g.finance.months.length - 1]);
+    }
     if (g.finance.bankrupt && !this.gameOver) {
       this.gameOver = true;
       this.setSpeedIndex(-1);
@@ -513,6 +532,7 @@ export class App implements AppContext {
       return;
     }
     if (!sel) return this.showPanel(null);
+    this.nextPanelKey = JSON.stringify(sel);
     switch (sel.kind) {
       case 'station':
         return this.showPanel(stationPanel(this, sel.id));
@@ -535,11 +555,23 @@ export class App implements AppContext {
     }
   }
 
+  private nextPanelKey = '';
   private showPanel(p: Panel | null): void {
+    // A rebuild of the same panel (after Apply, a day end, a money change) keeps its scroll position.
+    const key = this.nextPanelKey;
+    this.nextPanelKey = '';
+    const keep = p && key && key === this.panelKey ? (this.side.querySelector('.side-body')?.scrollTop ?? 0) : 0;
+    this.panelKey = p ? key : '';
     this.panel?.destroy?.();
     this.panel = p;
+    // A tooltip from a button in the old panel would otherwise stay up (its mouseleave never fires).
+    this.tooltip.show(null);
     this.side.replaceChildren();
     if (p) this.side.append(p.el);
+    if (keep) {
+      const body = this.side.querySelector('.side-body');
+      if (body) body.scrollTop = keep;
+    }
     this.side.classList.toggle('open', !!p);
     this.view.invalidate();
   }
@@ -749,10 +781,11 @@ export class App implements AppContext {
   }
 
   // ------------------------------------------------------------------ money
-  setFare(f: number): void {
-    this.game.fare = Math.max(ECONOMY.fareMin, Math.min(ECONOMY.fareMax, Math.round(f / ECONOMY.fareStep) * ECONOMY.fareStep));
-    this.sim.setFare(this.game.fare);
-    this.toast('Fare changed', `${fmtFare(this.game.fare)} — commuters reconsider at 3 am`, 'amber');
+  /** Change the fare policy (normalized to the city's range and step); billing changes at once, choices at 3 am. */
+  setFares(p: Partial<FarePolicy>): void {
+    const fares = this.game.setFares(p);
+    this.sim.setFares(fares);
+    this.toast('Fares changed', fareToastBody(fareSummary(fares)), 'amber');
     this.refreshPanel();
   }
 
@@ -903,8 +936,118 @@ export class App implements AppContext {
   issueBond(): void {
     const b = this.game.finance.issueBond(this.game.day);
     if (!b) this.toast('No bond room left', `The limit is ${fmtMoney(ECONOMY.bondMax)}`, 'red');
-    else this.toast('Bond issued', `${fmtMoney(b.principal)} at ${+(ECONOMY.bondRate * 100).toFixed(2)}% · ${fmtMoney(b.monthlyPayment)}/month`, 'amber');
+    else this.toast('Bond issued', `${fmtMoney(b.principal)} at ${fmtRate(b.rate)} · ${fmtMoneyFine(b.monthlyPayment)}/month`, 'amber');
     this.game.events.emit('money', undefined);
+  }
+
+  /** Open Finances at a tab. */
+  openFinance(tab?: FinanceTab): void {
+    if (tab) this.financeTab = tab;
+    if (this.game.selection?.kind === 'finance') this.refreshPanel();
+    else this.game.select({ kind: 'finance' });
+  }
+
+  toggleFinance(): void {
+    if (this.game.selection?.kind === 'finance' && this.tools.active?.id !== 'route') this.game.select(null);
+    else this.openFinance();
+  }
+
+  /** Prepay part or all of a bond: a small dialog with the choices, their penalty and the new payment. */
+  prepayBond(id: number): void {
+    const f = this.game.finance;
+    const b = f.bonds.find((x) => x.id === id);
+    if (!b) return;
+    if (this.game.sandbox) {
+      this.toast('Sandbox — borrowing is off', undefined, 'amber');
+      return;
+    }
+    let close: () => void = () => {};
+    const opts = h('div', { class: 'prepay-opts' });
+    for (const o of prepayOptions(b, f.cash)) {
+      opts.append(
+        h(
+          'button',
+          {
+            class: 'hw-btn',
+            disabled: !o.ok,
+            onclick: () => {
+              close();
+              const res = f.prepayBond(id, o.amount, this.game.day);
+              if (!res.ok) this.toast("Couldn't prepay", res.reason, 'red');
+              else this.toast(`Prepaid ${fmtMoney(o.amount)} on bond ${id}`, `fee ${fmtMoneyFine(res.fee)}${o.newPayment ? ` · now ${fmtMoneyFine(o.newPayment)}/month` : ' · bond repaid'}`, 'amber');
+              this.game.events.emit('money', undefined);
+            },
+          },
+          h('b', null, o.label),
+          h('span', { class: 'hw-muted' }, o.ok ? `fee ${fmtMoneyFine(o.fee)} · ${o.newPayment ? `then ${fmtMoneyFine(o.newPayment)}/month` : 'repays the bond'}` : `${o.reason} (needs ${fmtMoney(o.amount + o.fee)})`),
+        ),
+      );
+    }
+    const content = h(
+      'div',
+      null,
+      h('h2', null, `Prepay bond ${id}`),
+      h('div', { class: 'hw-muted', style: 'line-height:1.5' }, `${fmtMoney(b.balance)} left at ${fmtRate(b.rate)} · ${fmtMoneyFine(b.monthlyPayment)}/month. A ${Math.round(BONDS.prepayPenalty * 100)}% penalty applies to the amount prepaid; the bond keeps its maturity with a lower payment, and bond room is freed at once. Cash ${fmtMoney(f.cash)}.`),
+      opts,
+      h('div', { class: 'actions' }, h('button', { class: 'hw-btn', onclick: () => close() }, 'Cancel')),
+    );
+    close = modal(this.root, content);
+  }
+
+  /** Refinance a bond at today's new-bond rate (confirm with the fee, the saving and the payback). */
+  async refinanceBond(id: number): Promise<void> {
+    const f = this.game.finance;
+    const q = f.refinanceQuote(id);
+    if (!q) return;
+    if (!q.ok) {
+      this.toast("Can't refinance", q.reason, 'amber');
+      return;
+    }
+    if (!(await this.confirm(`Refinance bond ${id} at ${fmtRate(q.rate)}?`, `${refinanceText(q)}. The remaining term is kept.`, 'Refinance'))) return;
+    const res = f.refinanceBond(id, this.game.day);
+    if (!res.ok) this.toast("Couldn't refinance", res.reason, 'red');
+    else this.toast(`Refinanced bond ${id} at ${fmtRate(q.rate)}`, `saves ${fmtMoneyFine(res.saving)}/month · fee ${fmtMoneyFine(res.fee)}`, 'green');
+    this.game.events.emit('money', undefined);
+  }
+
+  /** Sell the spare pool's cars of a class (confirmed). */
+  async sellSpareCars(cls: TrackClass): Promise<void> {
+    const n = this.game.routes.spareCars[cls];
+    if (!n) return;
+    if (!(await this.confirm(`Sell ${n} spare ${cls} cars for ${fmtMoneyFine(carSaleValue(cls, n))}?`, saleText(cls, n), 'Sell'))) return;
+    const res = sellSpareCars(this.game, cls);
+    if (res.ok) this.toast(`Sold ${res.cars} cars for ${fmtMoneyFine(res.proceeds)}`, this.game.sandbox ? 'Sandbox: money is unlimited' : undefined, 'green');
+    else this.toast("Couldn't sell", res.reason, 'amber');
+  }
+
+  /** Sell a route's idle cars (beyond its plan; confirmed). The fleet shrinks on the next compile. */
+  async sellIdleCars(routeId: number): Promise<void> {
+    const r = this.game.routes.get(routeId);
+    if (!r) return;
+    const n = fleetPlan(this.game, r).idleCars;
+    if (!n) return;
+    if (!(await this.confirm(`Sell ${n} idle cars from ${r.bullet} ${r.name} for ${fmtMoneyFine(carSaleValue(r.cls, n))}?`, saleText(r.cls, n), 'Sell'))) return;
+    const res = sellIdleCars(this.game, r);
+    if (res.ok) this.toast(`Sold ${res.cars} cars for ${fmtMoneyFine(res.proceeds)}`, `${r.bullet} ${r.name}${this.game.sandbox ? ' · sandbox: money is unlimited' : ''}`, 'green');
+    else this.toast("Couldn't sell", res.reason, 'amber');
+  }
+
+  /** H: switch holding on or off for a route (applies at once; the worker gets it with the recompile). */
+  toggleHolding(routeId: number): void {
+    const r = this.game.routes.get(routeId);
+    if (!r) return;
+    const on = !r.control.hold;
+    this.game.routes.update(r.id, { control: { ...r.control, hold: on } });
+    this.game.events.emit('routes', undefined);
+    this.toast(holdingToast(on, r.bullet, r.name), on ? 'Trains wait for an even gap at the first stop and at timepoints.' : 'Trains leave as soon as their slot comes up.', on ? 'green' : 'amber');
+  }
+
+  /** The year in review: a given year, else the last finished one (or this year so far). */
+  showYearReview(year?: number): void {
+    const years = yearsWithData(this.game.finance);
+    const now = yearOf(this.game.day);
+    const y = year ?? [...years].reverse().find((v) => v < now) ?? years[years.length - 1] ?? now;
+    showYearReview(this, y);
   }
 
   // ------------------------------------------------------------------ saving
@@ -1015,6 +1158,16 @@ export class App implements AppContext {
       case 'A':
         this.toggleAlerts();
         break;
+      case 'm':
+      case 'M':
+        this.toggleFinance();
+        break;
+      case 'h':
+      case 'H': {
+        const sel = this.game.selection;
+        if (sel?.kind === 'route' && this.tools.active?.id !== 'route') this.toggleHolding(sel.id);
+        break;
+      }
       case 'Escape':
         if (this.tools.active?.id !== 'select') {
           if (this.tools.active?.id === 'route') this.routeTool.cancel();

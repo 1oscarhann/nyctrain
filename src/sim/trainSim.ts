@@ -1,12 +1,15 @@
 /**
  * Train operations: dispatch from terminals on schedule, kinematics, dwell, moving-block
- * signalling over shared track, first-come-first-served junction merges, turnarounds.
+ * signalling over shared track, first-come-first-served junction merges, turnarounds, and (v2)
+ * operations control: headway holding at the first stop and at timepoints, short turnarounds, and
+ * regularity statistics.
  *
  * Positions are path distances `s` (metres) along a route direction's compiled path; the
  * train's head is at s and its tail at s − trainLength.
  */
-import { OPERATIONS, TIME } from '../balance';
-import type { CompiledNetwork, CRoute, CRouteDir, ServiceOverride } from './protocol';
+import { OPERATIONS, OPS_CONTROL, TIME } from '../balance';
+import type { CompiledNetwork, CRoute, CRouteDir, RouteRegularityDetail, ServiceOverride } from './protocol';
+import { cvByStop, newRouteReg, poolStats, recordHeadway, rollDay, suggestRecovery, summarize, type RegularityStats, type RouteReg } from './regularity';
 
 export const enum TState {
   Ready = 0, // waiting off-track at a terminal for its next departure slot
@@ -47,6 +50,13 @@ export interface Train {
   out: number;
 }
 
+/** A timepoint hold in progress (operations control), kept off the Train objects (hot in move/register). */
+interface Hold {
+  /** The hold ends by this time at the latest. */
+  cap: number;
+  start: number;
+}
+
 /** A temporary speed restriction (signal problem) on a directed track, in track coordinates. */
 export interface TrackRestriction {
   id: number;
@@ -79,11 +89,14 @@ interface DispatchState {
   ready: [number[], number[]];
   /** Last departure slot per direction (event service pulls the next slot in from it). */
   last: [number, number];
+  /** Operations control: a departure has been held at the first stop since this time (NaN = none). */
+  holdSince: [number, number];
 }
 
 const NO_OVERRIDES: ServiceOverride[] = [];
 
-interface OccEntry {
+export interface OccEntry {
+  /** Index into TrainSim.trains. */
   train: number;
   tail: number;
   head: number;
@@ -95,6 +108,8 @@ export interface TrainDayStats {
   lateCount: number;
   deadlocks: number;
   routeLate: Map<number, { sum: number; n: number }>;
+  /** Terminal turnarounds shortened because the next departure was already due. */
+  shortTurns: number;
 }
 
 export class TrainSim {
@@ -125,6 +140,14 @@ export class TrainSim {
   private restrOnTrack = new Uint8Array(0);
   private overrides: ServiceOverride[] = [];
   private ovByRoute: (ServiceOverride[] | undefined)[] = [];
+  // ---- operations control (v2)
+  /** Regularity accumulators by compiled route index (kept per route id while its path is unchanged). */
+  private regs: RouteReg[] = [];
+  private regById = new Map<number, RouteReg>();
+  /** Yesterday's regularity per route id (rolled at midnight). */
+  private yesterdayById = new Map<number, { stats: RegularityStats; byStop: [number[], number[]] }>();
+  /** Timepoint holds in progress, by train id. */
+  private holds = new Map<number, Hold>();
 
   /** Real people per agent: train loads are counted in agents, capacities in people. */
   constructor(private hooks: PassengerHooks, private agentScale = 1) {}
@@ -142,6 +165,8 @@ export class TrainSim {
     this.net = net;
     this.trains = [];
     this.dispatch = [];
+    this.regs = [];
+    const newRegs = new Map<number, RouteReg>();
     this.occ = Array.from({ length: net.trackCount }, () => []);
     this.lockHolder = new Int32Array(net.lockCount).fill(-1);
     this.resolveOverrides();
@@ -156,13 +181,28 @@ export class TrainSim {
     net.routes.forEach((r, ri) => {
       const prev = old?.routes.find((o) => o.id === r.id) ?? null;
       const samePath = prev !== null && samePaths(prev, r);
-      const ds: DispatchState = { next: [0, 0], pending: [[], []], ready: [[], []], last: [-Infinity, -Infinity] };
+      const ds: DispatchState = { next: [0, 0], pending: [[], []], ready: [[], []], last: [-Infinity, -Infinity], holdSince: [NaN, NaN] };
       this.dispatch.push(ds);
+      // Regularity survives an unchanged path (stops and their order are the same).
+      let reg = samePath ? this.regById.get(r.id) : undefined;
+      if (!reg) {
+        reg = newRouteReg(r.id, r.dirs[0].stopS.length, r.dirs[1].stopS.length, (r.dirs[0].runTime + r.dirs[1].runTime) / 2);
+        this.yesterdayById.delete(r.id);
+      }
+      newRegs.set(r.id, reg);
+      this.regs.push(reg);
       const keep = oldByRoute.get(r.id) ?? [];
       oldByRoute.delete(r.id);
       for (const tr of keep) {
         tr.route = ri;
         tr.locks = [];
+        // Holding switched off (or the path changed) while held at a timepoint: the hold ends now.
+        const hd = this.holds.size ? this.holds.get(tr.id) : undefined;
+        if (hd && (!r.hold || !samePath)) {
+          reg.holds++;
+          reg.holdSec += Math.max(0, t - hd.start);
+          this.holds.delete(tr.id);
+        }
         if (!samePath) {
           // Path changed: deliver passengers, send the train back to a terminal.
           if (tr.load > 0) this.hooks.evacuate(tr, t);
@@ -207,11 +247,19 @@ export class TrainSim {
           ds.next[d] = Math.min(pds.next[d], this.nextServiceTime(ri, r, t + hw));
           ds.pending[d] = pds.pending[d].slice(-2);
           ds.last[d] = pds.last[d];
+          if (r.hold) ds.holdSince[d] = pds.holdSince[d];
         } else ds.next[d] = this.nextServiceTime(ri, r, t + (d === 1 ? 30 : 0));
       }
       newById.set(r.id, ds);
     });
     this.dispatchById = newById;
+    this.regById = newRegs;
+    // Holds of trains that left the network (a shrunk fleet, a deleted route).
+    if (this.holds.size) {
+      const ids = new Set(this.trains.map((x) => x.id));
+      for (const id of [...this.holds.keys()]) if (!ids.has(id)) this.holds.delete(id);
+    }
+    for (const id of [...this.yesterdayById.keys()]) if (!newRegs.has(id)) this.yesterdayById.delete(id);
     // Routes that vanished: deliver anyone on board.
     for (const trs of oldByRoute.values()) for (const tr of trs) if (tr.load > 0) this.hooks.evacuate(tr, t);
   }
@@ -269,6 +317,7 @@ export class TrainSim {
     tr.holdNext = 0;
     tr.incident = 0;
     tr.out = 0;
+    if (this.holds.size) this.holds.delete(tr.id);
     const r = this.net!.routes[tr.route];
     tr.buckets = Array.from(r.dirs[dir].stopS, () => []);
     this.dispatch[tr.route].ready[dir].push(tr.id);
@@ -351,7 +400,8 @@ export class TrainSim {
     for (const tr of this.trains) {
       switch (tr.state) {
         case TState.Dwelling:
-          if (t >= tr.until) this.leaveStop(tr, t);
+          // (Timepoint holding only on routes that hold; setNetwork ends holds on routes that stop.)
+          if (t >= tr.until && !(net.routes[tr.route].hold && this.holdAtTimepoint(tr, t))) this.leaveStop(tr, t);
           break;
         case TState.Running:
           this.move(tr, t, dt, byId);
@@ -399,6 +449,8 @@ export class TrainSim {
         // Clear platform, and nothing close enough behind that it couldn't stop for us.
         const behind = OPERATIONS.safetyMargin + (r.vmax * r.vmax) / (2 * r.brake);
         if (!this.regionFree(dir, headS - r.trainLength - behind, headS + 30)) continue;
+        // Operations control: terminal holding (only on routes that hold).
+        if ((r.hold || !isNaN(ds.holdSince[d])) && this.holdAtTerminal(ri, r, ds, d, t)) continue;
         const slot = ds.pending[d].shift()!;
         const id = ds.ready[d].shift()!;
         const tr = this.trains.find((x) => x.id === id);
@@ -637,6 +689,12 @@ export class TrainSim {
       if (!rl) this.day.routeLate.set(r.id, (rl = { sum: 0, n: 0 }));
       rl.sum += Math.max(0, tr.late);
       rl.n++;
+      // Regularity: lateness reaching the terminal (the recovery advisor).
+      if (stopIdx === dir.stopS.length - 1) {
+        const g = this.regs[tr.route];
+        g.termLateSum += Math.max(0, tr.late);
+        g.termLateN++;
+      }
     }
     const overComfort = tr.load * this.agentScale > r.capComfort;
     const { alight, board } = this.hooks.arrive(tr, r, stopIdx, t);
@@ -659,14 +717,27 @@ export class TrainSim {
     const r = this.net!.routes[tr.route];
     const dir = r.dirs[tr.dir];
     if (tr.stop >= dir.stopS.length - 1) {
-      // Terminal: clear the platform, turn around off the running track.
+      // Terminal: clear the platform, turn around off the running track. Operations control: when
+      // the next departure the other way is already due and no train is waiting for it, the crew
+      // turns the train in OPS_CONTROL.turnaroundMin.
       this.releaseLocks(tr);
       tr.state = TState.Turnaround;
-      tr.until = t + OPERATIONS.turnaround;
+      let turn = OPERATIONS.turnaround;
+      if (r.shortTurn) {
+        const od = tr.dir === 0 ? 1 : 0;
+        const ds = this.dispatch[tr.route];
+        if (ds.ready[od].length === 0 && (ds.pending[od].length > 0 || ds.next[od] < t + OPERATIONS.turnaround)) {
+          turn = OPS_CONTROL.turnaroundMin;
+          this.day.shortTurns++;
+          this.regs[tr.route].shortTurns++;
+        }
+      }
+      tr.until = t + turn;
       tr.load = 0;
       return;
     }
     this.hooks.depart(tr, r, tr.stop, t);
+    this.noteDeparture(tr, r, t);
     tr.stop++;
     tr.state = TState.Running;
     tr.stoppedSince = t;
@@ -675,6 +746,172 @@ export class TrainSim {
   private releaseLocks(tr: Train): void {
     for (const l of tr.locks) if (this.lockHolder[l.lock] === tr.id) this.lockHolder[l.lock] = -1;
     tr.locks = [];
+  }
+
+  // ------------------------------------------------------------------ operations control
+  /**
+   * Terminal holding: a departure whose gap behind the train ahead would be under hold × H waits off
+   * the running track (so it blocks nobody), while the slots keep ticking. Returns true to hold now;
+   * on release the hold is counted.
+   */
+  private holdAtTerminal(ri: number, r: CRoute, ds: DispatchState, d: 0 | 1, t: number): boolean {
+    if (r.hold) {
+      const H = this.headwayAt(ri, r, t);
+      if (H > 0 && t + OPERATIONS.dwellBase - this.regs[ri].lastDep[d][0] < r.hold * H) {
+        if (isNaN(ds.holdSince[d])) ds.holdSince[d] = t;
+        return true;
+      }
+    }
+    if (!isNaN(ds.holdSince[d])) {
+      const g = this.regs[ri];
+      g.holds++;
+      g.holdSec += t - ds.holdSince[d];
+      ds.holdSince[d] = NaN;
+    }
+    return false;
+  }
+
+  /**
+   * Regularity: the headway behind the previous departure from this stop, counted when that one
+   * left in the same period of the same day, at the same headway in force (event service).
+   */
+  private noteDeparture(tr: Train, r: CRoute, t: number): void {
+    const g = this.regs[tr.route];
+    const last = g.lastDep[tr.dir][tr.stop];
+    const day0 = Math.floor(t / SECONDS_PER_DAY) * SECONDS_PER_DAY;
+    const pi = periodOfTod(t - day0);
+    const ov = this.ovByRoute[tr.route] !== undefined;
+    const H = ov ? this.headwayAt(tr.route, r, t) : r.headways[pi];
+    recordHeadway(g, tr.dir, tr.stop, t, H, last >= day0 + PERIOD_START[pi] && (!ov || this.headwayAt(tr.route, r, last) === H));
+  }
+
+  /**
+   * Timepoint holding: a train due to leave a timepoint while its gap behind the train ahead is
+   * under hold × H waits (re-checked every step) until the gap is right, at most
+   * OPS_CONTROL.maxHoldPerStop, and leaves at once if another route's train queues behind it.
+   * Returns true while the train is held. People arriving meanwhile still board (leaveStop's depart).
+   */
+  private holdAtTimepoint(tr: Train, t: number): boolean {
+    const r = this.net!.routes[tr.route];
+    const dir = r.dirs[tr.dir];
+    let hd = this.holds.size ? this.holds.get(tr.id) : undefined;
+    const held = hd !== undefined;
+    // Not a timepoint (or holding is off), a closed station (city chaos: nobody can board), no
+    // service or no train ahead yet: no hold (and one in progress ends).
+    let ok = !!r.hold && !!dir.timepoint && dir.timepoint[tr.stop] === 1;
+    if (ok && this.closedUntil.length && this.closedUntil[dir.stopStation[tr.stop]] > t) ok = false;
+    const H = ok ? this.headwayAt(tr.route, r, t) : 0;
+    const last = ok ? this.regs[tr.route].lastDep[tr.dir][tr.stop] : -Infinity;
+    if (!ok || !(H > 0) || !isFinite(last)) {
+      if (held) this.endHold(tr, t);
+      return false;
+    }
+    const target = last + r.hold! * H;
+    if (!hd) {
+      if (t >= target) return false;
+      hd = { cap: t + OPS_CONTROL.maxHoldPerStop, start: t };
+      this.holds.set(tr.id, hd);
+      // Don't sit on a junction claimed during the approach while waiting.
+      this.releaseLocksAhead(tr);
+    }
+    const end = Math.min(target, hd.cap);
+    if (t >= end || this.otherRouteQueuedBehind(tr, r)) {
+      this.endHold(tr, t);
+      return false;
+    }
+    tr.until = Math.min(end, t + TIME.simStep);
+    return true;
+  }
+
+  private endHold(tr: Train, t: number): void {
+    const hd = this.holds.get(tr.id);
+    if (!hd) return;
+    const g = this.regs[tr.route];
+    g.holds++;
+    g.holdSec += t - hd.start;
+    this.holds.delete(tr.id);
+  }
+
+  /** Give up junction claims the head hasn't reached (claims the train is physically on stay). */
+  private releaseLocksAhead(tr: Train): void {
+    if (!tr.locks.length) return;
+    tr.locks = tr.locks.filter((l) => {
+      if (l.s0 <= tr.s) return true;
+      if (this.lockHolder[l.lock] === tr.id) this.lockHolder[l.lock] = -1;
+      return false;
+    });
+  }
+
+  /** Is another route's train queued within OPS_CONTROL.yieldLookback behind this train's tail (on its path's tracks)? */
+  private otherRouteQueuedBehind(tr: Train, r: CRoute): boolean {
+    const dir = r.dirs[tr.dir];
+    if (!dir.elems.length) return false;
+    const tail = tr.s - r.trainLength;
+    let k = Math.min(tr.elem, dir.elems.length - 1);
+    while (k > 0 && dir.elems[k].s0 > tail) k--;
+    let el = dir.elems[k];
+    let uTail = el.u0 + (Math.max(tail, el.s0) - el.s0);
+    let look = OPS_CONTROL.yieldLookback;
+    const routeOf = (i: number) => this.trains[i]?.route ?? tr.route;
+    for (;;) {
+      if (queuedBehind(this.occ, el.track, uTail, look, tr.route, routeOf)) return true;
+      const back = uTail - el.u0;
+      if (back >= look || k === 0) return false;
+      look -= back;
+      el = dir.elems[--k];
+      uTail = el.u0 + (el.s1 - el.s0);
+    }
+  }
+
+  /** Midnight: the day's regularity per route and for the network; the accumulators roll over. */
+  closeDayRegularity(): { routes: Record<number, RegularityStats>; network: RegularityStats } {
+    const network = poolStats(this.regs);
+    const routes: Record<number, RegularityStats> = {};
+    for (const g of this.regs) {
+      const y = rollDay(g);
+      routes[g.routeId] = y.stats;
+      this.yesterdayById.set(g.routeId, y);
+    }
+    return { routes, network };
+  }
+
+  /** The route panel's regularity (the 'route' query), or null for a route not running. */
+  regularityDetail(routeId: number): RouteRegularityDetail | null {
+    const net = this.net;
+    const ri = net ? net.routes.findIndex((r) => r.id === routeId) : -1;
+    if (!net || ri < 0) return null;
+    const r = net.routes[ri];
+    const g = this.regs[ri];
+    const y = this.yesterdayById.get(routeId) ?? null;
+    const today = summarize(g);
+    const timepoints: number[] = [];
+    r.dirs[0].timepoint?.forEach((v, k) => {
+      if (v) timepoints.push(k);
+    });
+    return {
+      today,
+      yesterday: y?.stats ?? null,
+      cvByStop: y ? y.byStop : cvByStop(g),
+      timepoints,
+      suggestRecovery: suggestRecovery((y?.stats ?? today).termLate, g.termRun),
+      hold: r.hold ?? 0,
+      shortTurns: g.shortTurns,
+    };
+  }
+
+  /** The network's regularity so far today (all routes pooled). */
+  regularityToday(): RegularityStats {
+    return poolStats(this.regs);
+  }
+
+  /** Is this train held at a timepoint (snapshot state SNAP_HELD)? */
+  isHeld(tr: Train): boolean {
+    return this.holds.size > 0 && this.holds.has(tr.id);
+  }
+
+  /** Trains held at a timepoint right now. */
+  heldCount(): number {
+    return this.holds.size;
   }
 
   resetDay(): void {
@@ -688,7 +925,19 @@ export class TrainSim {
 }
 
 function newDayStats(): TrainDayStats {
-  return { carKm: 0, lateSum: 0, lateCount: 0, deadlocks: 0, routeLate: new Map() };
+  return { carKm: 0, lateSum: 0, lateCount: 0, deadlocks: 0, routeLate: new Map(), shortTurns: 0 };
+}
+
+/**
+ * The yield rule (pure): is any train of another route on `track` with its head within `lookback`
+ * metres behind `uTail` (track coordinates)? Trains ahead of the tail and trains of the same route
+ * don't count.
+ */
+export function queuedBehind(occ: readonly (readonly OccEntry[])[], track: number, uTail: number, lookback: number, route: number, routeOfOcc: (train: number) => number): boolean {
+  const list = occ[track];
+  if (!list) return false;
+  for (const o of list) if (o.head >= uTail - lookback && o.head <= uTail && routeOfOcc(o.train) !== route) return true;
+  return false;
 }
 
 function samePaths(a: CRoute, b: CRoute): boolean {
@@ -700,6 +949,15 @@ function samePaths(a: CRoute, b: CRoute): boolean {
     for (let i = 0; i < x.stopS.length; i++) if (Math.abs(x.stopS[i] - y.stopS[i]) > 0.5) return false;
   }
   return true;
+}
+
+const SECONDS_PER_DAY = 86400;
+/** Start of each period (night, am, midday, pm, evening), seconds of the day. */
+const PERIOD_START = [0, 6 * 3600, 10 * 3600, 16 * 3600, 20 * 3600];
+
+/** Period index for a time of day in [0, 86400) (as periodIndex; cheap, for per-departure statistics). */
+function periodOfTod(tod: number): number {
+  return tod < PERIOD_START[1] ? 0 : tod < PERIOD_START[2] ? 1 : tod < PERIOD_START[3] ? 2 : tod < PERIOD_START[4] ? 3 : 4;
 }
 
 /** Period index (night, am, midday, pm, evening) for a game time. */

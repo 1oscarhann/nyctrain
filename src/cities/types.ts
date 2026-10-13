@@ -52,6 +52,8 @@ export interface CityConfig {
   people: string;
   /** What the player's network is called in copy ("by subway", "by metro"). */
   transitWord: string;
+  /** Who the low-income fare is for (finance panel copy): the lowest earnings band (FARES.lowIncomeBand). */
+  lowIncomeBand: string;
   goals: CityGoal[];
   tutorial: { jobs: string; track: string };
   /** Extra data attribution shown on the map (licence requirements). */

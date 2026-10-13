@@ -1,18 +1,25 @@
 /**
- * Route panel (daily ridership, peak-hour load profile per segment and direction, trains in
- * service, lateness, frequency editor) and the route editor used by the route tool.
+ * Route panel (daily ridership, service regularity, peak-hour load profile per segment and
+ * direction, trains in service, lateness, the frequency, train length and operations control
+ * editor, timepoints in the stop list) and the route editor used by the route tool.
  */
-import { OPERATIONS, STATION, TRAINS } from '../../balance';
+import { OPERATIONS, OPS_CONTROL, STATION, TRAINS } from '../../balance';
 import { cap } from '../../construction/describe';
 import { fmtClock, fmtCount, fmtDistance, fmtMinutes, fmtMoney } from '../../core/units';
 import { describeAlert, shortDate } from '../alertFeed';
-import { fleetPlan, purchaseFleet } from '../../routes/fleet';
+import { trainsNeeded } from '../../routes/compile';
+import { suggestTimepoints } from '../../routes/control';
+import { carSaleValue, fleetPlan, purchaseFleet } from '../../routes/fleet';
 import type { RouteTool } from '../../routes/routeTool';
 import { maxCarsFor } from '../../routes/routeSet';
-import { PERIOD_IDS, ROUTE_COLORS, type PeriodId, type Route } from '../../routes/types';
+import { PERIOD_IDS, ROUTE_COLORS, type PeriodId, type Route, type RouteControl } from '../../routes/types';
+import type { RouteRegularityDetail } from '../../sim/protocol';
 import type { App } from '../app';
-import { loadChart } from '../charts';
-import { bullet, h } from '../dom';
+import { loadChart, regularityChart } from '../charts';
+import { bullet, h, svgIcon } from '../dom';
+import { ICONS } from '../icons';
+import { fmtMoneyFine, HOLD_TIP, LATENESS_TIP, RECOVERY_TIP, recoveryAdvice, regularityCards, regularityTag, TIMEPOINT_TIP } from '../opsMoney';
+import { attachTip } from '../widgets';
 import { kv, section, shell, statCard, type Panel } from './common';
 
 interface RouteDetail {
@@ -22,6 +29,8 @@ interface RouteDetail {
   ridersToday: number;
   ridersYesterday: number;
   inService: number;
+  /** Operations control (v2): headway regularity (null when the route isn't in the compiled network). */
+  regularity?: RouteRegularityDetail | null;
 }
 
 const PERIOD_LABEL: Record<PeriodId, string> = { night: 'Night 0–6', am: 'AM peak 6–10', midday: 'Midday 10–16', pm: 'PM peak 16–20', evening: 'Evening 20–24' };
@@ -49,20 +58,43 @@ function carsPicker(min: number, max: number, value: number, onChange: (c: numbe
   return seg;
 }
 
-function fleetLine(app: App, r: Route): HTMLElement {
+/** A segmented control over numeric choices. */
+function choiceSeg(choices: readonly number[], value: number, label: (v: number) => string, onChange: (v: number) => void): HTMLElement {
+  const seg = h('div', { class: 'seg' });
+  for (const c of choices) seg.append(h('button', { class: Math.abs(c - value) < 1e-9 ? 'on' : '', onclick: () => onChange(c) }, label(c)));
+  return seg;
+}
+
+const pct = (v: number) => `${Math.round(v * 100)}%`;
+
+/**
+ * Fleet sizing for a route (or a draft of it): run time, round trip with recovery, trains needed
+ * and owned, what must be bought, and idle cars. `sell` (the route panel, with nothing unapplied)
+ * offers the idle cars for sale.
+ */
+function fleetLine(app: App, r: Route, opts: { sell?: boolean; dirty?: boolean } = {}): HTMLElement {
   const plan = fleetPlan(app.game, r);
   if (!plan.runTimes) return h('div', { class: 'hw-muted' }, 'Trains needed: — (no path yet)');
-  const rt = plan.runTimes[0] + plan.runTimes[1] + 2 * OPERATIONS.turnaround;
   const owned = Math.floor(r.ownedCars / r.cars);
+  const rows: [string, string][] = [['One-way run time', fmtMinutes(plan.runTimes[0])]];
+  if (plan.recovery > 0) rows.push(['Recovery', `${(plan.recovery / 60).toFixed(1)} min × 2`]);
+  rows.push(['Round trip', fmtMinutes(plan.roundTrip)], ['Trains needed', `${plan.trainsNeeded} (incl. ${OPERATIONS.spareTrains} spare)`], ['Trains owned', String(owned)]);
+  let idle: HTMLElement | null = null;
+  if (plan.idleCars > 0) {
+    const trains = Math.floor(plan.idleCars / r.cars);
+    const what = trains ? `${trains} train${trains > 1 ? 's' : ''} (${plan.idleCars} cars)` : `${plan.idleCars} cars`;
+    idle = h(
+      'div',
+      { class: 'ev-service', style: 'margin-top:6px' },
+      h('span', { class: 'grow hw-muted' }, `Idle: ${what}${opts.dirty ? ' · Apply first to sell' : ''}`),
+      opts.sell && !opts.dirty ? h('button', { class: 'hw-btn small', onclick: () => app.sellIdleCars(r.id) }, `Sell for ${fmtMoneyFine(carSaleValue(r.cls, plan.idleCars))}`) : null,
+    );
+  }
   return h(
     'div',
     null,
-    kv([
-      ['One-way run time', fmtMinutes(plan.runTimes[0])],
-      ['Round trip', fmtMinutes(rt)],
-      ['Trains needed', `${plan.trainsNeeded} (incl. ${OPERATIONS.spareTrains} spare)`],
-      ['Trains owned', String(owned)],
-    ]),
+    kv(rows),
+    idle,
     plan.carsToBuy > 0
       ? h('div', { class: app.game.finance.canAfford(plan.cost) ? 'warn' : 'err' }, `Needs ${plan.carsToBuy} more cars · ${fmtMoney(plan.cost)}${plan.fromSpare ? ` (plus ${plan.fromSpare} spare)` : ''}`)
       : plan.fromSpare > 0
@@ -80,6 +112,7 @@ export function routePanel(app: App, id: number): Panel {
   const op = game.routes.operational(net, r);
   const sh = shell(`Route · ${cap(r.cls)} metro · ${r.cars} cars`, r.name, () => game.select(null), bullet(r.color, r.bullet, 34));
   const body = sh.body;
+  const tip = (el: HTMLElement, title: string, text?: string, key?: string) => attachTip(el, app.tooltip, title, key, text);
   if (!op.ok) body.append(h('div', { class: path.ok ? 'warn' : 'err' }, op.reason ?? 'Not running'));
   // City chaos: incidents on this route right now.
   const incidents = h('div');
@@ -95,37 +128,148 @@ export function routePanel(app: App, id: number): Panel {
   const stats = h('div', { class: 'stat-grid', style: 'margin-top:6px' });
   body.append(incidents, stats);
 
-  // Stops
+  // ---- the draft: frequency, train length and operations control are applied together
+  const draft = { headways: { ...r.headways }, cars: r.cars, control: structuredClone(r.control) as RouteControl };
+  const sameControl = (a: RouteControl, b: RouteControl) => JSON.stringify({ ...a, timepoints: [...a.timepoints].sort() }) === JSON.stringify({ ...b, timepoints: [...b.timepoints].sort() });
+  const dirty = () => draft.cars !== r.cars || PERIOD_IDS.some((p) => draft.headways[p] !== r.headways[p]) || !sameControl(draft.control, r.control);
+  const draftRoute = (): Route => ({ ...r, headways: draft.headways, cars: draft.cars, control: draft.control });
+
+  // Stops (with timepoint toggles while holding is on)
   const stops = h('div', { class: 'list', style: 'margin-top:4px' });
-  r.stops.forEach((sid, i) => {
-    const s = net.stations.get(sid);
-    if (!s) return;
-    const others = game.routes.list().filter((o) => o.id !== r.id && o.stops.includes(sid));
-    stops.append(
-      h(
-        'div',
-        { class: 'list-item', onclick: () => game.select({ kind: 'station', id: sid }) },
-        h('span', { class: 'hw-muted num', style: 'width:18px' }, String(i + 1)),
-        h('span', { class: 'grow' }, s.name),
-        ...others.map((o) => bullet(o.color, o.bullet, 16)),
-      ),
-    );
-  });
+  const renderStops = () => {
+    stops.replaceChildren();
+    r.stops.forEach((sid, i) => {
+      const s = net.stations.get(sid);
+      if (!s) return;
+      const others = game.routes.list().filter((o) => o.id !== r.id && o.stops.includes(sid));
+      const mid = i > 0 && i < r.stops.length - 1;
+      const on = draft.control.timepoints.includes(sid);
+      let toggle: HTMLElement | null = null;
+      if (mid && draft.control.hold) {
+        toggle = h(
+          'button',
+          {
+            class: `tp-toggle${on ? ' on' : ''}`,
+            'aria-pressed': on ? 'true' : 'false',
+            'aria-label': `Timepoint at ${s.name}`,
+            onclick: (e: Event) => {
+              e.stopPropagation();
+              const tps = draft.control.timepoints;
+              draft.control.timepoints = on ? tps.filter((x) => x !== sid) : r.stops.filter((x) => x === sid || tps.includes(x));
+              renderStops();
+              renderOps();
+              renderFoot();
+            },
+          },
+          svgIcon(ICONS.clock),
+        );
+        tip(toggle, on ? `Timepoint at ${s.name}` : `Make ${s.name} a timepoint`, TIMEPOINT_TIP);
+      }
+      stops.append(
+        h(
+          'div',
+          { class: `list-item${on && draft.control.hold ? ' tp-on' : ''}`, onclick: () => game.select({ kind: 'station', id: sid }) },
+          h('span', { class: 'hw-muted num', style: 'width:18px' }, String(i + 1)),
+          h('span', { class: 'grow' }, s.name),
+          ...others.map((o) => bullet(o.color, o.bullet, 16)),
+          toggle,
+        ),
+      );
+    });
+  };
+
+  // Service regularity and the load profile
+  const reg = h('div');
   const charts = h('div');
-  body.append(section('Peak-hour load (8–9 am)'), charts);
+  body.append(reg, section('Peak-hour load (8–9 am)'), charts);
 
   // Frequency editor
-  const draft = { headways: { ...r.headways }, cars: r.cars };
   const fleetWrap = h('div');
   const maxCars = maxCarsFor(net, r);
   const carsWrap = h('div');
-  const renderCars = () => carsWrap.replaceChildren(carsPicker(TRAINS[r.cls].minCars, Math.max(TRAINS[r.cls].minCars, maxCars), draft.cars, (c) => { draft.cars = c; renderCars(); renderFleet(); }));
-  const renderFleet = () => fleetWrap.replaceChildren(fleetLine(app, { ...r, headways: draft.headways, cars: draft.cars }));
-  const apply = h('button', {
-    class: 'hw-btn primary small',
+  const renderCars = () => carsWrap.replaceChildren(carsPicker(TRAINS[r.cls].minCars, Math.max(TRAINS[r.cls].minCars, maxCars), draft.cars, (c) => { draft.cars = c; renderCars(); changed(); }));
+  const renderFleet = () => fleetWrap.replaceChildren(fleetLine(app, draftRoute(), { sell: true, dirty: dirty() }));
+
+  // Operations control (§2.1)
+  let detail: RouteDetail | null = null;
+  const ops = h('div');
+  const renderOps = () => {
+    const c = draft.control;
+    const hold = choiceSeg([0, 1], c.hold ? 1 : 0, (v) => (v ? 'On' : 'Off'), (v) => { c.hold = v === 1; renderOps(); renderStops(); changed(); });
+    const holdLbl = h('span', { class: 'lbl' }, 'Holding');
+    tip(holdLbl, 'Holding', HOLD_TIP, 'H');
+    tip(hold, 'Holding', HOLD_TIP, 'H');
+    const rows: HTMLElement[] = [h('div', { class: 'ops-row' }, holdLbl, h('div', { class: 'ctl' }, hold))];
+    if (c.hold) {
+      const thr = choiceSeg(OPS_CONTROL.holdFractionChoices, c.holdFraction, (v) => String(Math.round(v * 100)), (v) => { c.holdFraction = v; renderOps(); changed(); });
+      rows.push(
+        h(
+          'div',
+          { class: 'ops-row' },
+          h('span', { class: 'lbl' }, 'Threshold'),
+          h('div', { class: 'ctl' }, thr, h('span', { class: 'hw-muted' }, '% of headway')),
+          h('div', { class: 'note' }, `Trains wait while the gap to the one ahead is under ${pct(c.holdFraction)} of the headway: at the first stop, and up to ${OPS_CONTROL.maxHoldPerStop} s at timepoints.`),
+        ),
+      );
+    }
+    // Recovery
+    const plan = fleetPlan(game, draftRoute());
+    const rec = choiceSeg(OPS_CONTROL.recoveryChoices, c.recoveryPct, (v) => pct(v), (v) => { c.recoveryPct = v; renderOps(); changed(); });
+    const recLbl = h('span', { class: 'lbl' }, 'Recovery');
+    tip(recLbl, 'Recovery time', RECOVERY_TIP);
+    tip(rec, 'Recovery time', RECOVERY_TIP);
+    let recNote = 'No slack in the timetable';
+    if (plan.runTimes && c.recoveryPct > 0) {
+      const extra = plan.trainsNeeded - trainsNeeded({ headways: draft.headways, control: { recoveryPct: 0 } }, plan.runTimes);
+      recNote = `≈ ${(plan.recovery / 60).toFixed(1)} min per terminal · ${extra > 0 ? `+${extra} train${extra > 1 ? 's' : ''}` : 'no extra trains'}`;
+    }
+    const advice = recoveryAdvice(detail?.regularity, c.recoveryPct);
+    rows.push(h('div', { class: 'ops-row' }, recLbl, h('div', { class: 'ctl' }, rec), h('div', { class: 'note' }, recNote), advice ? h('div', { class: 'note advice' }, advice) : null));
+    // Timepoints
+    if (c.hold) {
+      const names = c.timepoints.map((sid) => net.stations.get(sid)?.name ?? '?');
+      const suggest = h('button', {
+        class: 'hw-btn small',
+        onclick: () => {
+          c.timepoints = suggestTimepoints({ id: r.id, stops: r.stops }, game.routes.list());
+          renderOps();
+          renderStops();
+          changed();
+        },
+      }, 'Suggest');
+      tip(suggest, 'Suggest timepoints', `Stops near ⅓ and ⅔ along the line, preferring stops no other route serves.`);
+      const clear = h('button', { class: 'hw-btn small ghost', disabled: !c.timepoints.length, onclick: () => { c.timepoints = []; renderOps(); renderStops(); changed(); } }, 'Clear');
+      const tpLbl = h('span', { class: 'lbl' }, 'Timepoints');
+      tip(tpLbl, 'Timepoints', `${TIMEPOINT_TIP}. Toggle the clock next to a stop below.`);
+      rows.push(
+        h(
+          'div',
+          { class: 'ops-row' },
+          tpLbl,
+          h('div', { class: 'ctl' }, h('span', { class: names.length ? '' : 'hw-muted', style: 'flex:1;min-width:0' }, names.length ? `${names.length} · ${names.join(', ')}` : 'None'), suggest, clear),
+          r.stops.length < 3 ? h('div', { class: 'note' }, 'A route needs a stop between its terminals for a timepoint.') : null,
+        ),
+      );
+    }
+    ops.replaceChildren(...rows);
+  };
+
+  // Footer: Apply commits frequency, train length and operations together.
+  const footNote = h('span', { class: 'grow' });
+  const revert = h('button', {
+    class: 'hw-btn small ghost',
     onclick: () => {
-      const before = { headways: { ...r.headways }, cars: r.cars };
-      game.routes.update(r.id, { headways: { ...draft.headways }, cars: draft.cars });
+      draft.headways = { ...r.headways };
+      draft.cars = r.cars;
+      draft.control = structuredClone(r.control);
+      game.select({ kind: 'route', id: r.id });
+    },
+  }, 'Revert');
+  const apply = h('button', {
+    class: 'hw-btn small',
+    onclick: () => {
+      const before = { headways: { ...r.headways }, cars: r.cars, control: structuredClone(r.control) };
+      game.routes.update(r.id, { headways: { ...draft.headways }, cars: draft.cars, control: structuredClone(draft.control) });
       const res = purchaseFleet(game, r);
       if (!res.ok) {
         game.routes.update(r.id, before);
@@ -137,8 +281,24 @@ export function routePanel(app: App, id: number): Panel {
       game.select({ kind: 'route', id: r.id });
     },
   }, 'Apply');
+  const foot = h('div', { class: 'side-foot' }, footNote, revert, apply);
+  const renderFoot = () => {
+    const d = dirty();
+    footNote.className = `grow ${d ? 'dirty' : 'hw-muted'}`;
+    footNote.textContent = d ? 'Changes not applied yet' : 'Frequency, train length and operations';
+    apply.className = `hw-btn small${d ? ' primary' : ''}`;
+    revert.style.display = d ? '' : 'none';
+  };
+  function changed(): void {
+    renderFleet();
+    renderFoot();
+  }
+
   renderCars();
   renderFleet();
+  renderOps();
+  renderStops();
+  renderFoot();
   // Event service planned on this route (temporary headway overrides).
   const service = h('div');
   // Only service still to run or running (ended windows go at 3 am and midnight).
@@ -162,11 +322,12 @@ export function routePanel(app: App, id: number): Panel {
   body.append(
     section('Frequency'),
     service,
-    frequencyTable(draft.headways, (p, v) => { draft.headways[p] = v; renderFleet(); }),
+    frequencyTable(draft.headways, (p, v) => { draft.headways[p] = v; changed(); }),
     section('Train length'),
     carsWrap,
+    section('Operations'),
+    ops,
     h('div', { style: 'margin-top:8px' }, fleetWrap),
-    h('div', { style: 'display:flex;gap:6px;margin-top:8px' }, apply),
     section(`Stops (${r.stops.length}) · ${fmtDistance(path.length || 0)}`),
     stops,
     h(
@@ -176,7 +337,7 @@ export function routePanel(app: App, id: number): Panel {
       h('button', {
         class: 'hw-btn small danger',
         onclick: async () => {
-          if (await app.confirm(`Delete route ${r.bullet}?`, 'Its cars go to a spare pool (still costing maintenance) and are reused before new ones are bought.', 'Delete', true)) {
+          if (await app.confirm(`Delete route ${r.bullet}?`, 'Its cars go to a spare pool (still costing maintenance) and are reused before new ones are bought. Spare cars can be sold in Finances → Fleet.', 'Delete', true)) {
             game.routes.remove(r.id);
             game.events.emit('routes', undefined);
             game.select(null);
@@ -185,21 +346,55 @@ export function routePanel(app: App, id: number): Panel {
       }, 'Delete route'),
     ),
   );
+  sh.el.append(foot);
 
   let chartObjs: { destroy(): void }[] = [];
-  let detail: RouteDetail | null = null;
   const renderStats = () => {
     const lateness = app.report?.routeLateness[r.id];
+    const late = statCard('Avg lateness', lateness !== undefined ? `${Math.round(lateness)} s` : '—', lateness !== undefined && lateness > 120 ? 'red' : lateness !== undefined && lateness > 45 ? 'amber' : undefined);
+    tip(late, 'Average lateness (yesterday)', LATENESS_TIP);
     stats.replaceChildren(
       statCard('Riders yesterday', fmtCount(detail?.ridersYesterday ?? app.report?.routeRiders[r.id] ?? 0)),
       statCard('Riders today', fmtCount(detail?.ridersToday ?? 0)),
       statCard('Trains in service', `${detail?.inService ?? 0} / ${Math.floor(r.ownedCars / r.cars)}`),
-      statCard('Avg lateness', lateness !== undefined ? `${Math.round(lateness)} s` : '—', lateness !== undefined && lateness > 120 ? 'red' : lateness !== undefined && lateness > 45 ? 'amber' : undefined),
+      late,
     );
+  };
+  const renderReg = () => {
+    const d = detail?.regularity ?? null;
+    const s = d ? (d.yesterday ?? d.today) : null;
+    reg.replaceChildren();
+    if (!op.ok) return;
+    reg.append(section(`Service regularity${d ? (d.yesterday ? ' · yesterday' : ' · today so far') : ''}`));
+    const grid = h('div', { class: 'stat-grid' });
+    for (const c of regularityCards(s)) {
+      const card = statCard(c.label, c.value, c.tone);
+      tip(card, c.label, c.tip);
+      grid.append(card);
+    }
+    reg.append(grid);
+    if (!d || !detail) {
+      reg.append(h('div', { class: 'hw-muted', style: 'font-size:12.5px;margin-top:4px' }, 'Gaps between trains are measured at every departure.'));
+      return;
+    }
+    const stopNames = detail.dirs[0]?.stations ?? [];
+    const has = d.cvByStop[0].some((v) => v >= 0) || d.cvByStop[1].some((v) => v >= 0);
+    reg.append(h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:8px' }, 'Headway spread along the line (CV by stop)'));
+    if (has && stopNames.length) {
+      const wrap = h('div', { class: 'chart' });
+      reg.append(wrap);
+      const first = stopNames[0];
+      const last = stopNames[stopNames.length - 1];
+      chartObjs.push(regularityChart(wrap, stopNames, d.cvByStop[0], d.cvByStop[1], [`Towards ${last}`, `Towards ${first}`], OPS_CONTROL.cvGood));
+    } else reg.append(h('div', { class: 'hw-muted', style: 'font-size:12.5px' }, 'Appears once a few trains have left each stop.'));
+    const tps = d.timepoints.map((k) => stopNames[k]).filter(Boolean);
+    const holdText = d.hold ? `holding at ${pct(d.hold)}` : 'holding off';
+    reg.append(h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:2px' }, `${tps.length ? `Timepoints: ${tps.join(', ')}` : 'No timepoints'} · ${holdText}${d.shortTurns ? ` · ${d.shortTurns} short turnarounds today` : ''}`));
   };
   const renderCharts = () => {
     chartObjs.forEach((c) => c.destroy());
     chartObjs = [];
+    renderReg();
     charts.replaceChildren();
     if (!detail) {
       charts.append(h('div', { class: 'hw-muted', style: 'font-size:12.5px' }, op.ok ? 'Load profile appears after the first morning rush.' : 'Not running yet.'));
@@ -216,9 +411,11 @@ export function routePanel(app: App, id: number): Panel {
   const fetch = () => {
     if (!op.ok) return;
     app.sim.query<RouteDetail | null>({ kind: 'route', route: r.id }).then((d) => {
+      const hadAdvice = recoveryAdvice(detail?.regularity, draft.control.recoveryPct);
       detail = d;
       renderStats();
       renderCharts();
+      if (recoveryAdvice(detail?.regularity, draft.control.recoveryPct) !== hadAdvice) renderOps();
     });
   };
   renderStats();
@@ -303,12 +500,14 @@ export function routesList(app: App): Panel {
   if (!routes.length) list.append(h('div', { class: 'hw-muted', style: 'padding:6px 0' }, 'No routes yet. Build track and stations, then use the route tool (R).'));
   for (const r of routes) {
     const op = game.routes.operational(game.network, r);
+    // Regularity from yesterday's report (reports saved before operations control have none).
+    const tag = regularityTag(app.report?.routeRegularity?.[r.id]);
     list.append(
       h(
         'div',
         { class: 'list-item', onclick: () => game.select({ kind: 'route', id: r.id }) },
         bullet(r.color, r.bullet, 24),
-        h('span', { class: 'grow' }, r.name, h('div', { class: op.ok ? 'hw-muted' : 'hw-amber', style: 'font-size:11.5px' }, op.ok ? `${r.stops.length} stops` : op.reason ?? '')),
+        h('span', { class: 'grow' }, r.name, h('div', { class: op.ok ? 'hw-muted' : 'hw-amber', style: 'font-size:11.5px' }, op.ok ? `${r.stops.length} stops` : op.reason ?? '', op.ok && tag ? h('span', { class: `hw-${tag.tone}` }, ` · ${tag.text}`) : null)),
         h('span', { class: 'num' }, fmtCount(app.report?.routeRiders[r.id] ?? 0)),
       ),
     );

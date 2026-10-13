@@ -3,7 +3,9 @@
  * pathfinding, and an event-driven simulation of every transit trip (walk → platform queue →
  * train with capacity → transfers → walk) whose observed times feed the next day's choice.
  */
-import { CHAOS, COMMUTERS, EVENTS, GOALS, OPERATIONS, TIME } from '../balance';
+import { CHAOS, COMMUTERS, EVENTS, FARES, GOALS, OPERATIONS, TIME } from '../balance';
+import { expectedFare, fareAt, isPeakTime, isPeakTod, tripFare, variesByTime, type FarePolicy } from '../economy/fares';
+import { emptyStats } from './regularity';
 import { SECONDS_PER_DAY, dayIndex } from '../core/calendar';
 import { CLEAR_MODS, eventKind, venueOf, weatherMods, SALT_TRIPS, type CityEvent, type DayWeather, type FullWeatherMods } from '../core/cityCalendar';
 import { toLocal } from '../core/geo';
@@ -13,6 +15,7 @@ import type { World } from '../data/world';
 import { eventCosts, originCdf, reverseLegs, sampleBand, sampleCdf, venueGeometry } from './eventTrips';
 import {
   driveTripTime,
+  fareOddsMultiplier,
   generalisedCosts,
   logitShares,
   MODE_DRIVE,
@@ -128,6 +131,15 @@ export class Commuters implements PassengerHooks {
   aPM: Uint8Array;
   /** Did this trip actually board a train? Only those count as riders (and pay a fare). */
   aBoarded: Uint8Array;
+  /** Earnings band per agent (commuters: their group's; event fans: drawn), for billing. */
+  aBand: Uint8Array;
+  /**
+   * Fare policy (v2): which of a commuter's trips start in a peak period (bit 0 the morning trip,
+   * bit 1 the trip home, assuming a FARES.amTripEstimate morning trip). No RNG draws.
+   */
+  aPeak: Uint8Array;
+  /** Mean share of each group's trips that start in a peak (popcount(aPeak) / 2 over its agents). */
+  gPeakFrac: Float32Array;
   // Event heap
   private hT = new Float64Array(1024);
   private hV = new Int32Array(1024);
@@ -141,7 +153,9 @@ export class Commuters implements PassengerHooks {
   private queues: number[][] = [];
   private qHead: Int32Array = new Int32Array(0);
   private qLive: Int32Array = new Int32Array(0);
-  private fare: number;
+  private fares: FarePolicy;
+  /** fareAt(fares, band, peak) by band × 2 + peak (filled by setFares). */
+  private fareTable = new Float64Array(6);
   private rng: Rng;
   private cb: EngineCb;
   readonly key: string;
@@ -180,10 +194,11 @@ export class Commuters implements PassengerHooks {
   /** The no-subway baseline under today's weather (equals baseline on a clear day). */
   baselineToday = 0;
 
-  constructor(world: World, opts: { agentScale: number; seed: number; fare: number; modeState?: ModeState }, cb: EngineCb = {}) {
+  constructor(world: World, opts: { agentScale: number; seed: number; fares: FarePolicy; modeState?: ModeState }, cb: EngineCb = {}) {
     this.world = world;
     this.scale = opts.agentScale;
-    this.fare = opts.fare;
+    this.fares = opts.fares;
+    this.setFares(opts.fares);
     this.cb = cb;
     this.rng = new Rng(opts.seed);
     const od = world.od;
@@ -261,6 +276,9 @@ export class Commuters implements PassengerHooks {
     this.aLeft = new Uint8Array(cap);
     this.aPM = new Uint8Array(cap);
     this.aBoarded = new Uint8Array(cap);
+    this.aBand = new Uint8Array(cap);
+    this.aPeak = new Uint8Array(cap);
+    this.gPeakFrac = new Float32Array(G);
     for (let g = 0; g < G; g++) {
       const h = tr[this.gHome[g]], w = tr[this.gWork[g]];
       for (let a = this.gStart[g]; a < this.gStart[g + 1]; a++) {
@@ -274,7 +292,13 @@ export class Commuters implements PassengerHooks {
         const dep = COMMUTERS.departMean + gen.normal() * COMMUTERS.departSd;
         this.aDepart[a] = Math.max(COMMUTERS.departMin, Math.min(COMMUTERS.departMax, dep));
         this.aReturn[a] = COMMUTERS.workDuration + (gen.next() * 2 - 1) * COMMUTERS.returnJitter;
+        // Fare periods of the two trips (from the stored values; no extra draws).
+        this.aBand[a] = this.gBand[g];
+        const pk = (isPeakTod(this.aDepart[a]) ? 1 : 0) | (isPeakTod(this.aDepart[a] + FARES.amTripEstimate + this.aReturn[a]) ? 2 : 0);
+        this.aPeak[a] = pk;
+        this.gPeakFrac[g] += ((pk & 1) + (pk >> 1)) / 2;
       }
+      this.gPeakFrac[g] /= Math.max(1, this.gCount[g]);
     }
     // ---- mode shares: restore or start from the no-subway equilibrium
     this.shares = new Float32Array(G * 3);
@@ -314,8 +338,22 @@ export class Commuters implements PassengerHooks {
     this.unserved = new Float32Array(tr.length);
   }
 
-  setFare(f: number): void {
-    this.fare = f;
+  /** Fare policy: billing uses it from the next boarding, mode choice from the next 3 am. */
+  setFares(p: FarePolicy): void {
+    this.fares = { ...p };
+    for (let b = 0; b < 3; b++) {
+      this.fareTable[b * 2] = fareAt(this.fares, b, false);
+      this.fareTable[b * 2 + 1] = fareAt(this.fares, b, true);
+    }
+  }
+
+  farePolicy(): FarePolicy {
+    return { ...this.fares };
+  }
+
+  /** The fare a group's mode choice sees: its band's fare, weighted by the share of its trips in a peak. */
+  groupFare(g: number): number {
+    return expectedFare(this.fares, this.gBand[g], this.gPeakFrac[g]);
   }
 
   setTrains(getter: () => Train[]): void {
@@ -526,7 +564,7 @@ export class Commuters implements PassengerHooks {
         const sched = (am.time + pm.time) / 2;
         // Observed times include waits and crowding delays; blend toward schedule if stale.
         const time = this.obsTime[g] > 0 ? this.obsTime[g] : sched;
-        transit = { time, transfers: (am.transfers + pm.transfers) / 2, crowdMinutes: this.obsCrowd[g], fare: this.fare };
+        transit = { time, transfers: (am.transfers + pm.transfers) / 2, crowdMinutes: this.obsCrowd[g], fare: this.groupFare(g) };
       }
       const c = generalisedCosts(this.gGeom[g], this.gBand[g], transit, this.wx);
       const target = logitShares(c);
@@ -570,16 +608,35 @@ export class Commuters implements PassengerHooks {
     }
     this.hN = 0;
     const d = this.day;
+    // Fares that vary by time of day tilt each agent's transit odds by its own trips' fare against
+    // the group's expected fare (no extra RNG draws; with one fare all day the draw is exactly v1's).
+    const tilt = variesByTime(this.fares);
+    const mult = [1, 1, 1];
     for (let g = 0; g < this.G; g++) {
       const o = g * 3;
       const hasTransit = this.pathAM[g] && this.pathPM[g];
       const pw = this.shares[o], pd = this.shares[o + 1];
       const pt = hasTransit ? this.shares[o + 2] : 0;
       const sum = pw + pd + pt || 1;
+      const band = this.gBand[g];
+      const tiltG = tilt && pt > 0;
+      if (tiltG) {
+        const gf = this.groupFare(g);
+        for (let k = 0; k < 3; k++) mult[k] = fareOddsMultiplier(tripFare(this.fares, band, k) - gf, band);
+      }
       for (let a = this.gStart[g]; a < this.gStart[g + 1]; a++) {
-        const r = this.rng.next() * sum;
-        const mode = r < pw ? MODE_WALK : r < pw + pd ? MODE_DRIVE : MODE_TRANSIT;
+        let mode: number;
+        if (tiltG) {
+          const pk = this.aPeak[a];
+          const ptA = pt * mult[(pk & 1) + (pk >> 1)];
+          const r = this.rng.next() * (pw + pd + ptA || 1);
+          mode = r < pw ? MODE_WALK : r < pw + pd ? MODE_DRIVE : MODE_TRANSIT;
+        } else {
+          const r = this.rng.next() * sum;
+          mode = r < pw ? MODE_WALK : r < pw + pd ? MODE_DRIVE : MODE_TRANSIT;
+        }
         this.aMode[a] = mode;
+        d.bandMode[band * 3 + mode]++;
         const dep = dayStart + this.aDepart[a];
         if (mode === MODE_TRANSIT) {
           d.modeCount[MODE_TRANSIT]++;
@@ -757,6 +814,10 @@ export class Commuters implements PassengerHooks {
     const stationIdx = dir.stopStation[stopIdx];
     // City chaos: nobody boards at a closed station (a train already dwelling when it closed, or a closed terminal).
     if (this.closedUntil.length && this.closedUntil[stationIdx] > t) return 0;
+    // Fares by band and by the period of the first boarding.
+    const peak = isPeakTime(t) ? 1 : 0;
+    const ft = this.fareTable;
+    const day = this.day;
     let boarded = 0;
     while (head < q.length && train.load < capAgents) {
       const a = q[head++];
@@ -771,8 +832,15 @@ export class Commuters implements PassengerHooks {
       }
       this.leaveQueue(a);
       this.aState[a] = S_RIDE;
-      // One fare per journey, at the fare in force when it first boards (transfers are free).
-      if (!this.aBoarded[a]) this.day.fareRevenue += this.fare;
+      // One fare per journey, at the fare in force when it first boards (transfers are free), for
+      // the rider's band and the period of that boarding.
+      if (!this.aBoarded[a]) {
+        const cell = this.aBand[a] * 2 + peak;
+        const f = ft[cell];
+        day.fareRevenue += f;
+        day.fareCellTrips[cell]++;
+        day.fareCellRevenue[cell] += f;
+      }
       this.aBoarded[a] = 1;
       if (a >= this.A) this.day.eventBoard++;
       (train.buckets[k] ??= []).push(a);
@@ -901,6 +969,14 @@ export class Commuters implements PassengerHooks {
       stationBoardings,
       goalTrip: this.goalTrip,
       boroughsServed: [],
+      fares: { trips: Array.from(d.fareCellTrips, (x) => x * this.scale), revenue: Array.from(d.fareCellRevenue, (x) => x * this.scale) },
+      bandShare: [0, 1, 2].map((b) => {
+        const n = d.bandMode[b * 3] + d.bandMode[b * 3 + 1] + d.bandMode[b * 3 + 2];
+        return n ? d.bandMode[b * 3 + 2] / n : 0;
+      }),
+      // Filled by the engine (train side).
+      routeRegularity: {},
+      regularity: emptyStats(),
     };
     // Keep yesterday's detail for panels, then reset.
     this.last = {
@@ -1273,6 +1349,8 @@ export class Commuters implements PassengerHooks {
         graph.run(vAcc);
       }
       const cdf = originCdf(tracts, vx, vy);
+      // Fare periods of a fan's two trips: arriving around the start, leaving at the end.
+      const evPeakTrips = (isPeakTod(ev.start + kind.arrive[0]) ? 1 : 0) + (isPeakTod(ev.end) ? 1 : 0);
       const n = stochasticRound(rng, ev.attendance / scale);
       const pathCache = new Map<number, GroupPath | null>();
       const shareCache = new Map<number, number[]>();
@@ -1288,7 +1366,7 @@ export class Commuters implements PassengerHooks {
         }
         let p = shareCache.get(tract * 3 + band);
         if (!p) {
-          p = logitShares(eventCosts(geomOf(tract), band, path, venue, wx, this.fare));
+          p = logitShares(eventCosts(geomOf(tract), band, path, venue, wx, tripFare(this.fares, band, evPeakTrips)));
           shareCache.set(tract * 3 + band, p);
         }
         const u = rng.next();
@@ -1310,6 +1388,7 @@ export class Commuters implements PassengerHooks {
           this.evGroups.push({ ev: ei, tract, from: path, to: reverseLegs(path), drive: driveTripTime(geomOf(tract), wx) });
         }
         this.aGroup[a] = gi;
+        this.aBand[a] = band;
         this.aMode[a] = MODE_TRANSIT;
         this.aPM[a] = 0;
         this.aBoarded[a] = 0;
@@ -1447,6 +1526,10 @@ function newDayStats(day: number) {
     eventTrips: 0,
     diverted: 0,
     carriedPast: 0,
+    // Fares (v2): first boardings and fares by band × 2 + peak, and modes drawn by band × 3 + mode.
+    fareCellTrips: new Float64Array(6),
+    fareCellRevenue: new Float64Array(6),
+    bandMode: new Float64Array(9),
   };
 }
 

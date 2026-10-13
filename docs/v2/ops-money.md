@@ -4,6 +4,167 @@ Status: design, ready to implement · Target: one focused session, about 1,500 l
 about 550 lines of tests · Depends on: v1 as committed (`a27dbfa`). It touches the train sim,
 commuters, finance, save format (v2 → v3) and UI.
 
+## Implementation notes (sim)
+
+The simulation and economy half is implemented on top of city chaos and London (baseline: the
+`pre-ops` tag): checklist steps 1–10, 13 and 14, the game-state and plumbing parts of step 11, the
+README's mechanics, balance, test and performance parts of step 16, and every non-UI test in §13
+(plus tests for London's fares, holding next to city chaos and the two goals). The UI (step 12:
+route panel sections, finance tabs, year-in-review modal, rating/shock/sale toasts, keys M and H;
+the app methods `prepayBond`/`refinanceBond`/`sellSpareCars`/`sellIdleCars`/`toggleHolding`/
+`showYearReview`; the README's controls) and the manual check of step 15 are **not** done; the
+hooks they need are listed below. **Where the code and the line references in the design
+disagree, trust the code.**
+
+**Where it lives.**
+- `src/balance.ts`: `OPS_CONTROL`, `FLEET`, `FARES`, `BONDS`, `CREDIT`, the `GOALS` additions, and
+  **`CITY_BALANCE[city].fares`** (each city's default fare policy for new games).
+- Pure modules: `src/economy/fares.ts`, `src/economy/credit.ts`, `src/economy/yearReview.ts`,
+  `src/sim/regularity.ts`, `src/routes/control.ts`; `fareOddsMultiplier` in `modeChoice.ts`;
+  `monthIndex` / `yearOf` in `core/calendar.ts`.
+- Changes to `trainSim.ts`, `commuters.ts`, `engine.ts`, `protocol.ts`, `worker.ts`, `client.ts`,
+  `headless.ts`, `compile.ts`, `routes/{types,routeSet,routeTool,fleet}.ts`, `economy/finance.ts`,
+  `core/{game,goals}.ts`, `save/*` and `scripts/{balance,perf,headless-sim}.ts` (plus
+  `scripts/dump.ts`, the `dump=` flag for identity checks).
+- UI plumbing only: `ui/app.ts` (new-game seed, `sim.init` fares, the `recompile` signature with
+  `opsKey`, `kpi` at settle, `setFares`, the bond toast's coupon); the interim `financePanel.ts`
+  (its slider sets the **peak** fare, the bond header shows `newBondRate()` and the rating, bonds
+  show their coupon, Yesterday shows financing rows when there are any); `inspectPanels.ts` treats
+  `SNAP_HELD` as dwelling. Everything else in §2 is for the UI pass.
+
+**Differences from the design.**
+- **Saves are v4** (chaos took v3): one step `3: v3 → v4` in `save/migrate.ts`. It fills defaults
+  only (`??=`) and is idempotent: `fares` from the flat `fare` (no low-income discount), routes get
+  `legacyControl()`, bonds keep 2.5% with `monthsLeft` from `remainingPayments` (360 in the issue
+  month), ledgers and months get zero `fees`/`prepaid` (a month's `interest` is recovered exactly
+  from v1's profit formula, `debtEnd: null`), and `finance.market` starts at 2.5% with
+  `rating: null`, seeded from the save's chaos seed. `Finance.fromData` rates it on load.
+- **Short turnarounds are a per-route setting**, `RouteControl.shortTurn` (compiled as
+  `CRoute.shortTurn`), so the all-off configuration can keep v1's 3-minute turnarounds. New and
+  migrated routes have it on (as the design says); `offControl()` has it off.
+- **The all-off configuration** (amendment 4): `offControl()` (no holding, no recovery, standard
+  turnarounds), one flat fare `ECONOMY.fareDefault` for every period and band, and
+  `market.fixed = true` (new bonds at `ECONOMY.bondRate` with no spread; the base rate never moves,
+  reviews still score for information). `createHeadlessGame(world, land, { ops: 'off' })` sets all
+  three; the scripts take `ops=off`. It reproduces the `pre-ops` tag bit for bit (see Measured).
+- **Headless defaults are a new game's** (holding, 10% recovery, short turns, the city's fares, the
+  bond market), unlike chaos, which stays Off headless. `RouteSet.newControl` (not saved) is the
+  control for routes created without one: `defaultControl` in games, `offControl` with
+  `ops: 'off'`; `makeRoute(…, cls, control?)` merges a partial control over it.
+- **Market seed = the game's seed.** There is no separate `crypto` draw: `marketSeedFrom(chaos.seed)`
+  (a hash). A new career calls `game.setGameSeed(newChaosSeed())`, which sets both; migrated saves
+  derive it from their chaos seed; headless games from `chaosSeed` (default 2030). The walk is
+  counter-based (`mixSeed(seed, monthIndex)`), so a reload walks the same path.
+- **Fares per city.** `CITY_BALANCE.nyc.fares = { peak: 3, offPeak: 3, lowIncome: 1 }` (flat, as in
+  v1); `CITY_BALANCE.london.fares = { peak: 2.8, offPeak: 2.7, lowIncome: 1 }` (a small
+  London-style peak premium). `normalizeFares` uses the city's `fareMin/Max/Step` (London snaps to
+  10p) and rounds to cents. The flat fare of old saves and of the all-off configuration is still
+  `ECONOMY.fareDefault`. `Game` takes `fares` (or legacy `fare`, a flat fare); default
+  `defaultFares()`.
+- **Event fans pay fares too**, by band and period like commuters (their band is stored in
+  `aBand`); their 3 am choice uses `tripFare` for the event's arrival and end periods.
+- **Event service and regularity.** Holding and the headway statistics use the headway in force
+  (`headwayAt`, so event-service overrides count); a headway is only measured when the period *and*
+  the headway in force are the same at both departures.
+- **Holding and chaos.** No timepoint hold at a closed station. Holds are on dwelling trains only;
+  breakdowns stall running trains, so the watchdog and its per-route incident grace are unchanged
+  (tested: a 40-minute stall with holding on is caught without the grace and ignored with it).
+  The yield rule also looks back onto the previous element of the train's path when the
+  lookback reaches past the start of the element its tail is on.
+- **Hold state is not on `Train`.** A timepoint hold in progress lives in `TrainSim.holds`
+  (a map by train id: `{ cap, start }`), not in `Train.holdCap/holdStart`: two more fields on the
+  train objects slowed the unchanged hot paths (`move`, `register`, occupancy) measurably. Use
+  `trainSim.isHeld(train)` and `trainSim.heldCount()`; the snapshot writes `SNAP_HELD` from it.
+  Terminal holding is `holdAtTerminal` and the per-departure statistics `noteDeparture`, both
+  called only where needed, so `runDispatch`, `step` and `leaveStop` stay as lean as before.
+- `RouteReg` and `RouteRegularityDetail` also carry `shortTurns`; the detail also has `hold`.
+  `FleetPlan` gains `roundTrip`, `recovery` (seconds per terminal) and `idleCars`.
+  `compile.ts` exports `roundTripTime`, `recoveryPerTerminal` and `opsKey(control)`.
+- `Finance.refinanceQuote(id)` gives the confirm dialog's numbers without refinancing.
+  `prepayBond` refuses in sandbox, like `refinanceBond`.
+- The year review's rating timeline uses the month reports' `rating` (set at each review), starting
+  from the previous year's last review.
+- Test 4: terminal holds can last up to `hold × H` (126 s at a 3-minute headway), so the cap is
+  checked per timepoint hold (dwell beyond the natural dwell ≤ 90 s + one step), not on the average.
+- `scripts/balance.ts` takes `farePeak=`, `fareOff=` and `low=` (`peak=` was already the peak
+  headway), `control=default|legacy|tp|off`, `ops=off` and `dump=`. `scripts/perf.ts` takes
+  `ops=off`; by default its routes hold at 70% with suggested timepoints and no recovery (431
+  trains).
+
+**Hooks for the UI.**
+- **Game**: `game.fares` and `game.setFares(partial)` (normalized; emits `'money'`);
+  `game.setGameSeed(seed)`; `game.routes.update(id, { control })` normalizes the control and drops
+  timepoints that are not stops. After a recovery change call `purchaseFleet` (the fleet grows);
+  holding and timepoints reach the worker through `App.recompile` (its signature has `opsKey`).
+- **App**: `app.setFares(partial)` updates the game and the worker and toasts `fareSummary`.
+  `onDayEnd` passes `kpi: dayKpi(report)` to `settleDay` but does **not** yet toast
+  `game.finance.events` or open the year review: after `settleDay`, toast each
+  `FinanceEvent { kind, title, body, tone }`, and when `monthKey(r.day + 1).endsWith('-01')`
+  show the year review instead of the December month report.
+- **Finance**: `newBondRate()`, `market: { seed, base, rating, score, history: MarketMonth[],
+  fixed? }`, `previewCredit()` (scorecard + `next` rating with hysteresis), `creditInputs()`,
+  `weightedCoupon()`, `prepayBond(id, amount, day)`, `refinanceQuote(id)`,
+  `refinanceBond(id, day)` (`{ ok, fee, saving, paybackMonths, reason? }`), `events`. Bonds have
+  `rate`, `monthsLeft`, `rating?`, `refinancedDay?`; `DayLedger` has `fees`, `prepaid`, `kpi?`;
+  `MonthReport` has `interest`, `fees`, `prepaid`, `debtEnd`, `kpi?`, `rating?`, `newRate?`.
+- **credit.ts**: `creditScore(inputs)` → `{ score, rating, metrics: CreditMetric[] }` (each with
+  `label`, `value`, `points`, `weight`, `display`, `hint`), `ratingFromScore`, `ratingIndex`,
+  `spreadOf`, `nextNotchScore` ("A needs 67"), `stepBaseRate`, `weightedCoupon`.
+- **yearReview.ts**: `yearsWithData(finance)`, `buildYearReview(finance, goals, year)`.
+- **fares.ts**: `FarePolicy`, `flatFares`, `defaultFares`, `normalizeFares`, `isFlat`,
+  `fareSummary` ("$3.50 peak / $2.50 off-peak · low-income half"), `fareAt`, `expectedFare`,
+  `tripFare`, `isPeakTime`.
+- **Routes**: `Route.control: RouteControl { hold, holdFraction, timepoints, recoveryPct,
+  shortTurn }`; `control.ts` `defaultControl`, `legacyControl`, `offControl`, `normalizeControl`,
+  `suggestTimepoints(route, all)`, `controlSummary`. `fleet.ts` `fleetPlan(...).roundTrip /
+  recovery / idleCars`, `carSaleValue`, `idleCars`, `sellIdleCars(game, r)`,
+  `sellSpareCars(game, cls, n?)` (each `{ ok, cars, proceeds, reason? }`; they emit `'money'`, and
+  `sellIdleCars` also `'routes'`).
+- **Worker protocol**: `{ type: 'fares', fares }` (client `setFares`); `init` takes `fares`.
+  Snapshot state `SNAP_HELD = 4` (dwelling, held at a timepoint). `DayReport.fares`
+  (`{ trips, revenue }`, 6 cells, index `band × 2 + peak`, real people and money), `bandShare`
+  (transit share per band), `routeRegularity` and `regularity` (`RegularityStats { samples, cv,
+  bunched, gaps, ewt, holds, holdSec, termLate }`; reports saved before v4 lack them). The `route`
+  query reply adds `regularity: RouteRegularityDetail | null` (`today`, `yesterday`, `cvByStop` in
+  direction-0 order with −1 for no data, `timepoints` as direction-0 stop indices,
+  `suggestRecovery`, `hold`, `shortTurns`). `grade(cv)` gives even / uneven / bunched.
+- **Goals**: `rating-a` and `clockwork` are in `goalDefs()` and checked in `checkGoals`.
+
+**Measured.**
+- **Identity.** With everything off (`ops=off`), `npm run sim -- days=3` and
+  `npm run balance -- city=nyc|london scenario=core days=4` match the `pre-ops` tag exactly: every
+  `DayReport` field, the finance state (ledgers, bonds, cash) and the SHA-256 of the mode shares
+  and observations are identical (compared field by field with `dump=`, new fields ignored), and
+  the printed output differs only in timings.
+- **Synthetic line** (`tests/ops.test.ts`, 16 stops, 3-minute headway): off 19 trains, CV 0.91,
+  33.7% bunched, 125 trains through; holding + 10% recovery + 2 timepoints 20 trains, CV 0.18,
+  1.0% bunched, 165 through (the prototype: 0.89 / 31.8% / 134 and 0.22 / 2.0% / 164).
+- **Test network, day 1** (legacy against default + suggested timepoints): bunched 11.1% → 2.9%,
+  CV 0.48 → 0.36, 200 → 208 cars, 0 deadlocks (the prototype: 11.6% → 2.6%, 0.48 → 0.33).
+- **Performance** (`npm run perf`, budget 1,000 ms; medians of 6 interleaved runs on a shared
+  machine where single runs vary by ±40 ms): before 217 ms, now 232 ms with every perf route
+  holding with suggested timepoints (0 holds: the grid runs like clockwork) and 222 ms with
+  `ops=off`; chaos Normal 237 → 226 ms (76 holds in the timed hour); Wild + full snow + all track
+  outdoor 307 → 309 ms (279 holds). In one process, stepping the old and new engines alternately in
+  30-step chunks (both orders), the new code costs about +3.5% with holding and +4.5% with
+  everything off: the per-departure regularity statistics and per-boarding fare cells. A first
+  version that kept the hold state on `Train` and inlined the checks into `step`/`runDispatch`/
+  `leaveStop` cost +9–14%, mostly in unchanged hot code (V8 layout and inlining), hence the
+  separate `holds` map and helper methods. The +3% target of §10 is not quite met.
+- **Balance** (`npm run balance`, 12 days for the cores, 8 for sprawl; README tables updated):
+  - New York core, new-route defaults: 67 trains (+1 per route), capital $23.3B; day 11 1,348,040
+    riders (+1.1% on 1,333k), bunched 5.7% (10.1% with holding off and no recovery), CV 0.43
+    (0.50), lateness 99 s (112 s), left behind 694k (937k); operating +$1.4M/day, −$0.29M/day
+    after interest; scorecard 56.1 → **BBB**, new bonds 3.10% (the design's table: 56.4, BBB).
+  - With 2 suggested timepoints per route: bunched 3.2%, lateness 115 s, riders unchanged.
+  - London core: 764k (+0.4%), bunched 1.2%, lateness 10 s (32 s with everything off), operating
+    −£0.31M/day; it doesn't cover its operating costs (farebox 0.86), so it rates **CCC** (7%).
+  - Sprawl: New York $5.00B, −$0.81M/day; London £3.43B, −£0.59M/day; both BB with no debt.
+  - Fares on the New York core: $3.25 peak / $2.50 off-peak, average fare $3.225, riders −0.4%,
+    operating +$1.6M/day; low-income half, average fare $2.891, band-0 transit share 13.5% →
+    14.5%, riders +0.5%, operating +$1.2M/day. 96.7% of fare trips start in a peak (London 96.4%).
+  - 0 deadlocks in every run.
+
 ## 0. Summary
 
 This feature adds dispatching and treasury management on top of v1.

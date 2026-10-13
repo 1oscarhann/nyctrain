@@ -2,7 +2,7 @@
  * Game state on the main thread: the network design, routes, money and the clock mirror.
  * The sim worker owns the moving parts (trains, commuters); this owns what the player builds.
  */
-import { CHAOS, TIME, TRACK, type ChaosLevel } from '../balance';
+import { CHAOS, ECONOMY, TIME, TRACK, type ChaosLevel } from '../balance';
 import { Network } from '../construction/network';
 import {
   advanceConstruction,
@@ -13,6 +13,8 @@ import {
 } from '../construction/blueprint';
 import type { Terrain } from '../construction/validate';
 import { Finance } from '../economy/finance';
+import { marketSeedFrom } from '../economy/credit';
+import { defaultFares, flatFares, normalizeFares, type FarePolicy } from '../economy/fares';
 import type { World } from '../data/world';
 import { Emitter } from './emitter';
 import { dayIndex } from './calendar';
@@ -73,7 +75,8 @@ export class Game {
   history = new BlueprintHistory();
   finance: Finance;
   time = TIME.startTimeOfDay;
-  fare: number;
+  /** Fare policy (v2): peak and off-peak fares and the low-income multiplier. */
+  fares: FarePolicy;
   sandbox: boolean;
   selection: Selection | null = null;
   /** City chaos: level (default Normal for new games), seed and planned event service. */
@@ -82,13 +85,42 @@ export class Game {
   constructor(
     readonly world: World,
     readonly terrain: Terrain,
-    opts: { sandbox: boolean; fare: number; chaos?: ChaosLevel; chaosSeed?: number },
+    opts: {
+      sandbox: boolean;
+      /** Fare policy; default: the city's (CITY_BALANCE[city].fares), or flat `fare` when given. */
+      fares?: FarePolicy;
+      /** Legacy: one flat fare. */
+      fare?: number;
+      chaos?: ChaosLevel;
+      chaosSeed?: number;
+      /** Bond market seed; default: derived from the chaos seed (the game's seed). */
+      marketSeed?: number;
+      /** New bonds always at v1's fixed rate with no spread (the all-off configuration). */
+      fixedRate?: boolean;
+    },
   ) {
     this.sandbox = opts.sandbox;
-    this.fare = opts.fare;
-    this.finance = new Finance(opts.sandbox, dayIndex(this.time));
+    this.fares = opts.fares ? normalizeFares(opts.fares) : opts.fare !== undefined ? flatFares(opts.fare) : defaultFares();
     const level = opts.chaos ?? CHAOS.defaultLevel;
     this.chaos = { level, levelToday: level, seed: (opts.chaosSeed ?? CHAOS.defaultSeed) >>> 0, service: [], nextServiceId: 1 };
+    this.finance = new Finance(opts.sandbox, dayIndex(this.time), opts.marketSeed ?? marketSeedFrom(this.chaos.seed));
+    if (opts.fixedRate) this.finance.market.fixed = true;
+  }
+
+  /**
+   * A new career's seed (main thread): city chaos and the bond market both derive from it, so a
+   * reload walks the same market path.
+   */
+  setGameSeed(seed: number): void {
+    this.chaos.seed = seed >>> 0;
+    this.finance.market.seed = marketSeedFrom(this.chaos.seed);
+  }
+
+  /** Set the fare policy (normalized to the city's range and step). Returns the policy in force. */
+  setFares(p: Partial<FarePolicy>): FarePolicy {
+    this.fares = normalizeFares({ ...this.fares, ...p }, ECONOMY.fareDefault);
+    this.events.emit('money', undefined);
+    return this.fares;
   }
 
   // ------------------------------------------------------------------ city chaos

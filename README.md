@@ -105,10 +105,10 @@ src/
   data/           world loading, tract index, land mask
   map/            MapLibre style recolouring, network/station/elevated layers, overlays, naming, city chaos markers
   construction/   track graph with arc fillets, levels and ramps, validation and costs, tools
-  routes/         route pathfinding on track, compilation for the sim, fleet sizing, route tool, event service estimates
+  routes/         route pathfinding on track, compilation for the sim, fleet sizing and car sales, operations control settings, route tool, event service estimates
   trains/         kinematics (run profiles), interpolated train layer
-  sim/            worker, engine, train sim (moving block, merge locks), commuters, mode choice, transit graph, city chaos (incidents, event trips)
-  economy/        finance: daily settlement, monthly reports, bonds, bankruptcy
+  sim/            worker, engine, train sim (moving block, merge locks, holding), regularity, commuters, mode choice, transit graph, city chaos (incidents, event trips)
+  economy/        finance: daily settlement, monthly reports, bonds, bankruptcy; fares, credit rating and bond market, year in review
   ui/             app shell, panels, charts, tutorial, menus, city chaos (alert feed, news ticker, Service alerts)
   save/           save format, migrations, IndexedDB store, export and import
 scripts/          data pipeline, headless sim, balance tuning, performance check
@@ -126,31 +126,45 @@ The worker steps a fixed 2 s game timestep in 14 ms slices and posts compact sna
 thread interpolates train positions between snapshots. Edits are compiled and sent to the worker
 200 ms after they stop (`SimClient.setNetworkSoon`). A compile still pending is sent before any
 skip or speed change, so the night and the 3 am mode choice always run on the network on screen. Agents are never saved. A save stores
-the network, routes, finances, goals, the day's mode shares and observations, and the city chaos
-level (today's and the one from the next 3 am), seed, today's incident-plan basis and planned
-event service (save format v3). The commuters are rebuilt from the data when the save is loaded.
+the network, routes (with their operations control settings), finances (bonds with their coupons,
+the bond market and the rating), the fare policy, goals, the day's mode shares and observations,
+and the city chaos level (today's and the one from the next 3 am), seed, today's incident-plan
+basis and planned event service (save format v4; older saves migrate). The commuters are rebuilt
+from the data when the save is loaded.
 
 ## Testing each part
 
 ```bash
-npm test                 # all 97 tests (unit + headless, both cities)
-npm run test:unit        # 84: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+npm test                 # all 133 tests (unit + headless, both cities)
+npm run test:unit        # 117: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
                          # chaos (calendar, weather, incidents, train-sim hooks and the watchdog's scope, event
                          # trips, event service, save v3 with today's level), chaos UI (alert text, feed and
-                         # ticker order, announcements, cancelled service, wrap-up toasts, London wording and £)
-npm run test:headless    # 13: 3 days on the test network, plus chaos end to end (closures, event agents,
-                         # determinism, snow, breakdowns, Off is inert, mid-day loads after a level change,
-                         # an edit or an event, a London venue event) and the browser's message order
-                         # (an edit followed at once by a skip)
-npm run sim -- days=3    # headless run of the test network, with a daily summary
+                         # ticker order, announcements, cancelled service, wrap-up toasts, London wording and £),
+                         # operations control (regularity maths, holding on a synthetic line, the yield rule,
+                         # short turns, holding next to chaos, recovery sizing, timepoints, car sales), the
+                         # money market (scorecard, hysteresis, rate walk, coupons, refinance, prepay, monthly
+                         # review, year in review, save v4, the rating and clockwork goals) and fares (by band and period, mode choice, London)
+npm run test:headless    # 16: 3 days on the test network (with regularity and fares by band and period),
+                         # holding against no holding, holding next to Wild chaos and event service, chaos end
+                         # to end (closures, event agents, determinism, snow, breakdowns, Off is inert, mid-day
+                         # loads after a level change, an edit or an event, a London venue event) and the
+                         # browser's message order (an edit followed at once by a skip)
+npm run sim -- days=3    # headless run of the test network, with a daily summary (and regularity, fares, market)
 npm run sim -- days=3 chaos=normal           # the same with city chaos: weather, incidents and events per day
-npm run balance -- scenario=core days=12     # ~40-station core: ridership and daily money
+npm run sim -- days=3 ops=off                # operations control, fare policy and bond market all off: as before v2
+npm run balance -- scenario=core days=12     # ~40-station core: ridership, daily money, regularity, credit rating
 npm run balance -- scenario=sprawl days=8    # low-density sprawl: should lose money
 npm run balance -- city=london scenario=core days=12   # the same for London (43 stations)
 npm run balance -- scenario=core days=12 chaos=normal  # chaos=off|calm|normal|wild, seed=N, money=1
+npm run balance -- scenario=core days=12 control=tp    # control=default|legacy|tp|off, ops=off,
+                                                       # farePeak= fareOff= low=1|0.5|0, dump=file.json
 npm run perf             # 300 stations / 25 routes / ~430 trains: times one peak game-hour
 npm run perf -- chaos=wild weather=snow outdoor=1      # worst case: Wild, full snow, every track outdoor
+npm run perf -- ops=off  # without operations control (by default every route holds, with timepoints)
 ```
+
+`dump=file.json` (sim and balance) writes the run's `DayReport`s, the finance state and hashes of
+the mode shares, for comparing two versions field by field.
 
 To check each milestone by hand in `npm run dev`:
 
@@ -194,13 +208,17 @@ Every value is in `src/balance.ts`. Main values (spec values unless noted):
 | Trains | heavy 18 m cars, 2–10 cars, 110/200 per car, 1.1/1.2 m/s², 90 km/h, $2.5M per car · light 20 m, 2–4 cars, 90/160, 1.3/1.3, 100 km/h, $2M |
 | Operations | turnaround 3 min; dwell 20 s + 1 s × (on + off) ÷ cars, max 90 s, ×1.5 above comfort; moving block = braking distance + 100 m; default headways night 20 / AM 4 / midday 8 / PM 4 / evening 10 min |
 | Commuters | 1 agent = 10 people (285,288 agents); depart 8:15 ± 45 min; walk ≤ 2.5 km; drive 14 km/h Manhattan, 24 elsewhere; CBD parking 20 min + $20; VOT $10/$20/$40 per h; logit scale 0.085; transfer penalty 5 min; 30% daily smoothing |
-| Economy | $6B start; fare $3 ($0–5, step $0.25); $4 per car-km; $8k per station per day; maintenance 1% of build cost per year; bonds $1B chunks up to $20B outstanding, 30 years |
+| Economy | $6B start; fare $3 all day ($0–5, step $0.25; peak and off-peak fares, low-income fare full/half/free for the lowest band); $4 per car-km; $8k per station per day; maintenance 1% of build cost per year; bonds $1B chunks up to $20B outstanding, 30 years; used cars sell for 40% |
+| Operations control | new routes hold at the first stop at 70% of the headway, 10% recovery; timepoint holds ≤ 90 s, yield to another route's train within 400 m; short turnaround 2 min when the next departure is due; bunched < ½ headway, gaps > 1.5×; regularity grades CV 0.25 / 0.45 |
+| Bond market | base rate starts at 2.5%, mean-reverting (12%/month, σ 0.2%), shocks ±0.75% (4%/month, 60% up), 1–6%; spread AAA 0 … BBB +0.6% … CCC +4.5%; prepay penalty 1%; refinance fee 1% (gain ≥ 0.05%) |
+| Credit rating | monthly scorecard: farebox recovery 30%, interest coverage 30%, leverage 25%, liquidity 15% (ratios, so currency-free); AAA ≥ 85, AA 75, A 65, BBB 52, BB 40, B 28; ±2 hysteresis; 60-day window |
 
 ### Where the numbers differ from the spec, and why
 
-- **Bond rate is 2.5%, not 4%.** At the spec's capital costs, a 40-station deep-tunnel core costs
-  about $23B. Even with 1.5M riders paying a $3 fare, 4% interest on the roughly $17B of debt
-  that needs (about $1.9M a day) can never be covered. At 2.5% the tuning target can be met.
+- **The bond market's long-run mean is 2.5%, not the spec's 4%, and month 1 borrows at exactly
+  2.5%.** At the spec's capital costs, a 40-station deep-tunnel core costs about $23B. Even with
+  1.5M riders paying a $3 fare, 4% interest on the roughly $17B of debt that needs (about $1.9M a
+  day) can never be covered. At 2.5% the tuning target can be met.
 - **"Up to $20B" counts outstanding debt.** Repaying principal frees room to borrow again.
 - **Daily riders are boardings** (unlinked trips, as transit agencies count them). Fares are paid
   once per linked journey, since transfers are free, at the fare in force when the journey first
@@ -211,18 +229,20 @@ Every value is in `src/balance.ts`. Main values (spec values unless noted):
 - **A new bond pays interest only, pro-rated, in the month it is issued.** Level payments start
   at the end of its first full month.
 - **Cars from a deleted route go to a spare pool.** New or growing routes use them before buying
-  more. They still cost maintenance.
+  more. They still cost maintenance, until they are sold (40% of the new price).
 
-### Tuning results (headless, agent scale 10)
+### Tuning results (headless, agent scale 10, a new game's operations control and fares)
 
 | Scenario | Network | Capital | Riders/day | Daily money |
 |---|---|---|---|---|
-| **Core** (`balance -- scenario=core`) | 4 deep routes, 40 stations: Lexington, CPW–Atlantic, Times Sq–Jackson Hts, 6 Av–Myrtle–Wyckoff | $23.2B (needs $17.2B of bonds) | 1.33M on day 11 (still rising slowly), 21% transit share | Operating +$1.4M/day; −$0.28M/day after bond interest; −$1.8M/day after full debt service |
-| **Sprawl** (`scenario=sprawl`) | Elevated Jamaica–Glen Oaks and St George–Huguenot | $4.95B | 15.7k | −$0.8M/day |
+| **Core** (`balance -- scenario=core`) | 4 deep routes, 40 stations: Lexington, CPW–Atlantic, Times Sq–Jackson Hts, 6 Av–Myrtle–Wyckoff; 67 trains (holding, 10% recovery: one more train per route) | $23.3B (needs $17.3B of bonds) | 1.35M on day 11 (still rising slowly), 21% transit share | Operating +$1.4M/day; −$0.29M/day after bond interest; −$1.8M/day after full debt service; rated BBB (new bonds 3.10%) |
+| **Sprawl** (`scenario=sprawl`) | Elevated Jamaica–Glen Oaks and St George–Huguenot | $5.00B | 15.7k | −$0.81M/day; rated BB with no debt |
 
 So the core covers its operating costs and interest at about 1.45–1.5M riders. Repaying the
 principal as well needs more ridership or a higher fare. The sprawl network loses money every
-day.
+day. With everything off (`ops=off`) the numbers are exactly those of the code before operations
+control: 1.333M riders on day 11, $23.2B, +$1.4M/−$0.28M/−$1.8M a day, sprawl $4.95B and
+−$0.8M/day.
 
 ### London
 
@@ -231,15 +251,18 @@ are in `CITY_BALANCE.london`:
 
 | Area | London |
 |---|---|
-| Money | £5B start; fare £2.80 (£0–5, step £0.10); values of time £8/£14/£26 per hour |
+| Money | £5B start; fares £2.80 peak (6–10 am, 4–8 pm) / £2.70 off-peak (£0–5, step £0.10; the flat fare of older saves and of `ops=off` is £2.80); values of time £8/£14/£26 per hour |
 | Driving | 13 km/h in inner London (the 14 ONS inner boroughs), 24 km/h outside; £0.25/km; drive constant +35 min (fewer London households own a car) |
 | CBD | inside the inner ring road (approximately the congestion-charge zone): 20 min and £25 (£15 charge plus parking) |
 | Goals | Cross the Thames; reach every borough (stretch); Bank to Heathrow in under 45 minutes; plus the shared milestones |
 
 | Scenario | Network | Capital | Riders/day | Daily money |
 |---|---|---|---|---|
-| **Core** (`city=london scenario=core`) | 4 deep routes, 43 stations: Paddington–Bank–Stratford, Kentish Town–King's Cross–Elephant–Brixton, Victoria–Waterloo–Canary Wharf–North Greenwich, Hammersmith–Piccadilly–Cannon St–Shadwell | £24.2B (needs £19.2B of bonds) | 761k on day 11, 13% transit share | Operating −£0.29M/day; −£2.1M/day after bond interest |
-| **Sprawl** (`scenario=sprawl`) | Elevated Dagenham–Upminster and Eltham–Bexleyheath | £3.38B | 16k | −£0.59M/day |
+| **Core** (`city=london scenario=core`) | 4 deep routes, 43 stations: Paddington–Bank–Stratford, Kentish Town–King's Cross–Elephant–Brixton, Victoria–Waterloo–Canary Wharf–North Greenwich, Hammersmith–Piccadilly–Cannon St–Shadwell | £24.3B (needs £19.3B of bonds) | 764k on day 11, 13% transit share | Operating −£0.31M/day; −£2.2M/day after bond interest; rated CCC (new bonds 7.00%: it doesn't cover its operating costs) |
+| **Sprawl** (`scenario=sprawl`) | Elevated Dagenham–Upminster and Eltham–Bexleyheath | £3.43B | 16k | −£0.59M/day; rated BB with no debt |
+
+(With `ops=off`: 761k, £24.2B, −£0.29M/−£2.1M a day; sprawl £3.38B, −£0.59M/day, as before
+operations control.)
 
 London is the harder city. Its jobs are far less concentrated than Manhattan's, and commutes are
 longer (7.6 km on average, centroid to centroid), so the same ~40 central stations reach only 20%
@@ -254,6 +277,20 @@ One AM-peak game-hour takes about 190 ms of sim time. At 60× the budget is 1000
 about 5× headroom. Building paths for every tract pair takes about 0.5 s. In the browser the
 worker holds a sim rate of 3600 game seconds per real second (60×). Per-frame main-thread work
 (train interpolation and layer rebuild) is about 1 ms.
+
+With operations control (every perf route holds at 70% with suggested timepoints, no recovery, so
+the fleet stays at 431 trains), on this shared machine, medians of 6 interleaved runs:
+
+| Run | Before operations control | Now |
+|---|---|---|
+| chaos Off | 217 ms | 232 ms (`ops=off`: 222 ms) |
+| chaos Normal (76 holds in the timed hour) | 237 ms | 226 ms |
+| `chaos=wild weather=snow outdoor=1` (279 holds in the timed hour) | 307 ms | 309 ms |
+
+Single runs vary by ±40 ms here, so the same hour was also timed in one process, stepping the old
+and new engines alternately in 30-step chunks: the new code costs about +3.5% with operations
+control on and +4.5% with it off (the regularity statistics run either way). The clean grid runs
+like clockwork (headway CV 0.04), so nothing is held there with chaos Off.
 
 ## City chaos
 
@@ -394,6 +431,8 @@ before 3 am also raise the share of fans who come by transit.
 
 ### Balance impact (headless, agent scale 10, 12 days from 7 Jan 2030)
 
+(Measured before operations control and the money market, i.e. as `ops=off` today.)
+
 | Scenario | Off | Normal (seed 2030) | Normal (seeds 1–6) | Wild (seed 2030) |
 |---|---|---|---|---|
 | NYC core: day-11 riders | 1.333M | 1.374M (+3.1%) | +0.3% … +1.5% | 1.354M (+1.6%) |
@@ -439,6 +478,60 @@ on a busier moment: Off 206–260 ms against 202–278 ms just before the fixes,
 (241 before) and `chaos=wild weather=snow outdoor=1` 346 ms (341 before), with identical
 boardings and waiting. All well inside the 1,000 ms budget.
 
+## Operations control and the money market
+
+v2 adds dispatching, fare policy and treasury management (design: `docs/v2/ops-money.md`, whose
+top section has the implementation notes; the UI for it is still to come).
+
+**Operations control** (per route, `Route.control`):
+- **Holding.** A departure from the first stop waits off the running track while its gap behind
+  the train ahead would be under 70% of the headway in force (event service included). At
+  *timepoints* the player picks, a train due to leave waits for the same gap, at most 90 s, and
+  leaves at once if another route's train queues within 400 m behind it; junction claims ahead are
+  released while it waits. There is no hold at a closed station.
+- **Recovery** adds a share of the run time (0–20%, 10% for new routes) to the terminal layovers:
+  the fleet grows (one train per core route at 10%) and late trains use the slack.
+- **Short turnarounds.** A crew turns a train in 2 minutes instead of 3 when its next departure is
+  already due and no train is waiting for it.
+- **Regularity** is measured at every departure: headway CV, the share bunched (under half the
+  headway) or gapped (over 1.5×), the excess wait riders feel, holds, and the mean lateness into
+  the terminals (a recovery advisor). It is in each day's report, per route and for the network.
+
+Routes from older saves keep their fleet: holding off, no recovery (short turnarounds on).
+
+| Core, day 11 (headless) | Bunched | Headway CV | Lateness | Left behind | Riders |
+|---|---|---|---|---|---|
+| New York, holding off, no recovery | 10.1% | 0.50 | 112 s | 937k | 1,340,860 |
+| New York, new-route defaults | 5.7% | 0.43 | 99 s | 694k | 1,348,040 |
+| New York, defaults + 2 suggested timepoints per route | 3.2% | 0.42 | 115 s | 791k | 1,347,140 |
+| London, everything off | — | — | 32 s | 16k | 760,560 |
+| London, new-route defaults | 1.2% | 0.15 | 10 s | 120 | 763,700 |
+
+Timepoints even the gaps further but add some lateness (the timetable doesn't know about the holds).
+On the test network, day 1 bunching falls from 11.1% to 2.9%; on a synthetic busy line from 33.7%
+to 1.0%, carrying 32% more trains. No run had a deadlock, including holding next to Wild city chaos,
+event service and a 40-minute breakdown.
+
+**Fares.** A peak fare (6–10 am, 4–8 pm), an off-peak fare and a low-income multiplier (full,
+half or free) for the lowest earnings band. Each journey pays once, at its first boarding, by band
+and period. Mode choice sees each group's expected fare (96–97% of commuter trips start in a peak),
+and agents travelling off-peak are tilted towards transit by their own fare. New York defaults to
+one $3 fare; London to £2.80 peak / £2.70 off-peak. On the New York core (day 11): $3.25 peak /
+$2.50 off-peak earns about 7% more fare revenue for 0.4% fewer riders; a half fare for the lowest band costs 3%
+of revenue and lifts that band's transit share from 13.5% to 14.5%.
+
+**The money market.** Each bond keeps the coupon it was issued (or refinanced) at. New bonds cost
+the market's base rate plus the authority's credit spread. The base rate starts at 2.5% and moves
+at each month end as a seeded, mean-reverting walk (from the game's seed, so a reload walks the
+same path) with rare ±0.75% shocks. The rating, AAA to CCC, comes from a monthly scorecard of
+farebox recovery, interest coverage (with one more $1B bond pro forma), leverage and months of
+cash, with a ±2-point margin before it moves. A new game is AAA, so month 1 borrows at exactly
+2.5%. Bonds can be prepaid (1% penalty, the maturity is kept with a lower payment) or refinanced
+at today's rate (1% fee, the remaining term is kept). Idle and spare cars sell for 40% of the
+new price. A year in review is built at each year end. The New York core rates BBB (3.10% for new
+bonds); London's core, which doesn't cover its operating costs, CCC (7%); a sprawl network with no
+debt BB.
+
 ## Known issues
 
 - Changing the city chaos level redraws the announced events from that level's calendar at
@@ -458,8 +551,6 @@ boardings and waiting. All well inside the 1,000 ms budget.
 - Riders on the core network are limited by coverage: about 30% of commuters have any transit
   path, and about 70% of those take it. The core is also crowded at the peak, with a lot of
   left-behind events at 2.5-minute headways.
-- There are no timetable recovery or holding rules (by design in v1), so lateness builds up on
-  crowded lines.
 - Station auto-names come from the street labels in loaded tiles. Zoomed far out, a station may
   get a neighbourhood name instead of cross streets. Use Rename.
 - Bulldozing is not undoable (undo covers blueprint edits). Built track or stations used by a

@@ -6,7 +6,8 @@ import { city, regionCode } from '../cities';
 import type { CityGoal } from '../cities/types';
 import type { DayReport } from '../sim/protocol';
 import type { Game } from './game';
-import { fmtCount } from './units';
+import { fmtCount, fmtMoney, fmtPct } from './units';
+import { ratingIndex } from '../economy/credit';
 import { computeInterchanges } from '../routes/interchange';
 
 export interface GoalDef {
@@ -29,6 +30,12 @@ export function goalDefs(): GoalDef[] {
     { id: 'commute-10', title: 'Commute 10 minutes faster', detail: 'Average commute (all modes) 10 minutes below the no-transit baseline.' },
     ...trips,
     { id: 'monthly-profit', title: 'Make a monthly profit', detail: 'Fares beat operating costs and bond interest for a month.' },
+    { id: 'rating-a', title: 'Investment grade', detail: `Hold an ${GOALS.ratingGoal} rating or better while owing at least ${fmtMoney(GOALS.ratingGoalMinDebt)}.` },
+    {
+      id: 'clockwork',
+      title: 'Clockwork service',
+      detail: `Under ${fmtPct(GOALS.clockworkBunched, 0)} of headways bunched across ${GOALS.clockworkMinRoutes}+ routes on a day with ${fmtCount(GOALS.clockworkMinRiders)}+ riders.`,
+    },
   ];
 }
 
@@ -99,6 +106,14 @@ export function checkGoals(game: Game, state: GoalState, report: DayReport | nul
   }
   const lastMonth = game.finance.months[game.finance.months.length - 1];
   mark('monthly-profit', !!lastMonth && lastMonth.profit > 0 && !game.sandbox);
+  // Money market and operations control (v2).
+  const rating = game.finance.market.rating;
+  mark('rating-a', !game.sandbox && rating !== null && ratingIndex(rating) <= ratingIndex(GOALS.ratingGoal) && game.finance.debt() >= GOALS.ratingGoalMinDebt);
+  const reg = report?.regularity;
+  mark(
+    'clockwork',
+    !!report && !!reg && reg.samples > 0 && reg.bunched < GOALS.clockworkBunched && Object.keys(report.routeRegularity ?? {}).length >= GOALS.clockworkMinRoutes && report.riders >= GOALS.clockworkMinRiders,
+  );
   return done;
 }
 

@@ -1,16 +1,25 @@
 /**
  * Balance tuning: build scenario networks in code, run them to near-equilibrium and report
  * ridership and daily money.  npm run balance [-- city=nyc|london scenario=core|sprawl|test days=8 scale=10
- * chaos=off|calm|normal|wild seed=2030 money=1]
- * (scenario=test is New York only; chaos defaults to off, which reproduces v1 exactly; with chaos on,
- * or money=1, each day also shows its operating result)
+ * chaos=off|calm|normal|wild seed=2030 money=1 ops=off control=default|legacy|tp|off farePeak= fareOff= low=1|0.5|0
+ * dump=file.json]
+ * (scenario=test is New York only; chaos defaults to off; with chaos on, or money=1, each day also
+ * shows its operating result. Operations control and fares default to a new game's: control=legacy
+ * is a migrated route (no holding or recovery), tp adds suggested timepoints, and ops=off turns
+ * every v2 mechanic off, which reproduces the code before operations control exactly. farePeak /
+ * fareOff / low set the fare policy; peak= is still the peak headway in minutes.)
  */
 import { loadLandFromDisk, loadWorldFromDisk } from './nodeData';
 import { buildTestNetwork, createHeadlessGame, drawLine, makeRoute, runDays, stationNear } from '../src/sim/headless';
 import type { Game } from '../src/core/game';
-import { CHAOS, COMMUTERS, ECONOMY, type ChaosLevel, type TrackLevel } from '../src/balance';
+import { BONDS, CHAOS, COMMUTERS, ECONOMY, type ChaosLevel, type TrackLevel } from '../src/balance';
 import { weatherLabel } from '../src/core/cityCalendar';
-import { annuityPayment } from '../src/economy/finance';
+import { annuityMonthly, annuityPayment } from '../src/economy/finance';
+import { creditScore, spreadOf } from '../src/economy/credit';
+import { fareSummary } from '../src/economy/fares';
+import { defaultControl, legacyControl, offControl, suggestTimepoints } from '../src/routes/control';
+import type { RouteControl } from '../src/routes/types';
+import { dumpRun } from './dump';
 import { edgeReport } from '../src/construction/validate';
 import { fmtMoney } from '../src/core/units';
 import { applyCity, isCityId } from '../src/cities';
@@ -303,9 +312,18 @@ const scale = Number(args.scale ?? 10);
 const chaos = (args.chaos ?? 'off') as ChaosLevel;
 if (!CHAOS.levels.includes(chaos)) throw new Error(`Unknown chaos level ${chaos}`);
 const chaosSeed = Number(args.seed ?? CHAOS.defaultSeed);
+const opsOff = args.ops === 'off';
+const controlArg = (args.control ?? (opsOff ? 'off' : 'default')) as string;
+const controls: Record<string, () => RouteControl> = { default: defaultControl, tp: defaultControl, legacy: legacyControl, off: offControl };
+if (!controls[controlArg]) throw new Error(`Unknown control ${controlArg} (default|legacy|tp|off)`);
 
 // Built in sandbox so the scenario never runs out of money; the ledger still records every cost.
-const game = createHeadlessGame(loadWorldFromDisk(), loadLandFromDisk(), { sandbox: true, chaos, chaosSeed });
+const game = createHeadlessGame(loadWorldFromDisk(), loadLandFromDisk(), { sandbox: true, chaos, chaosSeed, ops: opsOff ? 'off' : 'default' });
+game.routes.newControl = controls[controlArg];
+if (args.farePeak !== undefined || args.fareOff !== undefined || args.low !== undefined) {
+  const peak = args.farePeak !== undefined ? Number(args.farePeak) : game.fares.peak;
+  game.setFares({ peak, offPeak: args.fareOff !== undefined ? Number(args.fareOff) : Math.min(peak, game.fares.offPeak), lowIncome: args.low !== undefined ? Number(args.low) : game.fares.lowIncome });
+}
 let stopsets: Record<string, number[]> = {};
 if (scenario === 'test' && cityId !== 'nyc') throw new Error('scenario=test is the New York test network; use core or sprawl for London');
 if (scenario === 'test') {
@@ -325,6 +343,11 @@ if (scenario === 'test') {
     fund(game, 2e9);
     makeRoute(game, `Line ${k}`, k, colors[i % colors.length], stops, CARS, { am: PEAK, pm: PEAK, midday: PEAK * 2, evening: Math.max(6, PEAK * 3), night: 20 });
   });
+}
+if (controlArg === 'tp') for (const r of game.routes.list()) game.routes.update(r.id, { control: { ...r.control, timepoints: suggestTimepoints(r, game.routes.list()) } });
+if (!opsOff) {
+  const trains = game.routes.list().map((r) => `${r.bullet} ${Math.floor(r.ownedCars / r.cars)}`).join(', ');
+  console.log(`operations control: ${controlArg} · trains ${trains} · fares ${fareSummary(game.fares)}`);
 }
 // Cost breakdown by edge level.
 {
@@ -364,11 +387,43 @@ const moneyLine = (day: number) => {
   const h = finByDay.get(day);
   return (chaos === 'off' && !args.money) || !h ? '' : ` · op ${fmtMoney(h.revenue - h.operating - h.staffing - h.maintenance, { sign: true })}`;
 };
-for (const r of run.reports) console.log(`  day ${r.day}: riders ${Math.round(r.riders).toLocaleString()} · share ${(r.transitShare * 100).toFixed(1)}% · commute ${r.avgCommute.toFixed(1)} (base ${r.baselineCommute.toFixed(1)}) · late ${r.avgLateness.toFixed(0)}s · left ${Math.round(r.leftBehind).toLocaleString()} · gaveup ${Math.round(r.gaveUp).toLocaleString()} · dl ${r.deadlocks}${chaosLine(r)}${moneyLine(r.day)}`);
+// Operations control: the day's headway regularity (not printed with ops=off, so the output matches the code before it).
+const regLine = (r: (typeof run.reports)[number]) =>
+  opsOff || !r.regularity ? '' : ` · CV ${r.regularity.cv.toFixed(2)} bunched ${(r.regularity.bunched * 100).toFixed(1)}% ewt ${r.regularity.ewt.toFixed(0)}s holds ${r.regularity.holds}`;
+for (const r of run.reports) console.log(`  day ${r.day}: riders ${Math.round(r.riders).toLocaleString()} · share ${(r.transitShare * 100).toFixed(1)}% · commute ${r.avgCommute.toFixed(1)} (base ${r.baselineCommute.toFixed(1)}) · late ${r.avgLateness.toFixed(0)}s · left ${Math.round(r.leftBehind).toLocaleString()} · gaveup ${Math.round(r.gaveUp).toLocaleString()} · dl ${r.deadlocks}${regLine(r)}${chaosLine(r)}${moneyLine(r.day)}`);
 const opCost = f.operating + f.staffing + f.maintenance;
 console.log(`last day: revenue ${fmtMoney(f.revenue)} · operating ${fmtMoney(f.operating)} (${Math.round(f.carKm).toLocaleString()} car-km) · staffing ${fmtMoney(f.staffing)} · maintenance ${fmtMoney(f.maintenance)}`);
 console.log(`  operating result ${fmtMoney(f.revenue - opCost, { sign: true })}/day · after bond interest ${fmtMoney(f.revenue - opCost - interest, { sign: true })}/day · after full debt service ${fmtMoney(f.revenue - opCost - debtService, { sign: true })}/day`);
 console.log(`  route riders ${JSON.stringify(last.routeRiders)} · goal trip ${last.goalTrip?.toFixed(0) ?? '—'} · ${run.ms} ms`);
+if (!opsOff) {
+  // Fares by band and period on the last day, and the credit rating a player with this network
+  // would get: the debt needed, an assumed 0.5B cash buffer, the last 4 days' revenue and costs.
+  const fb = last.fares;
+  const trips = fb.trips.reduce((a, b) => a + b, 0);
+  const peakTrips = fb.trips[1] + fb.trips[3] + fb.trips[5];
+  console.log(
+    `  fares: ${trips ? ((peakTrips / trips) * 100).toFixed(1) : 0}% of fare trips at peak · average fare ${(fb.revenue.reduce((a, b) => a + b, 0) / Math.max(1, trips)).toFixed(3)}` +
+      ` · transit share by band ${last.bandShare.map((x) => (x * 100).toFixed(1) + '%').join(' / ')}`,
+  );
+  const tail = game.finance.history.slice(-4);
+  const rev = tail.reduce((s, h) => s + h.revenue, 0) / tail.length;
+  const op = tail.reduce((s, h) => s + h.operating + h.staffing + h.maintenance, 0) / tail.length;
+  const inputs = (newRate: number) => ({
+    revenuePerDay: rev,
+    opCostPerDay: op,
+    serviceDays: 60,
+    debt: debtNeeded,
+    annualInterest: debtNeeded * BONDS.start,
+    monthlyDebtService: annuityMonthly(debtNeeded, BONDS.start, BONDS.termMonths),
+    assets: built,
+    cash: 0.5e9,
+    newRate,
+  });
+  const first = creditScore(inputs(BONDS.start));
+  const res = creditScore(inputs(BONDS.start + spreadOf(first.rating)));
+  console.log(`  credit: ${res.metrics.map((m) => `${m.label} ${m.display}`).join(' · ')} → score ${res.score.toFixed(1)} → ${res.rating} (new bonds ${((BONDS.start + spreadOf(res.rating)) * 100).toFixed(2)}%)`);
+}
+if (args.dump) dumpRun(args.dump, run.reports, game, run.engine);
 
 // ---- demand diagnostics: coverage vs choice
 {

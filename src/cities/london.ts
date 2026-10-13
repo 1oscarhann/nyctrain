@@ -41,6 +41,7 @@ export const LONDON: CityConfig = {
     'London, but nobody ever dug the Tube — or ran a single train across town. You get the real city, real 2011 census commuting for all 33 boroughs and a few billion pounds. Draw the lines — millions of Londoners decide whether they’re worth taking.',
   people: 'Londoners',
   transitWord: 'metro',
+  lowIncomeBand: 'commuters in the lowest of three earnings bands (modelled from area income, about 30%)',
   goals: [
     { id: 'cross-thames', title: 'Cross the Thames', detail: 'A running route linking boroughs north and south of the river.', kind: 'crossing', a: NORTH, b: SOUTH },
     { id: 'all-boroughs', title: 'Reach every borough', detail: 'One connected network with a station in the City and all 32 boroughs.', stretch: true, kind: 'connect', regions: BOROUGHS },

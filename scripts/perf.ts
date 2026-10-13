@@ -1,6 +1,9 @@
 /**
  * Performance check for the spec's target (300 stations, 25 routes, ~400 trains):
- *   npm run perf [-- scale=10 ns=17 ew=8 stations=12 chaos=off|calm|normal|wild weather=clear|rain|snow|heat outdoor=1]
+ *   npm run perf [-- scale=10 ns=17 ew=8 stations=12 chaos=off|calm|normal|wild weather=clear|rain|snow|heat outdoor=1 ops=on|off]
+ * ops= (operations control): by default every route holds at 70% with suggested timepoints and no
+ * recovery (so the fleet stays at 431 trains while the holding code runs); ops=off is the code
+ * before operations control (no holding, standard turnarounds, one flat fare).
  * chaos= turns city chaos on (incidents, events), weather= forces day 1's weather at full
  * severity, and outdoor=1 marks every route fully outdoor (the worst case for snow and heat).
  * Builds a large synthetic network (a grid of deep-tunnel lines across Brooklyn, Manhattan and
@@ -9,6 +12,7 @@
  */
 import { CHAOS, TIME, type ChaosLevel, type WeatherKind } from '../src/balance';
 import { compileNetwork } from '../src/routes/compile';
+import { suggestTimepoints } from '../src/routes/control';
 import { buildPerfNetwork, createHeadlessGame } from '../src/sim/headless';
 import { Engine } from '../src/sim/engine';
 import { TState } from '../src/sim/trainSim';
@@ -23,17 +27,19 @@ const chaos = (args.chaos ?? 'off') as ChaosLevel;
 const weather = args.weather as WeatherKind | undefined;
 const outdoor = args.outdoor === '1';
 const chaosArgs = chaos !== 'off' || weather !== undefined || outdoor;
+const opsOff = args.ops === 'off';
 
 const world = loadWorldFromDisk();
-const game = createHeadlessGame(world, loadLandFromDisk(), { sandbox: true });
+const game = createHeadlessGame(world, loadLandFromDisk(), { sandbox: true, ops: opsOff ? 'off' : 'default' });
 let t0 = Date.now();
-const { routes, fleet } = buildPerfNetwork(game, { ns: NS, ew: EW, perLine: PER_LINE });
+const { routes, fleet } = buildPerfNetwork(game, { ns: NS, ew: EW, perLine: PER_LINE, ...(opsOff ? {} : { control: { hold: true, recoveryPct: 0 } }) });
+if (!opsOff) for (const r of routes) game.routes.update(r.id, { control: { ...r.control, timepoints: suggestTimepoints(r, routes) } });
 const net = game.network;
 console.log(`network: ${net.stations.size} stations, ${routes.length} routes, ${fleet} trains, ${net.edges.size} edges · built in ${Date.now() - t0} ms`);
 
 t0 = Date.now();
 let incidents = 0;
-const engine = new Engine(world, { agentScale: scale, seed: 1885, time: game.time, fare: game.fare, chaos: { level: chaos, seed: CHAOS.defaultSeed } }, {
+const engine = new Engine(world, { agentScale: scale, seed: 1885, time: game.time, fares: game.fares, chaos: { level: chaos, seed: CHAOS.defaultSeed } }, {
   alert: (a) => {
     if (a.status === 'active') incidents++;
   },
@@ -55,6 +61,7 @@ console.log(`warm-up to day 1 07:00: ${Date.now() - t0} ms (pathfinding ${engine
 
 const steps = 3600 / TIME.simStep;
 incidents = 0;
+const reg0 = engine.trains.regularityToday();
 let worst = 0;
 let maxRunning = 0;
 t0 = performance.now();
@@ -66,9 +73,14 @@ for (let i = 0; i < steps; i++) {
 }
 const ms = performance.now() - t0;
 const live = engine.commuters!.live();
+const reg1 = engine.trains.regularityToday();
 console.log(
   `07:00–08:00 peak hour: ${ms.toFixed(0)} ms (budget at 60× is 1000 ms → ${(1000 / ms).toFixed(1)}× headroom) · worst step ${worst.toFixed(1)} ms` +
     ` · up to ${maxRunning} trains running · ${Math.round(live.ridersToday).toLocaleString()} boardings so far · ${Math.round(live.inSystem).toLocaleString()} waiting`,
+);
+console.log(
+  `operations control ${opsOff ? 'off' : 'on (holding 70%, suggested timepoints, no recovery)'}: ${reg1.holds - reg0.holds} holds in the timed hour` +
+    ` (${reg1.holds ? ((reg1.holdSec - reg0.holdSec) / Math.max(1, reg1.holds - reg0.holds)).toFixed(0) : 0} s each) · ${engine.trains.day.shortTurns} short turnarounds today · headway CV so far ${reg1.cv.toFixed(2)}, bunched ${(reg1.bunched * 100).toFixed(1)}%`,
 );
 if (chaosArgs) {
   const w = engine.chaos.todayWeather();

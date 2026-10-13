@@ -4,6 +4,7 @@ import { city } from '../cities';
 import type { ChaosSettings, Game } from '../core/game';
 import type { GoalState } from '../core/goals';
 import { Finance } from '../economy/finance';
+import { normalizeFares } from '../economy/fares';
 import type { DayExposure, DayReport, ModeState, ServiceOverride } from '../sim/protocol';
 import { b64ToF32, f32ToB64, SAVE_VERSION, type SaveFile, type SaveSettings } from './format';
 
@@ -29,7 +30,7 @@ export function buildSave(
     game: {
       time: game.time,
       sandbox: game.sandbox,
-      fare: game.fare,
+      fares: { ...game.fares },
       network: game.network.toData(),
       routes: game.routes.toData(),
       finance: game.finance.toData(),
@@ -56,7 +57,7 @@ export function applySave(game: Game, save: SaveFile): { goals: GoalState; lastR
   const g = save.game;
   game.time = g.time;
   game.sandbox = g.sandbox;
-  game.fare = g.fare;
+  game.fares = normalizeFares(g.fares);
   game.network.load(g.network);
   game.routes.load(g.routes);
   game.finance = Finance.fromData(g.finance);

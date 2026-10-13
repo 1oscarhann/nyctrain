@@ -416,7 +416,7 @@ class InProcessWorker {
     this.received.push(m.type);
     switch (m.type) {
       case 'init':
-        this.engine = new Engine(world, { agentScale: m.agentScale, seed: m.seed, time: m.time, fare: m.fare, chaos: m.chaos, service: m.service }, {
+        this.engine = new Engine(world, { agentScale: m.agentScale, seed: m.seed, time: m.time, fares: m.fares, chaos: m.chaos, service: m.service }, {
           alert: (alert) => this.post({ type: 'alert', alert }),
           dayChaos: (info) => {
             this.infos.push(info);
@@ -441,7 +441,7 @@ class InProcessWorker {
         this.engine!.setService(m.overrides);
         break;
       case 'speed':
-      case 'fare':
+      case 'fares':
       case 'query':
         break;
     }
@@ -470,7 +470,7 @@ describe('city chaos, browser message order (New York)', () => {
       const client = new SimClient();
       const host = InProcessWorker.last!;
       // As the App does: init at 05:00 on day 0, then the player sets Wild and builds a network.
-      client.init({ agentScale: 10, seed: 1885, time: game.time, fare: game.fare, chaos: { level: game.chaos.level, seed }, service: [] });
+      client.init({ agentScale: 10, seed: 1885, time: game.time, fares: game.fares, chaos: { level: game.chaos.level, seed }, service: [] });
       client.setChaosLevel('wild');
       buildTestNetwork(game, { r1: 3, r2: 4 });
       client.setNetworkSoon(() => client.setNetwork(compileNetwork(game).net));

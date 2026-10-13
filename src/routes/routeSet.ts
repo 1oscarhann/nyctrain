@@ -3,8 +3,9 @@
  */
 import { OPERATIONS, STATION, TRAINS, type TrackClass } from '../balance';
 import type { Network } from '../construction/network';
+import { defaultControl, legacyControl, normalizeControl } from './control';
 import { findRoutePath, pathEdges } from './pathfind';
-import { PERIOD_IDS, ROUTE_COLORS, type PeriodId, type Route, type RoutePath } from './types';
+import { PERIOD_IDS, ROUTE_COLORS, type PeriodId, type Route, type RouteControl, type RoutePath } from './types';
 
 export class RouteSet {
   routes = new Map<number, Route>();
@@ -13,6 +14,11 @@ export class RouteSet {
   spareCars: Record<TrackClass, number> = { heavy: 0, light: 0 };
   private cache = new Map<number, { key: string; path: RoutePath }>();
   version = 0;
+  /**
+   * Operations control for routes created without one (not saved): the v2 defaults. Headless runs
+   * set offControl() here for the all-off configuration.
+   */
+  newControl: () => RouteControl = defaultControl;
 
   invalidate(): void {
     this.cache.clear();
@@ -27,8 +33,11 @@ export class RouteSet {
     return this.routes.get(id);
   }
 
-  create(partial: Omit<Route, 'id' | 'ownedCars'> & { ownedCars?: number }): Route {
-    const r: Route = { ownedCars: 0, ...partial, id: this.nextId++ };
+  create(partial: Omit<Route, 'id' | 'ownedCars' | 'control'> & { ownedCars?: number; control?: Partial<RouteControl> }): Route {
+    const base = this.newControl();
+    const control = partial.control ? normalizeControl(partial.control, base) : base;
+    const r: Route = { ownedCars: 0, ...partial, control, id: this.nextId++ };
+    r.control.timepoints = r.control.timepoints.filter((s) => r.stops.includes(s));
     this.routes.set(r.id, r);
     this.invalidate();
     return r;
@@ -45,6 +54,9 @@ export class RouteSet {
     const r = this.routes.get(id);
     if (!r) return;
     Object.assign(r, patch);
+    if (patch.control) r.control = normalizeControl(patch.control, r.control);
+    // Timepoints follow the stop list.
+    r.control.timepoints = r.control.timepoints.filter((s) => r.stops.includes(s));
     this.invalidate();
   }
 
@@ -84,6 +96,11 @@ export class RouteSet {
         r.stops = kept;
         changed = true;
       }
+      const tps = r.control.timepoints.filter((s) => r.stops.includes(s));
+      if (tps.length !== r.control.timepoints.length) {
+        r.control.timepoints = tps;
+        changed = true;
+      }
     }
     if (changed) this.invalidate();
   }
@@ -121,7 +138,8 @@ export class RouteSet {
 
   load(d: RouteSetData): void {
     this.routes.clear();
-    for (const r of d.routes) this.routes.set(r.id, { ...r, headways: { ...r.headways }, stops: [...r.stops] });
+    // Routes saved before operations control have none: legacy settings (holding off, no recovery).
+    for (const r of d.routes) this.routes.set(r.id, { ...r, headways: { ...r.headways }, stops: [...r.stops], control: normalizeControl(r.control, legacyControl()) });
     this.nextId = d.nextId;
     this.spareCars = { heavy: d.spareCars?.heavy ?? 0, light: d.spareCars?.light ?? 0 };
     this.invalidate();

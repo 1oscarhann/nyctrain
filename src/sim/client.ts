@@ -4,7 +4,7 @@
  */
 import { city } from '../cities';
 import { Emitter } from '../core/emitter';
-import type { Alert, ChaosInit, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, FromWorker, ModeState, Query, ServiceOverride, Snapshot, ToWorker } from './protocol';
+import type { Alert, ChaosInit, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, FarePolicy, FromWorker, ModeState, Query, ServiceOverride, Snapshot, ToWorker } from './protocol';
 import { SKIP_LABEL, TRAIN_STRIDE } from './protocol';
 
 export interface SimEvents extends Record<string, unknown> {
@@ -64,7 +64,7 @@ export class SimClient {
     agentScale: number;
     seed: number;
     time: number;
-    fare: number;
+    fares: FarePolicy;
     modeState?: ModeState;
     chaos: ChaosInit;
     service: ServiceOverride[];
@@ -108,8 +108,9 @@ export class SimClient {
     this.send({ type: 'skipTo', time });
   }
 
-  setFare(fare: number): void {
-    this.send({ type: 'fare', fare });
+  /** Fare policy (billing from the next boarding, mode choice from the next 3 am). */
+  setFares(fares: FarePolicy): void {
+    this.send({ type: 'fares', fares: { ...fares } });
   }
 
   /** City chaos level; the worker applies it from the next 3 am. */

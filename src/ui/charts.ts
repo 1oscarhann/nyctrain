@@ -99,3 +99,74 @@ export function financeChart(el: HTMLElement, labels: string[], revenue: number[
     el,
   );
 }
+
+const GUIDE = '#C9D1D9';
+
+/**
+ * Bond market history (§2.4 Borrowing): the market's base rate (teal), the authority's new-bond
+ * rate (orange) and the average coupon of its debt (grey dashed), in percent, one point a month.
+ */
+export function rateChart(el: HTMLElement, labels: string[], base: number[], yours: number[], avgCost: (number | null)[], width = 330, height = 160): uPlot {
+  const xs = labels.map((_, i) => i);
+  const pct = (v: number | null) => (v == null ? '—' : `${(v * 100).toFixed(2)}%`);
+  const all = [...base, ...yours, ...avgCost.filter((v): v is number => v != null && v > 0)];
+  const lo = Math.min(...all);
+  const hi = Math.max(...all);
+  const few = labels.length < 3;
+  return new uPlot(
+    {
+      width,
+      height,
+      padding: [10, 8, 0, 0],
+      legend: { show: true, live: true },
+      cursor: { points: { size: 8 }, drag: { x: false, y: false } },
+      scales: { x: { time: false, range: () => [-0.3, Math.max(1, xs.length - 1) + 0.3] }, y: { range: () => [Math.max(0, Math.floor((lo - 0.0025) * 200) / 200), Math.ceil((hi + 0.0025) * 200) / 200] } },
+      axes: [
+        axis({ splits: () => xs.filter((i) => i % Math.max(1, Math.ceil(xs.length / 6)) === 0), values: (_u, vals) => vals.map((v) => labels[v]?.slice(0, 3) ?? ''), size: 22 }),
+        axis({ values: (_u, vals) => vals.map((v) => `${(v * 100).toFixed(1)}%`), size: 42 }),
+      ],
+      series: [
+        { label: 'Month', value: (_u, v) => (v == null ? '—' : labels[v] ?? '') },
+        { label: 'Market', stroke: CHART_TEAL, width: 2, points: { show: few, size: 7, fill: CHART_TEAL }, value: (_u, v) => pct(v) },
+        { label: 'Your new bonds', stroke: CHART_ORANGE, width: 2, points: { show: few, size: 7, fill: CHART_ORANGE }, value: (_u, v) => pct(v) },
+        { label: 'Avg cost of debt', stroke: GUIDE, width: 1.5, dash: [4, 3], points: { show: few, size: 6, fill: GUIDE }, value: (_u, v) => pct(v) },
+      ],
+    },
+    [xs, base, yours, avgCost],
+    el,
+  );
+}
+
+/**
+ * Headway spread along the line (§2.2): headway CV per stop for both directions, in direction-0
+ * stop order so they share the x axis, with a dashed guide at the "even" grade. −1 means no data.
+ */
+export function regularityChart(el: HTMLElement, stopLabels: string[], cv0: number[], cv1: number[], names: [string, string], guide: number, width = 330, height = 150): uPlot {
+  const xs = stopLabels.map((_, i) => i);
+  const n = xs.length;
+  const clean = (a: number[]) => a.map((v) => (v >= 0 ? v : null));
+  const y0 = clean(cv0);
+  const y1 = clean(cv1);
+  const max = Math.max(0, ...y0.map((v) => v ?? 0), ...y1.map((v) => v ?? 0));
+  const step = Math.max(1, Math.ceil(n / 7));
+  const fmt = (v: number | null) => (v == null ? '—' : v.toFixed(2));
+  return new uPlot(
+    {
+      width,
+      height,
+      padding: [10, 8, 0, 0],
+      legend: { show: true, live: true },
+      cursor: { points: { size: 7 }, drag: { x: false, y: false } },
+      scales: { x: { time: false, range: () => [-0.4, Math.max(1, n - 1) + 0.4] }, y: { range: () => [0, Math.max(1, max * 1.1)] } },
+      axes: [axis({ splits: () => xs.filter((i) => i % step === 0), values: (_u, vals) => vals.map((v) => String(v + 1)), size: 22 }), axis({ values: (_u, vals) => vals.map((v) => v.toFixed(1)), size: 32 })],
+      series: [
+        { label: 'Stop', value: (_u, v) => (v == null ? '—' : `${v + 1} · ${stopLabels[v] ?? ''}`) },
+        { label: names[0], stroke: CHART_TEAL, width: 2, spanGaps: true, points: { show: n < 4, size: 6, fill: CHART_TEAL }, value: (_u, v) => fmt(v) },
+        { label: names[1], stroke: CHART_ORANGE, width: 2, spanGaps: true, points: { show: n < 4, size: 6, fill: CHART_ORANGE }, value: (_u, v) => fmt(v) },
+        { label: 'Even', stroke: GUIDE, width: 1, dash: [4, 3], points: { show: false }, value: () => `< ${guide.toFixed(2)}` },
+      ],
+    },
+    [xs, y0, y1, xs.map(() => guide)],
+    el,
+  );
+}
