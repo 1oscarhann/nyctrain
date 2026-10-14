@@ -9,11 +9,9 @@ commuters, finance, save format (v2 → v3) and UI.
 The simulation and economy half is implemented on top of city chaos and London (baseline: the
 `pre-ops` tag): checklist steps 1–10, 13 and 14, the game-state and plumbing parts of step 11, the
 README's mechanics, balance, test and performance parts of step 16, and every non-UI test in §13
-(plus tests for London's fares, holding next to city chaos and the two goals). The UI (step 12:
-route panel sections, finance tabs, year-in-review modal, rating/shock/sale toasts, keys M and H;
-the app methods `prepayBond`/`refinanceBond`/`sellSpareCars`/`sellIdleCars`/`toggleHolding`/
-`showYearReview`; the README's controls) and the manual check of step 15 are **not** done; the
-hooks they need are listed below. **Where the code and the line references in the design
+(plus tests for London's fares, holding next to city chaos and the two goals). The UI (step 12,
+the app wiring of step 11, the README's controls) and the manual check of step 15 came after; see
+"Implementation notes (UI)" below. **Where the code and the line references in the design
 disagree, trust the code.**
 
 **Where it lives.**
@@ -164,6 +162,68 @@ disagree, trust the code.**
     operating +$1.6M/day; low-income half, average fare $2.891, band-0 transit share 13.5% →
     14.5%, riders +0.5%, operating +$1.2M/day. 96.7% of fare trips start in a peak (London 96.4%).
   - 0 deadlocks in every run.
+
+## Implementation notes (UI)
+
+Checklist steps 11 (app wiring), 12 and 15 and the README's controls are done, for both cities
+(London: £, the £2.80 / £2.70 split, 10p fare steps, "metro" wording from the city config).
+
+**Where it lives.**
+- `src/ui/opsMoney.ts`: every string and number the new UI shows (regularity cards and tags,
+  recovery advice, tooltips, the borrowing header, bond lines, prepay options, refinance text,
+  scorecard line, outlook, fares tab lines, sale text, the year in review text, toasts). It has no
+  DOM; `tests/opsUi.test.ts` covers it in both cities.
+- `src/ui/panels/financePanel.ts`: the four tabs (`overview`, `fares`, `borrowing`, `fleet` render
+  functions in one panel; `App.financeTab` keeps the tab for the session).
+- `src/ui/panels/routePanel.ts`: Service regularity (cards + `regularityChart`), Operations
+  (holding, threshold, recovery, timepoints), timepoint toggles in the stop list, the fleet line's
+  recovery and idle rows, and the routes list tag.
+- `src/ui/panels/inspectPanels.ts`: the held train; `src/ui/reports.ts`: `showYearReview` and the
+  month report's rating and fee rows; `src/ui/charts.ts`: `rateChart`, `regularityChart`.
+- `src/ui/app.ts`: `setFares`, `openFinance`/`toggleFinance` (M), `toggleHolding` (H),
+  `prepayBond` (the modal), `refinanceBond`, `sellSpareCars`, `sellIdleCars` (each confirmed),
+  `showYearReview`, the finance event toasts after `settleDay`, and the year in review instead of
+  December's report. `toolbar.ts` (tooltip with M, active state), `icons.ts` (clock), `styles.css`.
+
+**Differences from the design.**
+- **Apply sits in a footer under the route panel's scrolling body** (`.side-foot`, with Revert and
+  "Changes not applied yet"), because the timepoint clocks are far down the stop list. It still
+  commits frequency, train length and operations together and buys any trains.
+- The four regularity cards are their own grid above the chart; the Avg lateness card stays in the
+  top stats with the design's tooltip. The caption under the chart lists the timepoints, the hold
+  threshold and today's short turnarounds.
+- The train panel shows the amber "Held at 110 St" card and a banner ("Waiting for an even gap
+  behind the train ahead"); a city chaos banner (stall, sick passenger) takes precedence.
+- Overview: the credit rating card opens Borrowing; the Year in review button is disabled (with
+  "Available after the first month end") until a month has closed, since the review is built from
+  month reports. A one-line summary under the cards gives the fares and the debt's average coupon.
+  Rows that are zero read "$0", not "+$0".
+- Fares: unticking *Same fare all day* while the fares are still equal unlocks the off-peak slider
+  for the session (`App.fareSplit`). The off-peak slider can't pass the peak one. The low-income
+  copy names the band per city (`CityConfig.lowIncomeBand`).
+- Borrowing: the score line sets the rating as a coloured badge (`scoreParts`); each scorecard row
+  shows the weight and the points. The rate chart ends with this month so far. With the market off
+  (`fixed`, the all-off configuration) the header reads "Fixed rate … (bond market off)". A bond
+  whose refinance isn't allowed shows the reason in its tooltip.
+- Prepay offers $250M and $500M when below the balance, then All; each option shows the fee and
+  the new payment and is disabled, with the cash needed, when cash is short.
+- Fleet: the table also gives the sale price per car; idle cars are listed per route.
+- Rating and shock toasts stay 7 s and open Borrowing on click. Loading a save from before v4
+  shows a one-off "New: operations control, fares and the bond market" toast (as city chaos did).
+- M closes the panel when Finances is open (and opens it over the route tool); H is ignored while
+  the route tool is active. A rebuilt panel (after Apply, a money change or a day end) keeps its
+  scroll position, and any tooltip from the old panel is hidden.
+
+**Checked in the browser** (Vite dev server, Playwright with SwiftShader, 1440×900 and 1280×720,
+both cities, city chaos Normal; zero console or page errors): the route panel sections and
+toggles (Suggest, Apply, the compiled `opsKey` and timepoint flags reaching the worker, H twice,
+recovery 20% buying trains, lowering frequencies and selling the idle cars); a train held at a
+timepoint; the routes list tags; every finance tab and its actions (fare sliders and toasts,
+Same fare all day, Half, issue, prepay $250M, refinance after a market drop, selling the spare
+pool after deleting a route); a real month end (month report with the rating, rating toast, the
+rate history's first month); the year in review from the panel and on the first weekday of
+January (from a save moved to late December); a v3 save loaded through the migration (holding
+off, no recovery, bonds at 2.50%, flat fare); sandbox; and the Service alerts panel alongside.
 
 ## 0. Summary
 

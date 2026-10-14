@@ -10,6 +10,8 @@ import { h } from './dom';
 import { monthRatingText, ratingTone, yearReviewText } from './opsMoney';
 import { modal } from './widgets';
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 export function showMonthReport(app: App, m: MonthReport): void {
   if (app.game.sandbox) {
     app.toast(`${m.label} report`, `${fmtCount(m.riders / Math.max(1, m.days))} riders a day`, 'green');
@@ -35,7 +37,9 @@ export function showMonthReport(app: App, m: MonthReport): void {
     const i = months.indexOf(m);
     const prev = i > 0 ? months[i - 1].rating : app.game.finance.market.history.at(-1)?.rating;
     const tone = ratingTone(m.rating);
-    grid.append(h('div', { class: 'k' }, 'Credit rating'), h('div', { class: `v rating-badge ${tone}` }, monthRatingText(m.rating, prev, m.newRate)));
+    // The letter in its tone, the rest ("(was A) · new bonds 3.12%") in the plain text colour.
+    const text = monthRatingText(m.rating, prev, m.newRate);
+    grid.append(h('div', { class: 'k' }, 'Credit rating'), h('div', { class: 'v' }, h('span', { class: `rating-badge ${tone}` }, m.rating), text.slice(m.rating.length)));
   }
   let close: () => void = () => {};
   const content = h(
@@ -99,8 +103,14 @@ export function showYearReview(app: App, year: number): void {
   content.parentElement?.classList.add('year-review');
   const by = rev.riders.byMonth;
   if (by.length) {
+    // All twelve months, so January alone (or a gap) keeps its place on the axis.
+    const ys: (number | null)[] = MONTHS.map(() => null);
+    for (const m of by) {
+      const k = MONTHS.indexOf(m.label.slice(0, 3));
+      if (k >= 0) ys[k] = m.avg;
+    }
     const w = Math.max(280, Math.min(480, chartWrap.clientWidth || 470));
-    chart = barChart(chartWrap, by.map((_, i) => i), by.map((m) => m.avg), CHART_TEAL, (i) => by[i]?.label.slice(0, 3) ?? '', 'Riders/day', w, 140);
+    chart = barChart(chartWrap, MONTHS.map((_, i) => i), ys as number[], CHART_TEAL, (i) => MONTHS[i] ?? '', 'Riders/day', w, 140, 'Month');
   } else chartWrap.append(h('div', { class: 'hw-muted' }, 'No month has closed yet.'));
 }
 

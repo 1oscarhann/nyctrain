@@ -38,6 +38,7 @@ import {
   regularityTag,
   saleText,
   scoreLine,
+  scoreParts,
   yearReviewText,
 } from '../src/ui/opsMoney';
 
@@ -181,6 +182,9 @@ describe('borrowing tab', () => {
     const pv = { ...res, next: res.rating };
     expect(res.rating).toBe('BBB');
     expect(scoreLine(pv, { rating: 'BBB', score: res.score })).toBe(`Score ${Math.round(res.score)} → BBB (A needs 67) · outlook stable`);
+    // The panel sets the rating as a badge between the two halves of the same line.
+    const parts = scoreParts(pv, { rating: 'BBB', score: res.score });
+    expect(parts).toEqual({ head: `Score ${Math.round(res.score)} → `, rating: 'BBB', tail: ' (A needs 67) · outlook stable' });
     expect(creditOutlook(pv, { rating: 'A', score: 70 }).word).toBe('negative');
     expect(creditOutlook(pv, { rating: 'BB', score: 40 }).word).toBe('positive');
   });
@@ -225,6 +229,10 @@ describe('year in review', () => {
     expect(t.money[0]).toBe('Fares $720M · Operating −$480M · Interest −$180M · Fees $0');
     expect(t.ridership).toContain('up 11% on Jan');
     expect(t.goals).toEqual(['✓ Open your first line']);
+    // A change at the first month's own review doesn't repeat the month: "AAA → Jan A …".
+    const d2 = data();
+    d2.months[0].rating = 'A';
+    expect(yearReviewText(buildYearReview(d2, {}, 2030), { sandbox: false, partial: false }).credit).toBe('AAA → Jan A → Apr BBB (2 changes) · ended BBB');
     const sb = yearReviewText(rev, { sandbox: true, partial: true });
     expect(sb.title).toBe('2030 in review (so far)');
     expect(sb.cards.map((c) => c.label)).toEqual(['riders/day', 'transit share']);

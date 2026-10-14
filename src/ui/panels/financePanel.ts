@@ -38,6 +38,7 @@ import {
   refinanceText,
   sameAllDay,
   scoreLine,
+  scoreParts,
 } from '../opsMoney';
 import { attachTip } from '../widgets';
 import { kv, section, shareBar, shell, statCard, type Panel } from './common';
@@ -51,7 +52,8 @@ const TABS: { id: FinanceTab; label: string }[] = [
 ];
 
 function signed(v: number): HTMLElement {
-  return h('span', { class: v > 0 ? 'hw-green' : v < 0 ? 'hw-red' : '' }, fmtMoney(v, { sign: true }));
+  // Zero reads "$0" (no "+"), so empty rows such as Financing fees don't look like income.
+  return h('span', { class: v > 0 ? 'hw-green' : v < 0 ? 'hw-red' : '' }, fmtMoney(v, { sign: v !== 0 }));
 }
 
 const muted = (text: string, style = 'font-size:11.5px;margin-top:4px') => h('div', { class: 'hw-muted', style }, text);
@@ -204,7 +206,7 @@ export function financePanel(app: App): Panel {
       muted(`For ${city().lowIncomeBand}. Billed at boarding; they decide at 3 am.`),
     );
     const yd = fareYesterday(app.report);
-    content.append(section('Yesterday'));
+    content.append(section('By band and period'));
     if (yd) {
       content.append(
         h('div', { class: 'fin-line' }, fareYesterdayLine(yd)),
@@ -241,7 +243,8 @@ export function financePanel(app: App): Panel {
       );
       card.append(row);
     }
-    content.append(card, h('div', { class: 'fin-line', style: 'margin-top:6px' }, h('span', { class: `rating-badge ${ratingTone(preview.next)}` }, preview.next), ' · ', scoreLine(preview, f.market)));
+    const sp = scoreParts(preview, f.market);
+    content.append(card, h('div', { class: 'fin-line', style: 'margin-top:6px' }, sp.head, h('span', { class: `rating-badge ${ratingTone(sp.rating)}` }, sp.rating), sp.tail));
     content.append(muted('Farebox recovery is fares ÷ operating costs; interest coverage counts one more bond pro forma; leverage is debt ÷ (assets + cash); liquidity is months of costs and debt service in cash.'));
     // Rate history
     content.append(section('Rate history'));

@@ -292,6 +292,10 @@ export class App implements AppContext {
     if (opts.save?.migratedFrom !== undefined && opts.save.migratedFrom < 3) {
       setTimeout(() => this.toasts.show('New: city events, disruptions and weather', 'Change the chaos level in Service alerts (A).', 'green', 9000, () => this.openAlerts()), 1500);
     }
+    // A save from before operations control: its routes keep their fleets (holding off, no recovery).
+    if (opts.save?.migratedFrom !== undefined && opts.save.migratedFrom < 4) {
+      setTimeout(() => this.toasts.show('New: operations control, fares and the bond market', 'Holding, timepoints and recovery are in each route panel (off for your existing routes). Fares, borrowing and car sales are in Finances (M).', 'green', 9000, () => this.openFinance('overview')), 1800);
+    }
   }
 
   destroy(): void {

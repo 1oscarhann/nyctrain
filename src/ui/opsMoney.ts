@@ -208,11 +208,21 @@ export function creditOutlook(preview: CreditResult & { next: Rating }, market: 
   return { arrow: '→', word: 'stable' };
 }
 
-/** "Score 56 → BBB (A needs 67) · outlook stable". */
-export function scoreLine(preview: CreditResult & { next: Rating }, market: Pick<MarketData, 'rating' | 'score'>): string {
+/** The score line in three parts, so the panel can set the rating as a coloured badge: "Score 56 → ", "BBB", " (A needs 67) · outlook stable". */
+export function scoreParts(preview: CreditResult & { next: Rating }, market: Pick<MarketData, 'rating' | 'score'>): { head: string; rating: Rating; tail: string } {
   const need = nextNotchScore(preview.next);
   const up = ratingIndex(preview.next) > 0 ? CREDIT.ratings[ratingIndex(preview.next) - 1] : null;
-  return `Score ${Math.round(preview.score)} → ${preview.next}${need !== null && up ? ` (${up} needs ${need})` : ''} · outlook ${creditOutlook(preview, market).word}`;
+  return {
+    head: `Score ${Math.round(preview.score)} → `,
+    rating: preview.next,
+    tail: `${need !== null && up ? ` (${up} needs ${need})` : ''} · outlook ${creditOutlook(preview, market).word}`,
+  };
+}
+
+/** "Score 56 → BBB (A needs 67) · outlook stable". */
+export function scoreLine(preview: CreditResult & { next: Rating }, market: Pick<MarketData, 'rating' | 'score'>): string {
+  const p = scoreParts(preview, market);
+  return `${p.head}${p.rating}${p.tail}`;
 }
 
 /** Last weekday of the month containing `day` (the month-end review). */
@@ -327,8 +337,11 @@ export function yearReviewText(r: YearReview, opts: { sandbox: boolean; partial:
   if (!r.credit.start && !r.credit.end) credit = 'Not rated yet';
   else if (!r.credit.changes.length) credit = `${r.credit.end ?? r.credit.start} all ${opts.partial ? 'year so far' : 'year'}`;
   else {
+    // Each change is labelled with the month whose review made it. The opening rating gets the
+    // year's first month, unless that month's own review already changed it ("AAA → Jan AA").
     const first = r.riders.byMonth[0]?.label ?? '';
-    const steps = [`${shortMonth(first)} ${r.credit.start}`, ...r.credit.changes.map((c) => `${shortMonth(c.label)} ${c.to}`)];
+    const lead = first && r.credit.changes[0]?.label !== first ? `${shortMonth(first)} ${r.credit.start}` : `${r.credit.start}`;
+    const steps = [lead, ...r.credit.changes.map((c) => `${shortMonth(c.label)} ${c.to}`)];
     const n = r.credit.changes.length;
     credit = `${steps.join(' → ')} (${n} change${n > 1 ? 's' : ''}) · ended ${r.credit.end}`;
   }

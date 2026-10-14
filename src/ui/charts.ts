@@ -28,7 +28,7 @@ export function compact(v: number): string {
 }
 
 /** Single-series bars (e.g. boardings by hour). The panel heading names the series. */
-export function barChart(el: HTMLElement, xs: number[], ys: number[], color: string, xLabel: (x: number) => string, name: string, width = 330, height = 150): uPlot {
+export function barChart(el: HTMLElement, xs: number[], ys: number[], color: string, xLabel: (x: number) => string, name: string, width = 330, height = 150, xName = 'Hour'): uPlot {
   const u = new uPlot(
     {
       width,
@@ -38,7 +38,7 @@ export function barChart(el: HTMLElement, xs: number[], ys: number[], color: str
       cursor: { points: { show: false }, drag: { x: false, y: false } },
       scales: { x: { time: false, range: (_u, a, b) => [a - 0.6, b + 0.6] }, y: { range: (_u, _a, b) => [0, Math.max(1, b) * 1.1] } },
       axes: [axis({ values: (_u, vals) => vals.map((v) => (Number.isInteger(v) ? xLabel(v) : '')), size: 26 }), axis({ values: (_u, vals) => vals.map(compact), size: 38 })],
-      series: [{ label: 'Hour', value: (_u, v) => (v == null ? '—' : xLabel(v)) }, { label: name, stroke: color, fill: color, width: 0, paths: bars, points: { show: false }, value: (_u, v) => (v == null ? '—' : Math.round(v).toLocaleString()) }],
+      series: [{ label: xName, value: (_u, v) => (v == null ? '—' : xLabel(v)) }, { label: name, stroke: color, fill: color, width: 0, paths: bars, points: { show: false }, value: (_u, v) => (v == null ? '—' : Math.round(v).toLocaleString()) }],
     },
     [xs, ys],
     el,
@@ -123,7 +123,7 @@ export function rateChart(el: HTMLElement, labels: string[], base: number[], you
       scales: { x: { time: false, range: () => [-0.3, Math.max(1, xs.length - 1) + 0.3] }, y: { range: () => [Math.max(0, Math.floor((lo - 0.0025) * 200) / 200), Math.ceil((hi + 0.0025) * 200) / 200] } },
       axes: [
         axis({ splits: () => xs.filter((i) => i % Math.max(1, Math.ceil(xs.length / 6)) === 0), values: (_u, vals) => vals.map((v) => labels[v]?.slice(0, 3) ?? ''), size: 22 }),
-        axis({ values: (_u, vals) => vals.map((v) => `${(v * 100).toFixed(1)}%`), size: 42 }),
+        axis({ values: (_u, vals) => vals.map((v) => `${+(v * 100).toFixed(2)}%`), size: 46 }),
       ],
       series: [
         { label: 'Month', value: (_u, v) => (v == null ? '—' : labels[v] ?? '') },

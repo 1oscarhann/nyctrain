@@ -88,6 +88,9 @@ Open Government Licence v3.0.
 | Weather chip / ticker item (top bar) | Opens Service alerts at that item |
 | Incident / venue marker (map) | Tooltip; a click opens Service alerts focused on it |
 | Menu → City chaos | Off / Calm / Normal / Wild (applies from the next 3 am) |
+| M | Finances panel (toggle): Overview, Fares, Borrowing, Fleet |
+| H | Holding on / off for the selected route (a toast confirms) |
+| Clock toggle (route panel stop list) | Timepoint: trains may be held there to even out gaps (shown while holding is on) |
 
 All toolbar buttons have tooltips that show their shortcut.
 
@@ -181,9 +184,11 @@ To check each milestone by hand in `npm run dev`:
 4. **Commuters:** run to the next morning. Mode choice happens at 3 am. The top bar shows
    riders, transit share and the average commute against the no-subway baseline. Station panels
    show boardings by hour, where riders come from and where they go.
-5. **Economy:** the finance panel (chart button) shows cash, debt, bond room, the fare slider,
-   bonds and yesterday's ledger. A month report appears at each month end. The unserved,
-   crowding and flows overlays help you see what is missing.
+5. **Economy:** the finance panel (chart button or **M**) has four tabs: Overview (cash, debt,
+   bond room, assets, credit rating, today's new-bond rate, yesterday's ledger, the monthly chart),
+   Fares, Borrowing and Fleet. A month report appears at each month end, and the year in review
+   on the first weekday of January. The unserved, crowding and flows overlays help you see what
+   is missing.
 6. **Polish:** goals panel (flag), tutorial (? button), saving (menu: three slots, autosave at
    midnight, export and import JSON), Sandbox, units toggle.
 7. **City chaos:** start at Wild, build a line past a venue (34 St–Penn for the Midtown arena,
@@ -192,6 +197,14 @@ To check each milestone by hand in `npm run dev`:
    card plans extra trains around an event. Incidents pulse on the map: a closed station turns
    red with "CLOSED", a stalled train gets a red casing, and a signal problem shows an amber
    dashed stretch.
+8. **Operations and money:** select a busy route. Service regularity shows yesterday's gaps
+   (grade, bunched, extra wait, holds) and the headway spread stop by stop. In Operations,
+   **Suggest** timepoints (or click the clocks in the stop list), pick a recovery share and
+   **Apply**; **H** switches holding off and on. A train held at a timepoint reads "Held at…"
+   in amber. In Finances, change the fares (a toast confirms), issue a bond, **Prepay…** it, and
+   refinance when the market falls below its coupon. Lower a frequency and sell the idle cars
+   (route panel or Fleet tab). Skip to a month end for the review (rating toast, rate history)
+   and to January for the year in review.
 
 ## Balance
 
@@ -481,7 +494,7 @@ boardings and waiting. All well inside the 1,000 ms budget.
 ## Operations control and the money market
 
 v2 adds dispatching, fare policy and treasury management (design: `docs/v2/ops-money.md`, whose
-top section has the implementation notes; the UI for it is still to come).
+top sections have the implementation notes for the sim and the UI).
 
 **Operations control** (per route, `Route.control`):
 - **Holding.** A departure from the first stop waits off the running track while its gap behind
@@ -531,6 +544,43 @@ at today's rate (1% fee, the remaining term is kept). Idle and spare cars sell f
 new price. A year in review is built at each year end. The New York core rates BBB (3.10% for new
 bonds); London's core, which doesn't cover its operating costs, CCC (7%); a sprawl network with no
 debt BB.
+
+### In the game
+
+- **Route panel.** *Service regularity* has four cards from yesterday (or today so far): the
+  grade with the headway CV (even under 0.25, uneven under 0.45, then bunched), the share of
+  bunched headways, the extra wait riders feel and the holds. Below them, *Headway spread along
+  the line* charts the CV stop by stop for both directions, with the timepoints listed under it.
+  *Operations* has Holding (Off / On, threshold 50–90% of the headway), Recovery (0–20%, with the
+  minutes per terminal, the extra trains and, when yesterday's terminal lateness calls for more,
+  a suggestion) and Timepoints (**Suggest**, **Clear**, and a clock toggle on every intermediate
+  stop in the stop list). These edit the same draft as Frequency and Train length; **Apply** in
+  the panel's footer commits them together and buys any trains. The fleet lines show the
+  recovery, and idle cars with a **Sell** button. **H** switches holding at once.
+- **Train panel.** A train held at a timepoint reads "Held at 110 St" in amber ("Waiting for an
+  even gap behind the train ahead"). The routes list adds "gaps even", "uneven" or "bunching".
+- **Finances** (**M**), in tabs (the open tab is kept for the session):
+  - **Overview:** cash, debt, bond room, assets, the credit rating (with an outlook arrow; click
+    for the scorecard) and today's new-bond rate; yesterday's ledger with financing fees and bond
+    prepayments; this month so far; the monthly chart; **Year in review** (any year with data).
+  - **Fares:** peak (6–10 am, 4–8 pm) and off-peak sliders, *Same fare all day*, the low-income
+    fare (Full / Half / Free), and yesterday's fares: the peak share, the average fare, the lowest
+    earners' share and transit share, and revenue by earnings band. In London the sliders move in
+    10p steps.
+  - **Borrowing:** the market, your spread and the new-bond rate, the next review date, **Issue
+    bond**, the credit scorecard (each ratio's points and what the next step earns, then
+    "Score 56 → BBB (A needs 67) · outlook stable"), the rate history chart (market, your new
+    bonds, the average cost of your debt), and each bond with **Prepay…** ($250M, $500M or all,
+    with the penalty and the new payment) and **Refinance at x%** (enabled when today's rate is
+    at least 0.05% below its coupon; the confirm shows the fee, the monthly saving and the
+    payback).
+  - **Fleet:** cars per class on routes, needed, idle and in the spare pool; sell the spare pool
+    or a route's idle cars (each confirmed with the new price and the maintenance saved).
+- **Toasts** for rating changes and bond market shocks (a click opens Borrowing), fare changes,
+  bonds issued, prepaid and refinanced, car sales and holding. The month report adds the credit
+  rating and financing fees. On the first weekday of January the **year in review** replaces
+  December's report: riders by month, money, the rating's path, the bond market's range and
+  shocks, service regularity and the goals of the year.
 
 ## Known issues
 
