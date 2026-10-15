@@ -6,6 +6,7 @@ import { BONDS, CHAOS, ECONOMY } from '../balance';
 import { isCityId } from '../cities';
 import { marketSeedFrom } from '../economy/credit';
 import { remainingPayments } from '../economy/finance';
+import { monthIndex } from '../core/calendar';
 import { legacyControl } from '../routes/control';
 import { SAVE_VERSION, type SaveFile } from './format';
 
@@ -55,11 +56,12 @@ const STEPS: Record<number, (s: AnySave) => AnySave> = {
       h.fees ??= 0;
       h.prepaid ??= 0;
     }
+    const bonds = Array.isArray(fin.bonds) ? (fin.bonds as Loose[]) : [];
     for (const m of Array.isArray(fin.months) ? (fin.months as Loose[]) : []) {
       m.interest ??= (m.revenue ?? 0) - (m.operatingCosts ?? 0) - (m.profit ?? 0);
       m.fees ??= 0;
       m.prepaid ??= 0;
-      m.debtEnd ??= null;
+      m.debtEnd ??= v3DebtAt(bonds, m.key);
     }
     const chaos = (game.chaos ?? {}) as Loose;
     const seed = typeof chaos.seed === 'number' && Number.isFinite(chaos.seed) ? chaos.seed >>> 0 : CHAOS.defaultSeed;
@@ -70,6 +72,34 @@ const STEPS: Record<number, (s: AnySave) => AnySave> = {
     return s;
   },
 };
+
+/**
+ * Debt at the end of a month (key 'YYYY-MM') of a v1–v3 game, rebuilt from its bonds: before v4
+ * nothing could repay a bond early, so every bond ever issued is still in the save, on v1's fixed
+ * schedule (interest only in its issue month, then level payments at the month ends), replayed
+ * with the same arithmetic as the old payment loop. Null when a bond can't be replayed.
+ */
+function v3DebtAt(bonds: Loose[], key: unknown): number | null {
+  const mk = typeof key === 'string' ? /^(\d{4})-(\d{2})$/.exec(key) : null;
+  if (!mk) return null;
+  const idx = (Number(mk[1]) - 2030) * 12 + Number(mk[2]) - 1;
+  let debt = 0;
+  for (const b of bonds) {
+    const { issuedDay, principal, monthlyPayment } = b;
+    const rate = typeof b.rate === 'number' ? b.rate : ECONOMY.bondRate;
+    if (![issuedDay, principal, monthlyPayment, rate].every((x) => typeof x === 'number' && Number.isFinite(x))) return null;
+    const n = idx - monthIndex(issuedDay);
+    if (n < 0) continue;
+    let bal = principal;
+    for (let k = 0; k < n && bal > 1; k++) {
+      const interest = (bal * rate) / 12;
+      const pay = Math.min(monthlyPayment, bal + interest);
+      bal = Math.max(0, bal - (pay - interest));
+    }
+    if (bal > 1) debt += bal;
+  }
+  return debt;
+}
 
 export class SaveError extends Error {}
 

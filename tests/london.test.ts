@@ -4,7 +4,8 @@
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CITY_BALANCE, COMMUTERS, ECONOMY, MAP } from '../src/balance';
+import { CITY_BALANCE, COMMUTERS, CREDIT, ECONOMY, MAP } from '../src/balance';
+import { creditScore } from '../src/economy/credit';
 import { applyCity, city, cityBalance, inZone, regionCode } from '../src/cities';
 import { LONDON } from '../src/cities/london';
 import { toLocal, toLonLat } from '../src/core/geo';
@@ -190,5 +191,34 @@ describe('London fare policy', () => {
     expect(trips[4] + trips[2]).toBeGreaterThan(0);
     expect(revenue.reduce((a, b) => a + b, 0)).toBeCloseTo(r.fareRevenue, 3);
     expect(r.deadlocks).toBe(0);
+  });
+});
+
+describe('London credit rating', () => {
+  /** Scorecard inputs from a career replay of the README core (day 61, £19.3B of bonds). */
+  const core = { revenuePerDay: 2.16e6, opCostPerDay: 2.48e6, serviceDays: 60, debt: 19.3e9, annualInterest: 19.3e9 * 0.025, monthlyDebtService: 19.3e9 * 0.00395, assets: 24.3e9, cash: 0.46e9, newRate: 0.0375 };
+  it('judges London against its own ridership: the core is BB, not junk; a strong network BBB; new games AAA', () => {
+    // With New York's anchors the London core is CCC (no coverage points: it loses money before interest).
+    applyCity('nyc');
+    expect(creditScore(core).rating).toBe('CCC');
+    applyCity('london');
+    const res = creditScore(core);
+    expect(res.rating).toBe('BB');
+    expect(res.score).toBeGreaterThan(42);
+    expect(res.score).toBeLessThan(52);
+    // Covering its operating costs by a quarter (about 1.1M riders): BBB, not trivially AAA.
+    expect(creditScore({ ...core, revenuePerDay: 3.1e6 }).rating).toBe('BBB');
+    // A debt-free sprawl network that loses money: BB, as in New York.
+    const sprawl = { revenuePerDay: 0.04e6, opCostPerDay: 0.63e6, serviceDays: 60, debt: 0, annualInterest: 0, monthlyDebtService: 0, assets: 3.43e9, cash: 1.5e9, newRate: 0.025 };
+    expect(creditScore(sprawl).rating).toBe('BB');
+    // Deep in debt, out of cash and losing money: still CCC.
+    expect(creditScore({ ...core, revenuePerDay: 1.6e6, debt: 20e9, cash: -0.2e9 }).rating).toBe('CCC');
+    // A new game (no debt, £5B, nothing rated yet).
+    expect(creditScore({ revenuePerDay: 0, opCostPerDay: 0, serviceDays: 0, debt: 0, annualInterest: 0, monthlyDebtService: 0, assets: 0, cash: 5e9, newRate: 0.025 }).rating).toBe('AAA');
+    // The anchors are London's only.
+    applyCity('nyc');
+    expect(CREDIT.farebox.x).toEqual([0.5, 1.0, 1.5, 2.0]);
+    applyCity('london');
+    expect(CREDIT.farebox.x).toEqual([0.3, 0.6, 0.9, 1.2]);
   });
 });

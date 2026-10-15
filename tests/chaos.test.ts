@@ -22,6 +22,7 @@ import { hashSeed, pickWeighted, poisson, Rng, stochasticRound, triangular } fro
 import type { Terrain } from '../src/construction/validate';
 import type { World } from '../src/data/world';
 import { defaultWindows, routesNearVenue, serviceEstimate } from '../src/routes/eventService';
+import { trainsNeeded } from '../src/routes/compile';
 import { migrate } from '../src/save/migrate';
 import { applySave, buildSave, sanitizeChaos } from '../src/save/serialize';
 import { SAVE_VERSION } from '../src/save/format';
@@ -704,6 +705,13 @@ describe('event service', () => {
     expect(e.trainsNeeded).toBe(Math.ceil(roundTrip / 180) + OPERATIONS.spareTrains);
     expect(e.trainsOwned).toBe(40);
     expect(e.effectiveHeadway).toBe(180);
+    // With the route's recovery, sized like the route panel (trainsNeeded); the frequency cap
+    // still uses the physical round trip.
+    const rec = serviceEstimate(route(40), from, from + 7200, 3, 0.1);
+    expect(rec.trainsNeeded).toBe(trainsNeeded({ headways: { night: 3, am: 3, midday: 3, pm: 3, evening: 3 }, control: { recoveryPct: 0.1 } }, [1500, 1500]));
+    expect(rec.trainsNeeded).toBe(Math.ceil((3000 * 1.1 + 2 * OPERATIONS.turnaround) / 180) + OPERATIONS.spareTrains);
+    expect(rec.trainsNeeded).toBeGreaterThan(e.trainsNeeded);
+    expect(serviceEstimate(route(5), from, from + 7200, 3, 0.1).effectiveHeadway).toBeCloseTo(roundTrip / 5, 9);
     // A small fleet caps the frequency: roundTrip / fleet, and fewer extra trips.
     const small = serviceEstimate(route(5), from, from + 7200, 3);
     expect(small.effectiveHeadway).toBeCloseTo(roundTrip / 5, 9);

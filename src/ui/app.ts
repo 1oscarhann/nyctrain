@@ -537,11 +537,13 @@ export class App implements AppContext {
     }
     if (!sel) return this.showPanel(null);
     this.nextPanelKey = JSON.stringify(sel);
+    // A rebuild of the same panel (a routes event, the H key, a day end) keeps its unapplied edits.
+    const carry = this.nextPanelKey === this.panelKey ? this.panel?.carry?.() : undefined;
     switch (sel.kind) {
       case 'station':
         return this.showPanel(stationPanel(this, sel.id));
       case 'route':
-        return this.showPanel(routePanel(this, sel.id));
+        return this.showPanel(routePanel(this, sel.id, carry));
       case 'train':
         return this.showPanel(trainPanel(this, sel.id));
       case 'tract':
@@ -564,7 +566,11 @@ export class App implements AppContext {
     // A rebuild of the same panel (after Apply, a day end, a money change) keeps its scroll position.
     const key = this.nextPanelKey;
     this.nextPanelKey = '';
-    const keep = p && key && key === this.panelKey ? (this.side.querySelector('.side-body')?.scrollTop ?? 0) : 0;
+    const same = !!p && !!key && key === this.panelKey;
+    const keep = same ? (this.side.querySelector('.side-body')?.scrollTop ?? 0) : 0;
+    // ...and keyboard focus, on a control that names itself (data-focus), e.g. a fare slider.
+    const active = document.activeElement;
+    const focusKey = same && active instanceof HTMLElement && this.side.contains(active) ? active.dataset.focus : undefined;
     this.panelKey = p ? key : '';
     this.panel?.destroy?.();
     this.panel = p;
@@ -572,6 +578,10 @@ export class App implements AppContext {
     this.tooltip.show(null);
     this.side.replaceChildren();
     if (p) this.side.append(p.el);
+    if (focusKey) {
+      const el = [...this.side.querySelectorAll<HTMLElement>('[data-focus]')].find((x) => x.dataset.focus === focusKey);
+      if (el && !(el as HTMLInputElement).disabled) el.focus({ preventScroll: true });
+    }
     if (keep) {
       const body = this.side.querySelector('.side-body');
       if (body) body.scrollTop = keep;
@@ -790,7 +800,7 @@ export class App implements AppContext {
     const fares = this.game.setFares(p);
     this.sim.setFares(fares);
     this.toast('Fares changed', fareToastBody(fareSummary(fares)), 'amber');
-    this.refreshPanel();
+    // (game.setFares emits 'money', which rebuilds an open Finances panel.)
   }
 
   // ------------------------------------------------------------------ city chaos

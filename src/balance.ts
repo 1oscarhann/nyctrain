@@ -685,6 +685,12 @@ export interface CityBalance {
    * flat fare of older saves and of the all-off configuration.
    */
   fares: { peak: number; offPeak: number; lowIncome: number };
+  /**
+   * Credit scorecard anchors that differ from CREDIT's (v2). The metrics are ratios, so currency
+   * doesn't enter; ridership does: a city whose network carries fewer riders per unit of cost is
+   * judged against its own benchmark, so its benchmark core rates like New York's.
+   */
+  credit: Partial<Pick<typeof CREDIT, 'farebox' | 'coverage'>>;
   goals: Partial<typeof GOALS>;
   /** Event venues and kinds, and the climate (CHAOS_BY_CITY). */
   chaos: CityChaos;
@@ -704,6 +710,7 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
     economy: {},
     /** New York: one fare all day (the subway has no peak pricing); the low-income discount is the player's lever. */
     fares: { peak: 3.0, offPeak: 3.0, lowIncome: 1 },
+    credit: {},
     goals: {},
     chaos: CHAOS_BY_CITY.nyc,
   },
@@ -744,6 +751,17 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
     },
     /** London-style pay-as-you-go: a small peak premium (06–10, 16–20), full fare for all bands until the player adds a discount. */
     fares: { peak: 2.8, offPeak: 2.7, lowIncome: 1 },
+    /**
+     * London's jobs are far less concentrated, so the same ~40 central stations carry about 58% of
+     * New York's riders: its benchmark core recovers 0.89 of its operating costs (New York's 1.59)
+     * and loses a little before interest. New York's anchors rate that CCC; these (farebox × 0.6,
+     * coverage 0.5 lower) rate it BB, a London network covering its costs by a quarter BBB, and
+     * debt-free sprawl BB as in New York.
+     */
+    credit: {
+      farebox: { x: [0.3, 0.6, 0.9, 1.2], y: [0, 50, 80, 100] },
+      coverage: { x: [-0.5, 0, 0.5, 1.0, 2.5], y: [0, 30, 55, 75, 100] },
+    },
     goals: {
       tripMinutes: 45,
       /** Bank junction to the Heathrow central terminal area. */

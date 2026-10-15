@@ -18,7 +18,7 @@ import type { App } from '../app';
 import { loadChart, regularityChart } from '../charts';
 import { bullet, h, svgIcon } from '../dom';
 import { ICONS } from '../icons';
-import { fmtMoneyFine, HOLD_TIP, LATENESS_TIP, RECOVERY_TIP, recoveryAdvice, regularityCards, regularityTag, TIMEPOINT_TIP } from '../opsMoney';
+import { draftOf, fmtMoneyFine, HOLD_TIP, LATENESS_TIP, mergeDraft, RECOVERY_TIP, recoveryAdvice, regularityCards, regularityTag, regularityWithReport, TIMEPOINT_TIP, type RouteDraft } from '../opsMoney';
 import { attachTip } from '../widgets';
 import { kv, section, shell, statCard, type Panel } from './common';
 
@@ -103,7 +103,7 @@ function fleetLine(app: App, r: Route, opts: { sell?: boolean; dirty?: boolean }
   );
 }
 
-export function routePanel(app: App, id: number): Panel {
+export function routePanel(app: App, id: number, carry?: unknown): Panel {
   const game = app.game;
   const r = game.routes.get(id);
   if (!r) return { el: document.createElement('div') };
@@ -129,7 +129,9 @@ export function routePanel(app: App, id: number): Panel {
   body.append(incidents, stats);
 
   // ---- the draft: frequency, train length and operations control are applied together
-  const draft = { headways: { ...r.headways }, cars: r.cars, control: structuredClone(r.control) as RouteControl };
+  const base = draftOf(r);
+  const prev = carry as { id: number; base: RouteDraft; draft: RouteDraft } | undefined;
+  const draft: RouteDraft = prev && prev.id === r.id ? mergeDraft(prev.base, prev.draft, r) : draftOf(r);
   const sameControl = (a: RouteControl, b: RouteControl) => JSON.stringify({ ...a, timepoints: [...a.timepoints].sort() }) === JSON.stringify({ ...b, timepoints: [...b.timepoints].sort() });
   const dirty = () => draft.cars !== r.cars || PERIOD_IDS.some((p) => draft.headways[p] !== r.headways[p]) || !sameControl(draft.control, r.control);
   const draftRoute = (): Route => ({ ...r, headways: draft.headways, cars: draft.cars, control: draft.control });
@@ -192,6 +194,9 @@ export function routePanel(app: App, id: number): Panel {
 
   // Operations control (§2.1)
   let detail: RouteDetail | null = null;
+  // Yesterday's regularity: the worker's, or the saved last report's after a load (see regularityWithReport).
+  const runTimes = fleetPlan(game, r).runTimes;
+  const regDetail = () => regularityWithReport(detail?.regularity, app.report?.routeRegularity?.[r.id], runTimes ? (runTimes[0] + runTimes[1]) / 2 : null);
   const ops = h('div');
   const renderOps = () => {
     const c = draft.control;
@@ -223,7 +228,7 @@ export function routePanel(app: App, id: number): Panel {
       const extra = plan.trainsNeeded - trainsNeeded({ headways: draft.headways, control: { recoveryPct: 0 } }, plan.runTimes);
       recNote = `≈ ${(plan.recovery / 60).toFixed(1)} min per terminal · ${extra > 0 ? `+${extra} train${extra > 1 ? 's' : ''}` : 'no extra trains'}`;
     }
-    const advice = recoveryAdvice(detail?.regularity, c.recoveryPct);
+    const advice = recoveryAdvice(regDetail(), c.recoveryPct);
     rows.push(h('div', { class: 'ops-row' }, recLbl, h('div', { class: 'ctl' }, rec), h('div', { class: 'note' }, recNote), advice ? h('div', { class: 'note advice' }, advice) : null));
     // Timepoints
     if (c.hold) {
@@ -361,7 +366,7 @@ export function routePanel(app: App, id: number): Panel {
     );
   };
   const renderReg = () => {
-    const d = detail?.regularity ?? null;
+    const d = regDetail();
     const s = d ? (d.yesterday ?? d.today) : null;
     reg.replaceChildren();
     if (!op.ok) return;
@@ -379,7 +384,7 @@ export function routePanel(app: App, id: number): Panel {
     }
     const stopNames = detail.dirs[0]?.stations ?? [];
     const has = d.cvByStop[0].some((v) => v >= 0) || d.cvByStop[1].some((v) => v >= 0);
-    reg.append(h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:8px' }, 'Headway spread along the line (CV by stop)'));
+    reg.append(h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:8px' }, `Headway spread along the line (CV by stop${d.fromReport ? ', today so far' : ''})`));
     if (has && stopNames.length) {
       const wrap = h('div', { class: 'chart' });
       reg.append(wrap);
@@ -411,11 +416,11 @@ export function routePanel(app: App, id: number): Panel {
   const fetch = () => {
     if (!op.ok) return;
     app.sim.query<RouteDetail | null>({ kind: 'route', route: r.id }).then((d) => {
-      const hadAdvice = recoveryAdvice(detail?.regularity, draft.control.recoveryPct);
+      const hadAdvice = recoveryAdvice(regDetail(), draft.control.recoveryPct);
       detail = d;
       renderStats();
       renderCharts();
-      if (recoveryAdvice(detail?.regularity, draft.control.recoveryPct) !== hadAdvice) renderOps();
+      if (recoveryAdvice(regDetail(), draft.control.recoveryPct) !== hadAdvice) renderOps();
     });
   };
   renderStats();
@@ -435,6 +440,7 @@ export function routePanel(app: App, id: number): Panel {
     },
     dayEnd: fetch,
     destroy: () => chartObjs.forEach((c) => c.destroy()),
+    carry: () => ({ id: r.id, base, draft: structuredClone(draft) }),
   };
 }
 

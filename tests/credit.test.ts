@@ -348,7 +348,7 @@ describe('year in review', () => {
       ...extra,
     });
     const months = [...Array.from({ length: 12 }, (_, i) => month(2030, i + 1)), month(2031, 1), month(2031, 2, { rating: 'AA' })];
-    const history = [{ day: 100, riders: 1.5e6 }, { day: 101, riders: 1.7e6 }, { day: 300, riders: 2e6 }].map((h) => ({ ...h }) as unknown as FinanceData['history'][number]);
+    const history = [{ day: 100, riders: 1.5e6 }, { day: 101, riders: 1.7e6 }, { day: 290, riders: 2e6 }].map((h) => ({ ...h }) as unknown as FinanceData['history'][number]);
     const market = { seed: 1, base: 0.025, rating: 'A' as Rating, score: 70, history: months.map((m, i) => ({ key: m.key, label: m.label, base: 0.02 + i * 0.001, rating: (i === 0 ? 'AAA' : months[i - 1].rating!) as Rating, newRate: 0.03, avgCost: 0.025, score: 60, shock: i === 9 ? 0.0075 : 0 })) };
     const f = { months, history, market };
     expect(yearsWithData(f)).toEqual([2030, 2031]);
@@ -375,7 +375,15 @@ describe('year in review', () => {
     expect(y31.money.cashStart).toBe(months[11].cashEnd);
     expect(y31.credit.start).toBe('A');
     expect(y31.credit.changes.map((c) => `${c.from}>${c.to}`)).toEqual(['A>AA']);
-    expect(y31.riders.peak).toEqual({ day: 300, riders: 2e6 });
+    expect(y31.riders.peak).toEqual({ day: 290, riders: 2e6 });
+    // "So far", opened on Mon 4 Feb 2030 with Fri 1 Feb settled: the span and the peak day cover
+    // the closed month (January: days 0–18, 19 weekdays), like the totals.
+    const jan = [month(2030, 1, { days: 19 })];
+    const daily = Array.from({ length: 20 }, (_, d) => ({ day: d, riders: d === 19 ? 3e6 : 1e6 + d }) as unknown as FinanceData['history'][number]);
+    const sofar = buildYearReview({ months: jan, history: daily, market }, {}, 2030);
+    expect(monthKey(19)).toBe('2030-02');
+    expect([sofar.firstDay, sofar.lastDay, sofar.weekdays]).toEqual([0, 18, 19]);
+    expect(sofar.riders.peak).toEqual({ day: 18, riders: 1e6 + 18 });
   });
 });
 
@@ -428,7 +436,8 @@ describe('save v4 (operations control and the money market)', () => {
     expect(fin.history[0].prepaid).toBe(0);
     expect(fin.today.fees).toBe(0);
     expect(fin.months[0].interest).toBe(50e6 - 30e6 - 16e6);
-    expect(fin.months[0].debtEnd).toBeNull();
+    // Rebuilt from the bonds (both issued in January 2030: interest only that month).
+    expect(fin.months[0].debtEnd).toBe(2e9);
     expect(fin.market).toEqual({ seed: marketSeedFrom(777), base: BONDS.start, rating: null, score: 0, history: [] });
     const again = migrate(JSON.parse(JSON.stringify({ ...m, migratedFrom: undefined })));
     expect(again.game).toEqual(m.game);
@@ -448,6 +457,40 @@ describe('save v4 (operations control and the money market)', () => {
     expect(back.finance.bonds.map((b) => [b.rate, b.monthsLeft])).toEqual(game.finance.bonds.map((b) => [b.rate, b.monthsLeft]));
   });
 
+  it('rebuilds the month-end debt of a v3 game from its bonds, for the year in review', () => {
+    // A v3 game on v1's fixed 2.5% schedule: 17 bonds in January 2030, one more in April.
+    const f = new Finance(false, 0);
+    f.market.fixed = true;
+    const actual: number[] = [];
+    for (let d = 0; d < 300; d++) {
+      if (d < 17 || d === 60) f.issueBond(d);
+      f.settleDay({ day: d, riders: 1.2e6, revenue: 3.3e6, carKm: 250000, stationsOpen: 40 });
+      if (isNewMonth(d + 1)) actual.push(f.debt());
+    }
+    const fin = f.toData() as unknown as Record<string, any>;
+    delete fin.market;
+    for (const b of fin.bonds) for (const k of ['rate', 'monthsLeft', 'rating']) delete b[k];
+    for (const m of fin.months) for (const k of ['interest', 'fees', 'prepaid', 'debtEnd', 'kpi', 'rating', 'newRate']) delete m[k];
+    const v3 = { format: 'headway-ny', version: 3, city: 'nyc', game: { time: 300 * 86400, fare: 3, routes: { routes: [], nextId: 1 }, network: {}, finance: fin, chaos: { level: 'off', seed: 77, service: [], nextServiceId: 1 } } };
+    const m = migrate(v3);
+    expect(m.game.finance.months.map((x) => x.debtEnd)).toEqual(actual);
+    expect(actual[0]).toBe(17e9);
+    // Played on into 2031: the review's debt line runs from the real figures, not from $0.
+    const g = Finance.fromData(m.game.finance);
+    for (let d = 300; d < 540; d++) g.settleDay({ day: d, riders: 1.2e6, revenue: 3.3e6, carKm: 250000, stationsOpen: 40 });
+    const y30 = buildYearReview(g.toData(), {} as never, 2030);
+    const y31 = buildYearReview(g.toData(), {} as never, 2031);
+    expect(y30.money.debtStart).toBe(0);
+    expect(y30.money.debtEnd).toBe(actual[m.game.finance.months.findIndex((x) => x.key === '2030-12')]);
+    expect(y30.money.debtEnd!).toBeGreaterThan(16e9);
+    expect(y31.money.debtStart).toBe(y30.money.debtEnd);
+    // A month whose debt is unknown reads as unknown, not as $0.
+    const data = g.toData();
+    data.months[data.months.findIndex((x) => x.key === '2030-12')].debtEnd = null;
+    expect(buildYearReview(data, {} as never, 2030).money.debtEnd).toBeNull();
+    expect(buildYearReview(data, {} as never, 2031).money.debtStart).toBeNull();
+  });
+
   it('seeds a new game market from the game seed', () => {
     const a = new Game({} as World, {} as Terrain, { sandbox: false });
     a.setGameSeed(99);
@@ -464,9 +507,15 @@ describe('money and service goals', () => {
     const goals = emptyGoals();
     expect('rating-a' in goals && 'clockwork' in goals).toBe(true);
     for (let i = 0; i < 5; i++) game.finance.issueBond(0);
-    game.finance.market.rating = 'A';
     const reg = { ...emptyStats(), samples: 900, bunched: 0.04, cv: 0.2 };
     const report = { riders: 600_000, transitShare: 0.1, baselineCommute: 50, avgCommute: 49, goalTrip: null, regularity: reg, routeRegularity: { 1: reg, 2: reg, 3: reg } } as unknown as DayReport;
+    // Day 0: the starting AAA is a placeholder, not a review, so borrowing $5B doesn't earn it.
+    expect(game.finance.market.rating).toBe('AAA');
+    expect(checkGoals(game, emptyGoals(), report, () => 0)).not.toContain('rating-a');
+    // After a month-end review that rates it A.
+    for (let d = 0; d < 19; d++) game.finance.settleDay({ day: d, riders: 0, revenue: 0, carKm: 0, stationsOpen: 0 });
+    expect(game.finance.market.history.length).toBe(1);
+    game.finance.market.rating = 'A';
     const done = checkGoals(game, goals, report, () => 0);
     expect(done).toContain('rating-a');
     expect(done).toContain('clockwork');

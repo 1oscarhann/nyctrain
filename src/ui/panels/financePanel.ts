@@ -160,11 +160,13 @@ export function financePanel(app: App): Panel {
     const p = game.fares;
     const rng = fareRange();
     const locked = sameAllDay(p) && !app.fareSplit;
-    const slider = (value: number, disabled = false) =>
-      h('input', { type: 'range', min: String(rng.min), max: String(rng.max), step: String(rng.step), value: String(value), disabled, style: 'flex:1' }) as HTMLInputElement;
+    // data-focus: a rebuilt panel (each change rebuilds it) puts keyboard focus back on the same
+    // control, so arrow keys keep stepping a slider.
+    const slider = (value: number, focus: string, disabled = false) =>
+      h('input', { type: 'range', min: String(rng.min), max: String(rng.max), step: String(rng.step), value: String(value), disabled, style: 'flex:1', 'data-focus': focus }) as HTMLInputElement;
     // Peak
     const peakVal = h('b', { class: 'num', style: 'min-width:46px;text-align:right' }, fmtFare(p.peak));
-    const peak = slider(p.peak);
+    const peak = slider(p.peak, 'fare-peak');
     peak.addEventListener('input', () => {
       peakVal.textContent = fmtFare(Number(peak.value));
       if (locked) {
@@ -174,17 +176,22 @@ export function financePanel(app: App): Panel {
     });
     peak.addEventListener('change', () => {
       const v = Number(peak.value);
+      // Adjusting a split policy stays split, even when the two fares meet (only the checkbox locks them).
+      if (!locked) app.fareSplit = true;
       app.setFares(locked ? { peak: v, offPeak: v } : { peak: v, offPeak: Math.min(game.fares.offPeak, v) });
     });
     // Off-peak (capped at the peak fare)
     const offVal = h('b', { class: 'num', style: 'min-width:46px;text-align:right' }, fmtFare(p.offPeak));
-    const off = slider(p.offPeak, locked);
+    const off = slider(p.offPeak, 'fare-off', locked);
     off.addEventListener('input', () => {
       if (Number(off.value) > Number(peak.value)) off.value = peak.value;
       offVal.textContent = fmtFare(Number(off.value));
     });
-    off.addEventListener('change', () => app.setFares({ offPeak: Math.min(Number(off.value), game.fares.peak) }));
-    const same = h('input', { type: 'checkbox', checked: locked }) as HTMLInputElement;
+    off.addEventListener('change', () => {
+      app.fareSplit = true;
+      app.setFares({ offPeak: Math.min(Number(off.value), game.fares.peak) });
+    });
+    const same = h('input', { type: 'checkbox', checked: locked, 'data-focus': 'fare-same' }) as HTMLInputElement;
     same.addEventListener('change', () => {
       app.fareSplit = !same.checked;
       if (same.checked && game.fares.offPeak !== game.fares.peak) app.setFares({ offPeak: game.fares.peak });
@@ -192,7 +199,7 @@ export function financePanel(app: App): Panel {
     });
     // Low-income
     const low = h('div', { class: 'seg' });
-    for (const o of LOW_INCOME_OPTIONS) low.append(h('button', { class: o.value === p.lowIncome ? 'on' : '', onclick: () => o.value !== game.fares.lowIncome && app.setFares({ lowIncome: o.value }) }, o.label));
+    for (const o of LOW_INCOME_OPTIONS) low.append(h('button', { class: o.value === p.lowIncome ? 'on' : '', 'data-focus': `fare-low-${o.value}`, onclick: () => o.value !== game.fares.lowIncome && app.setFares({ lowIncome: o.value }) }, o.label));
     tip(low, 'Low-income fare', lowIncomeTip());
     content.append(
       h('div', { class: 'fin-line' }, h('b', null, fareSummary(p)), h('span', { class: 'hw-muted' }, ' · transfers free')),
@@ -322,15 +329,19 @@ export function financePanel(app: App): Panel {
     sh.body.scrollTop = 0;
   };
   const render = () => {
+    // Keyboard focus survives the rebuild on controls that name themselves (data-focus).
+    const active = document.activeElement;
+    const focusKey = active instanceof HTMLElement && sh.el.contains(active) ? active.dataset.focus : undefined;
     charts.forEach((c) => c.destroy());
     charts = [];
     app.tooltip.show(null);
-    tabs.replaceChildren(...TABS.map((t) => h('button', { class: t.id === app.financeTab ? 'on' : '', 'data-tab': t.id, onclick: () => setTab(t.id) }, t.label)));
+    tabs.replaceChildren(...TABS.map((t) => h('button', { class: t.id === app.financeTab ? 'on' : '', 'data-tab': t.id, 'data-focus': `tab-${t.id}`, onclick: () => setTab(t.id) }, t.label)));
     content.replaceChildren();
     if (app.financeTab === 'fares') fares();
     else if (app.financeTab === 'borrowing') borrowing();
     else if (app.financeTab === 'fleet') fleet();
     else overview();
+    if (focusKey) [...sh.el.querySelectorAll<HTMLElement>('[data-focus]')].find((x) => x.dataset.focus === focusKey && !(x as HTMLInputElement).disabled)?.focus({ preventScroll: true });
   };
   render();
   return {

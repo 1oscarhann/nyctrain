@@ -61,9 +61,17 @@ disagree, trust the code.**
   `defaultFares()`.
 - **Event fans pay fares too**, by band and period like commuters (their band is stored in
   `aBand`); their 3 am choice uses `tripFare` for the event's arrival and end periods.
-- **Event service and regularity.** Holding and the headway statistics use the headway in force
-  (`headwayAt`, so event-service overrides count); a headway is only measured when the period *and*
-  the headway in force are the same at both departures.
+- **Event service and regularity.** Holding and the headway statistics use `headwayAt` (so
+  event-service overrides count), evaluated at the trains' **dispatch slots** (`Train.schedStart`),
+  not at the time they reach a stop: `RouteReg.lastSched` keeps the slot of each stop's last
+  departure next to `lastDep`. A headway is measured against the headway this train was dispatched
+  under, and only when the train ahead was dispatched in the same period of the same day at the
+  same headway in force. Holds (terminal and timepoint) use `gapHeadway`, the shorter of the
+  headways at the two trains' slots, which the timetable's gap between consecutive slots never
+  undercuts: an on-time train is never held at 10:00, 20:00 or the end of event service (judging
+  by the headway in force downstream read correct 4-minute spacing as 0.5 or 0.4 of midday's or
+  the evening's headway: 110 of 266 headways after 20:00 counted as bunched on a noise-free line,
+  and every timepoint hold was an on-time train).
 - **Holding and chaos.** No timepoint hold at a closed station. Holds are on dwelling trains only;
   breakdowns stall running trains, so the watchdog and its per-route incident grace are unchanged
   (tested: a 40-minute stall with holding on is caught without the grace and ignored with it).
@@ -134,11 +142,12 @@ disagree, trust the code.**
   `DayReport` field, the finance state (ledgers, bonds, cash) and the SHA-256 of the mode shares
   and observations are identical (compared field by field with `dump=`, new fields ignored), and
   the printed output differs only in timings.
-- **Synthetic line** (`tests/ops.test.ts`, 16 stops, 3-minute headway): off 19 trains, CV 0.91,
-  33.7% bunched, 125 trains through; holding + 10% recovery + 2 timepoints 20 trains, CV 0.18,
-  1.0% bunched, 165 through (the prototype: 0.89 / 31.8% / 134 and 0.22 / 2.0% / 164).
-- **Test network, day 1** (legacy against default + suggested timepoints): bunched 11.1% → 2.9%,
-  CV 0.48 → 0.36, 200 → 208 cars, 0 deadlocks (the prototype: 11.6% → 2.6%, 0.48 → 0.33).
+- **Synthetic line** (`tests/ops.test.ts`, 16 stops, 3-minute headway): off 19 trains, CV 0.90,
+  33.2% bunched, 125 trains through; holding + 10% recovery + 2 timepoints 20 trains, CV 0.18,
+  0.9% bunched, 165 through (the prototype: 0.89 / 31.8% / 134 and 0.22 / 2.0% / 164). A
+  noise-free line with the default period headways and event service: CV 0, no holds.
+- **Test network, day 1** (legacy against default + suggested timepoints): bunched 10.2% → 1.9%,
+  CV 0.48 → 0.35, 200 → 208 cars, 0 deadlocks (the prototype: 11.6% → 2.6%, 0.48 → 0.33).
 - **Performance** (`npm run perf`, budget 1,000 ms; medians of 6 interleaved runs on a shared
   machine where single runs vary by ±40 ms): before 217 ms, now 232 ms with every perf route
   holding with suggested timepoints (0 holds: the grid runs like clockwork) and 222 ms with
@@ -150,18 +159,39 @@ disagree, trust the code.**
   `leaveStop` cost +9–14%, mostly in unchanged hot code (V8 layout and inlining), hence the
   separate `holds` map and helper methods. The +3% target of §10 is not quite met.
 - **Balance** (`npm run balance`, 12 days for the cores, 8 for sprawl; README tables updated):
-  - New York core, new-route defaults: 67 trains (+1 per route), capital $23.3B; day 11 1,348,040
-    riders (+1.1% on 1,333k), bunched 5.7% (10.1% with holding off and no recovery), CV 0.43
-    (0.50), lateness 99 s (112 s), left behind 694k (937k); operating +$1.4M/day, −$0.29M/day
+  - New York core, new-route defaults: 67 trains (+1 per route), capital $23.3B; day 11 1,349,870
+    riders (+1.3% on 1,333k), bunched 5.4% (9.0% with holding off and no recovery), CV 0.43
+    (0.49), lateness 103 s (112 s), left behind 824k (937k); operating +$1.4M/day, −$0.28M/day
     after interest; scorecard 56.1 → **BBB**, new bonds 3.10% (the design's table: 56.4, BBB).
-  - With 2 suggested timepoints per route: bunched 3.2%, lateness 115 s, riders unchanged.
-  - London core: 764k (+0.4%), bunched 1.2%, lateness 10 s (32 s with everything off), operating
-    −£0.31M/day; it doesn't cover its operating costs (farebox 0.86), so it rates **CCC** (7%).
+  - With 2 suggested timepoints per route: bunched 2.4%, CV 0.40, lateness 102 s, riders unchanged.
+  - London core: 764k (+0.4%), bunched 0.4%, CV 0.12, lateness 8 s (32 s with everything off),
+    operating −£0.31M/day; it recovers 86% of its operating costs and loses a little before
+    interest. With New York's anchors that is CCC from the first review (a career replay: scores
+    24.7–26.2); London's own anchors (`CITY_BALANCE.london.credit`: farebox × 0.6, coverage 0.5
+    lower) rate it **BB** (45.1, new bonds 3.75%), a London network covering its costs by a quarter
+    BBB (59.8), debt-free sprawl BB (40) as in New York.
   - Sprawl: New York $5.00B, −$0.81M/day; London £3.43B, −£0.59M/day; both BB with no debt.
   - Fares on the New York core: $3.25 peak / $2.50 off-peak, average fare $3.225, riders −0.4%,
     operating +$1.6M/day; low-income half, average fare $2.891, band-0 transit share 13.5% →
     14.5%, riders +0.5%, operating +$1.2M/day. 96.7% of fare trips start in a peak (London 96.4%).
   - 0 deadlocks in every run.
+
+**Second review fixes.**
+- Regularity and holds judged by the dispatch headway (above); `tests/ops.test.ts` "headway
+  changes" checks a noise-free line through every period change and an event-service window.
+- The v3 → v4 migration rebuilds `months[].debtEnd` from the bonds (`v3DebtAt`: before v4 nothing
+  repaid a bond early, so every bond is in the save, on v1's schedule, replayed with the old
+  payment loop's arithmetic; exact). `YearReview.money.debtStart/debtEnd` are `number | null`, and
+  the review shows "—" for an unknown figure instead of $0.
+- `rating-a` counts only a rating set by a month-end review (`market.history.length > 0`): a new
+  career's AAA is a placeholder until the first review.
+- The year review's span (`firstDay`/`lastDay`) and peak day come from the closed months' days,
+  like its totals ("so far" in February covers January).
+- `serviceEstimate(cr, from, to, headwayMin, recoveryPct)` sizes the fleet with `roundTripTime`
+  (recovery included, as `trainsNeeded`); the frequency cap stays on the physical round trip.
+- `suggestTimepoints` prefers an unshared stop only within (n − 1) / 6 stops of each target, else
+  the nearest stop, and never picks a stop next to one already picked when there is a choice.
+- Per-city scorecard anchors: `CityBalance.credit` (farebox, coverage), applied by `applyCity`.
 
 ## Implementation notes (UI)
 
@@ -211,7 +241,20 @@ Checklist steps 11 (app wiring), 12 and 15 and the README's controls are done, f
 - Rating and shock toasts stay 7 s and open Borrowing on click. Loading a save from before v4
   shows a one-off "New: operations control, fares and the bond market" toast (as city chaos did).
 - M closes the panel when Finances is open (and opens it over the route tool); H is ignored while
-  the route tool is active. A rebuilt panel (after Apply, a money change or a day end) keeps its
+  the route tool is active. A rebuild of the same route panel (H, a routes event, Revert, Apply)
+  carries its draft (`Panel.carry`, merged three-way by `mergeDraft`: a setting the player changed
+  keeps the draft's value, the others take the route's), so H applies holding at once without
+  dropping other unapplied edits.
+- Keyboard focus survives a panel rebuild on controls marked `data-focus` (the fare sliders, the
+  checkbox, the low-income buttons, the finance tabs): arrow keys keep stepping a fare.
+  `App.setFares` no longer rebuilds the panel itself (the `'money'` event does, once). Moving either
+  fare slider of a split policy sets `App.fareSplit`, so the off-peak slider doesn't lock itself
+  when the two fares meet.
+- After a load or Continue the worker has no yesterday for regularity; the route panel then takes
+  yesterday's figures from the saved last report (`regularityWithReport`, which also re-derives the
+  recovery advice; the per-stop chart is marked "today so far").
+- The year review's riders chart follows its column (a `ResizeObserver`; the grid cells have
+  `min-width: 0`), down to 160 px at phone width. A rebuilt panel (after Apply, a money change or a day end) keeps its
   scroll position, and any tooltip from the old panel is hidden.
 
 **Checked in the browser** (Vite dev server, Playwright with SwiftShader, 1440×900 and 1280×720,

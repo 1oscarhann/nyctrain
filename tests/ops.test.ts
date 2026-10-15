@@ -225,6 +225,43 @@ describe('holding and city chaos in the train sim', () => {
   });
 });
 
+describe('headway changes (periods, event service)', () => {
+  it('judges gaps by the headway trains were dispatched under: an on-time line is even and never held', () => {
+    // Noise-free 20-stop line with the default headways (night 20, am 4, midday 8, pm 4, evening
+    // 10 min) and 2-minute event service 17:00–18:00. Trains dispatched just before 10:00 or 20:00
+    // reach the downstream stops under the longer headway; before the fix they read as bunched
+    // (110 of 266 headways in the hour after 20:00) and were held at every timepoint.
+    const run = (hold: number) => {
+      const { net, route } = syntheticLine({ stops: 20, spacing: 1200, headway: 240, cars: 8, hold, timepoints: hold ? [5, 10, 15] : [] });
+      const hw = { night: 20, am: 4, midday: 8, pm: 4, evening: 10 };
+      route.headways = [hw.night, hw.am, hw.midday, hw.pm, hw.evening].map((m) => m * 60);
+      route.fleet = trainsNeeded({ headways: { ...hw, pm: 2 } }, [route.dirs[0].runTime, route.dirs[1].runTime]) + 2;
+      const sim = new TrainSim({ arrive: () => ({ alight: 0, board: 0 }), depart() {}, evacuate() {}, pass() {} }, 1);
+      const t0 = 5 * 3600;
+      sim.setNetwork(net, t0);
+      sim.setOverrides([{ id: 1, routeId: route.id, from: 17 * 3600, to: 18 * 3600, headwayMin: 2, eventId: 0 }]);
+      let heldMax = 0;
+      for (let t = t0 + TIME.simStep; t <= 21.5 * 3600; t += TIME.simStep) {
+        sim.step(t, TIME.simStep);
+        heldMax = Math.max(heldMax, sim.heldCount());
+      }
+      return { stats: sim.closeDayRegularity().routes[route.id], heldMax, deadlocks: sim.day.deadlocks };
+    };
+    for (const hold of [0, 0.7]) {
+      const r = run(hold);
+      expect(r.stats.samples).toBeGreaterThan(3000);
+      expect(r.stats.cv).toBeLessThan(0.01);
+      expect(r.stats.bunched).toBe(0);
+      expect(r.stats.gaps).toBe(0);
+      expect(Math.abs(r.stats.ewt)).toBeLessThan(0.5);
+      expect(r.stats.termLate).toBeLessThan(1);
+      expect(r.stats.holds).toBe(0);
+      expect(r.heldMax).toBe(0);
+      expect(r.deadlocks).toBe(0);
+    }
+  });
+});
+
 describe('terminal holding', () => {
   it('spaces departures that a late start has backlogged', () => {
     const first2 = (hold: number) => {
@@ -275,6 +312,15 @@ describe('recovery and fleet sizing', () => {
     expect(suggestTimepoints(r, [r])).toEqual([4, 7]);
     // Stop 4 is shared: the nearest unshared one instead.
     expect(suggestTimepoints(r, [r, { id: 2, stops: [4, 20] }])).toEqual([3, 7]);
+    // An 8-stop line sharing stops 3–6 with another route (London's Central and a route from
+    // Holborn to Liverpool Street): one near each target, not two adjacent western stops.
+    const central = { id: 1, stops: [10, 11, 12, 13, 14, 15, 16, 17] };
+    expect(suggestTimepoints(central, [central, { id: 2, stops: [13, 14, 15, 16, 30] }])).toEqual([12, 15]);
+    // Every stop near the second target taken or shared: never next to the first pick.
+    const tps = suggestTimepoints(central, [central, { id: 2, stops: [11, 13, 14, 15, 16] }]);
+    expect(tps.length).toBe(2);
+    const at = tps.map((s) => central.stops.indexOf(s));
+    expect(Math.abs(at[1] - at[0])).toBeGreaterThan(1);
     expect(suggestTimepoints({ id: 1, stops: [1, 2, 3, 4, 5] }, [])).toEqual([3]);
     expect(suggestTimepoints({ id: 1, stops: [1, 2] }, [])).toEqual([]);
     expect(defaultControl()).toMatchObject({ hold: true, holdFraction: 0.7, recoveryPct: 0.1, shortTurn: true, timepoints: [] });

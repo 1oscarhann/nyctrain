@@ -107,7 +107,10 @@ export function checkGoals(game: Game, state: GoalState, report: DayReport | nul
   const lastMonth = game.finance.months[game.finance.months.length - 1];
   mark('monthly-profit', !!lastMonth && lastMonth.profit > 0 && !game.sandbox);
   // Money market and operations control (v2).
-  const rating = game.finance.market.rating;
+  // Only a rating set by a month-end review counts: a new career starts at AAA as a placeholder
+  // (month 1 borrows at the market rate), and a migrated save is rated on load until its first review.
+  const market = game.finance.market;
+  const rating = market.history.length > 0 ? market.rating : null;
   mark('rating-a', !game.sandbox && rating !== null && ratingIndex(rating) <= ratingIndex(GOALS.ratingGoal) && game.finance.debt() >= GOALS.ratingGoalMinDebt);
   const reg = report?.regularity;
   mark(

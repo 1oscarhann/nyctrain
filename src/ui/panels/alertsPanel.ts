@@ -381,7 +381,7 @@ function serviceEditor(app: App, ev: FeedEvent, close: () => void): HTMLElement 
       let km = 0, cost = 0, needed = 0, owned = r.fleet, eff = st.hw * 60;
       for (const [a, b] of ws) {
         if (b <= a) continue;
-        const e = serviceEstimate(r, a, b, st.hw);
+        const e = serviceEstimate(r, a, b, st.hw, app.game.routes.get(r.id)?.control.recoveryPct ?? 0);
         km += e.extraCarKm;
         cost += e.cost;
         needed = e.trainsNeeded;

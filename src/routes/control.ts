@@ -38,8 +38,10 @@ export function normalizeControl(c: Partial<RouteControl> | undefined | null, ba
 /**
  * Suggested timepoints: for each fraction in OPS_CONTROL.suggestTimepointsAt, the intermediate stop
  * nearest that point of the stop list, preferring stops no other route serves (so a hold never sits
- * on an interlined platform) and falling back to the nearest one. Each stop is picked once. Routes
- * with fewer than OPS_CONTROL.suggestOneBelow stops get one timepoint at the midpoint.
+ * on an interlined platform) within (n − 1) / 6 stops of the target, and otherwise the nearest one
+ * even if shared (so both don't end up at one end of an interlined route). Each stop is picked once,
+ * and not next to one already picked when there is a choice. Routes with fewer than
+ * OPS_CONTROL.suggestOneBelow stops get one timepoint at the midpoint.
  */
 export function suggestTimepoints(r: Pick<Route, 'id' | 'stops'>, all: readonly Pick<Route, 'id' | 'stops'>[]): number[] {
   const n = r.stops.length;
@@ -48,13 +50,20 @@ export function suggestTimepoints(r: Pick<Route, 'id' | 'stops'>, all: readonly 
   for (const o of all) if (o.id !== r.id) for (const s of o.stops) shared.add(s);
   const fracs = n < OPS_CONTROL.suggestOneBelow ? [0.5] : OPS_CONTROL.suggestTimepointsAt;
   const picked: number[] = [];
+  const pickedAt: number[] = [];
+  const window = (n - 1) / 6;
   for (const f of fracs) {
     const target = Math.round(f * (n - 1));
-    const cands: number[] = [];
-    for (let k = 1; k < n - 1; k++) if (!picked.includes(r.stops[k])) cands.push(k);
-    cands.sort((a, b) => Math.abs(a - target) - Math.abs(b - target) || a - b);
-    const k = cands.find((c) => !shared.has(r.stops[c])) ?? cands[0];
-    if (k !== undefined) picked.push(r.stops[k]);
+    const free: number[] = [];
+    for (let k = 1; k < n - 1; k++) if (!picked.includes(r.stops[k])) free.push(k);
+    free.sort((a, b) => Math.abs(a - target) - Math.abs(b - target) || a - b);
+    const apart = free.filter((c) => !pickedAt.some((p) => Math.abs(p - c) <= 1));
+    const cands = apart.length ? apart : free;
+    const k = cands.find((c) => Math.abs(c - target) <= window && !shared.has(r.stops[c])) ?? cands[0];
+    if (k !== undefined) {
+      picked.push(r.stops[k]);
+      pickedAt.push(k);
+    }
   }
   // In route order.
   return r.stops.filter((s) => picked.includes(s));

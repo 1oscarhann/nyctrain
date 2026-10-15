@@ -138,15 +138,18 @@ from the data when the save is loaded.
 ## Testing each part
 
 ```bash
-npm test                 # all 133 tests (unit + headless, both cities)
-npm run test:unit        # 117: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+npm test                 # all 148 tests (unit + headless, both cities)
+npm run test:unit        # 132: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
                          # chaos (calendar, weather, incidents, train-sim hooks and the watchdog's scope, event
                          # trips, event service, save v3 with today's level), chaos UI (alert text, feed and
                          # ticker order, announcements, cancelled service, wrap-up toasts, London wording and £),
-                         # operations control (regularity maths, holding on a synthetic line, the yield rule,
-                         # short turns, holding next to chaos, recovery sizing, timepoints, car sales), the
-                         # money market (scorecard, hysteresis, rate walk, coupons, refinance, prepay, monthly
-                         # review, year in review, save v4, the rating and clockwork goals) and fares (by band and period, mode choice, London)
+                         # operations control (regularity maths, holding on a synthetic line, headway changes
+                         # at period ends and event service, the yield rule, short turns, holding next to chaos,
+                         # recovery sizing, timepoints, car sales), the money market (scorecard, hysteresis,
+                         # rate walk, coupons, refinance, prepay, monthly review, year in review, save v4 with
+                         # old months' debt rebuilt, the rating and clockwork goals, London's scorecard), fares
+                         # (by band and period, mode choice, London) and the panels' pure helpers (route drafts
+                         # kept across a rebuild, yesterday's regularity after a load)
 npm run test:headless    # 16: 3 days on the test network (with regularity and fares by band and period),
                          # holding against no holding, holding next to Wild chaos and event service, chaos end
                          # to end (closures, event agents, determinism, snow, breakdowns, Off is inert, mid-day
@@ -222,9 +225,9 @@ Every value is in `src/balance.ts`. Main values (spec values unless noted):
 | Operations | turnaround 3 min; dwell 20 s + 1 s × (on + off) ÷ cars, max 90 s, ×1.5 above comfort; moving block = braking distance + 100 m; default headways night 20 / AM 4 / midday 8 / PM 4 / evening 10 min |
 | Commuters | 1 agent = 10 people (285,288 agents); depart 8:15 ± 45 min; walk ≤ 2.5 km; drive 14 km/h Manhattan, 24 elsewhere; CBD parking 20 min + $20; VOT $10/$20/$40 per h; logit scale 0.085; transfer penalty 5 min; 30% daily smoothing |
 | Economy | $6B start; fare $3 all day ($0–5, step $0.25; peak and off-peak fares, low-income fare full/half/free for the lowest band); $4 per car-km; $8k per station per day; maintenance 1% of build cost per year; bonds $1B chunks up to $20B outstanding, 30 years; used cars sell for 40% |
-| Operations control | new routes hold at the first stop at 70% of the headway, 10% recovery; timepoint holds ≤ 90 s, yield to another route's train within 400 m; short turnaround 2 min when the next departure is due; bunched < ½ headway, gaps > 1.5×; regularity grades CV 0.25 / 0.45 |
+| Operations control | new routes hold at the first stop at 70% of the headway, 10% recovery; timepoint holds ≤ 90 s, yield to another route's train within 400 m; short turnaround 2 min when the next departure is due; bunched < ½ headway, gaps > 1.5× (of the headway the trains were dispatched under); regularity grades CV 0.25 / 0.45 |
 | Bond market | base rate starts at 2.5%, mean-reverting (12%/month, σ 0.2%), shocks ±0.75% (4%/month, 60% up), 1–6%; spread AAA 0 … BBB +0.6% … CCC +4.5%; prepay penalty 1%; refinance fee 1% (gain ≥ 0.05%) |
-| Credit rating | monthly scorecard: farebox recovery 30%, interest coverage 30%, leverage 25%, liquidity 15% (ratios, so currency-free); AAA ≥ 85, AA 75, A 65, BBB 52, BB 40, B 28; ±2 hysteresis; 60-day window |
+| Credit rating | monthly scorecard: farebox recovery 30%, interest coverage 30%, leverage 25%, liquidity 15% (ratios, so currency-free); AAA ≥ 85, AA 75, A 65, BBB 52, BB 40, B 28; ±2 hysteresis; 60-day window; London has its own farebox and coverage anchors (below) |
 
 ### Where the numbers differ from the spec, and why
 
@@ -248,7 +251,7 @@ Every value is in `src/balance.ts`. Main values (spec values unless noted):
 
 | Scenario | Network | Capital | Riders/day | Daily money |
 |---|---|---|---|---|
-| **Core** (`balance -- scenario=core`) | 4 deep routes, 40 stations: Lexington, CPW–Atlantic, Times Sq–Jackson Hts, 6 Av–Myrtle–Wyckoff; 67 trains (holding, 10% recovery: one more train per route) | $23.3B (needs $17.3B of bonds) | 1.35M on day 11 (still rising slowly), 21% transit share | Operating +$1.4M/day; −$0.29M/day after bond interest; −$1.8M/day after full debt service; rated BBB (new bonds 3.10%) |
+| **Core** (`balance -- scenario=core`) | 4 deep routes, 40 stations: Lexington, CPW–Atlantic, Times Sq–Jackson Hts, 6 Av–Myrtle–Wyckoff; 67 trains (holding, 10% recovery: one more train per route) | $23.3B (needs $17.3B of bonds) | 1.35M on day 11 (still rising slowly), 21% transit share | Operating +$1.4M/day; −$0.28M/day after bond interest; −$1.8M/day after full debt service; rated BBB (new bonds 3.10%) |
 | **Sprawl** (`scenario=sprawl`) | Elevated Jamaica–Glen Oaks and St George–Huguenot | $5.00B | 15.7k | −$0.81M/day; rated BB with no debt |
 
 So the core covers its operating costs and interest at about 1.45–1.5M riders. Repaying the
@@ -265,13 +268,14 @@ are in `CITY_BALANCE.london`:
 | Area | London |
 |---|---|
 | Money | £5B start; fares £2.80 peak (6–10 am, 4–8 pm) / £2.70 off-peak (£0–5, step £0.10; the flat fare of older saves and of `ops=off` is £2.80); values of time £8/£14/£26 per hour |
+| Credit | the same ratios, judged against London's ridership: farebox anchors × 0.6 (0.3 / 0.6 / 0.9 / 1.2× for 0 / 50 / 80 / 100 points) and coverage anchors 0.5 lower (−0.5 / 0 / 0.5 / 1.0 / 2.5×), since the same central network carries about 58% of New York's riders |
 | Driving | 13 km/h in inner London (the 14 ONS inner boroughs), 24 km/h outside; £0.25/km; drive constant +35 min (fewer London households own a car) |
 | CBD | inside the inner ring road (approximately the congestion-charge zone): 20 min and £25 (£15 charge plus parking) |
 | Goals | Cross the Thames; reach every borough (stretch); Bank to Heathrow in under 45 minutes; plus the shared milestones |
 
 | Scenario | Network | Capital | Riders/day | Daily money |
 |---|---|---|---|---|
-| **Core** (`city=london scenario=core`) | 4 deep routes, 43 stations: Paddington–Bank–Stratford, Kentish Town–King's Cross–Elephant–Brixton, Victoria–Waterloo–Canary Wharf–North Greenwich, Hammersmith–Piccadilly–Cannon St–Shadwell | £24.3B (needs £19.3B of bonds) | 764k on day 11, 13% transit share | Operating −£0.31M/day; −£2.2M/day after bond interest; rated CCC (new bonds 7.00%: it doesn't cover its operating costs) |
+| **Core** (`city=london scenario=core`) | 4 deep routes, 43 stations: Paddington–Bank–Stratford, Kentish Town–King's Cross–Elephant–Brixton, Victoria–Waterloo–Canary Wharf–North Greenwich, Hammersmith–Piccadilly–Cannon St–Shadwell | £24.3B (needs £19.3B of bonds) | 764k on day 11, 13% transit share | Operating −£0.31M/day; −£2.2M/day after bond interest; rated BB (new bonds 3.75%: it recovers 86% of its operating costs; New York's anchors would rate it CCC) |
 | **Sprawl** (`scenario=sprawl`) | Elevated Dagenham–Upminster and Eltham–Bexleyheath | £3.43B | 16k | −£0.59M/day; rated BB with no debt |
 
 (With `ops=off`: 761k, £24.2B, −£0.29M/−£2.1M a day; sprawl £3.38B, −£0.59M/day, as before
@@ -299,6 +303,12 @@ the fleet stays at 431 trains), on this shared machine, medians of 6 interleaved
 | chaos Off | 217 ms | 232 ms (`ops=off`: 222 ms) |
 | chaos Normal (76 holds in the timed hour) | 237 ms | 226 ms |
 | `chaos=wild weather=snow outdoor=1` (279 holds in the timed hour) | 307 ms | 309 ms |
+
+After the second review's fixes (regularity and holds judged by the dispatch headway, suggested
+timepoints spaced out), medians of 6 interleaved runs on a busier moment of the machine: `pre-ops`
+271 ms, now 264 ms (`ops=off` 299 ms); chaos Normal (3 runs) 247 → 274 ms. Single runs ranged from
+214 to 382 ms, with the same 40,320 boardings and 1,090 waiting as `pre-ops`; all far inside the
+1,000 ms budget.
 
 Single runs vary by ±40 ms here, so the same hour was also timed in one process, stepping the old
 and new engines alternately in 30-step chunks: the new code costs about +3.5% with operations
@@ -338,7 +348,7 @@ sim and the UI).
 - **Event service.** "Event service…" on an event card opens an inline editor:
   - routes stopping within 1.2 km of the venue are ticked;
   - a window before and one after the event (15-minute steps), and a headway;
-  - per route: trains needed against owned, the effective headway if the fleet is short, and
+  - per route: trains needed (sized with the route's recovery, as in the route panel) against owned, the effective headway if the fleet is short, and
     the extra car-km and their cost in dollars or pounds.
 
   Planned service shows under the event card and in the route panel (Frequency), with
@@ -509,20 +519,25 @@ top sections have the implementation notes for the sim and the UI).
 - **Regularity** is measured at every departure: headway CV, the share bunched (under half the
   headway) or gapped (over 1.5×), the excess wait riders feel, holds, and the mean lateness into
   the terminals (a recovery advisor). It is in each day's report, per route and for the network.
+  Gaps are judged against the headway the trains were dispatched under (a train sent at 09:58 on
+  the 4-minute peak still reaches the far end after 10:00, when midday's 8 minutes are in force),
+  and holds use the same rule, so an on-time train is never held at a period change or at the
+  start or end of event service.
 
 Routes from older saves keep their fleet: holding off, no recovery (short turnarounds on).
 
 | Core, day 11 (headless) | Bunched | Headway CV | Lateness | Left behind | Riders |
 |---|---|---|---|---|---|
-| New York, holding off, no recovery | 10.1% | 0.50 | 112 s | 937k | 1,340,860 |
-| New York, new-route defaults | 5.7% | 0.43 | 99 s | 694k | 1,348,040 |
-| New York, defaults + 2 suggested timepoints per route | 3.2% | 0.42 | 115 s | 791k | 1,347,140 |
+| New York, holding off, no recovery | 9.0% | 0.49 | 112 s | 937k | 1,340,860 |
+| New York, new-route defaults | 5.4% | 0.43 | 103 s | 824k | 1,349,870 |
+| New York, defaults + 2 suggested timepoints per route | 2.4% | 0.40 | 102 s | 686k | 1,346,640 |
 | London, everything off | — | — | 32 s | 16k | 760,560 |
-| London, new-route defaults | 1.2% | 0.15 | 10 s | 120 | 763,700 |
+| London, new-route defaults | 0.4% | 0.12 | 8 s | 120 | 763,700 |
 
-Timepoints even the gaps further but add some lateness (the timetable doesn't know about the holds).
-On the test network, day 1 bunching falls from 11.1% to 2.9%; on a synthetic busy line from 33.7%
-to 1.0%, carrying 32% more trains. No run had a deadlock, including holding next to Wild city chaos,
+Timepoints more than halve the bunching again; lateness moves a little either way from day to day
+(the timetable doesn't know about the holds). On the test network, day 1 bunching falls from 10.2%
+to 1.9%; on a synthetic busy line from 33.2% to 0.9%, carrying 32% more trains. A noise-free line
+whose headways change by period (and with event service) reads CV 0 and holds nobody. No run had a deadlock, including holding next to Wild city chaos,
 event service and a 40-minute breakdown.
 
 **Fares.** A peak fare (6–10 am, 4–8 pm), an off-peak fare and a low-income multiplier (full,
@@ -542,12 +557,14 @@ cash, with a ±2-point margin before it moves. A new game is AAA, so month 1 bor
 2.5%. Bonds can be prepaid (1% penalty, the maturity is kept with a lower payment) or refinanced
 at today's rate (1% fee, the remaining term is kept). Idle and spare cars sell for 40% of the
 new price. A year in review is built at each year end. The New York core rates BBB (3.10% for new
-bonds); London's core, which doesn't cover its operating costs, CCC (7%); a sprawl network with no
-debt BB.
+bonds); London's core, which recovers 86% of its operating costs, BB (3.75%) on London's own
+farebox and coverage anchors; a sprawl network with no debt BB in both cities. Only a rating set by
+a month-end review counts for the Investment grade goal (a new game's AAA is a placeholder).
 
 ### In the game
 
-- **Route panel.** *Service regularity* has four cards from yesterday (or today so far): the
+- **Route panel.** *Service regularity* has four cards from yesterday (after a load or Continue,
+  yesterday's from the saved report; otherwise today so far): the
   grade with the headway CV (even under 0.25, uneven under 0.45, then bunched), the share of
   bunched headways, the extra wait riders feel and the holds. Below them, *Headway spread along
   the line* charts the CV stop by stop for both directions, with the timepoints listed under it.
@@ -556,14 +573,18 @@ debt BB.
   a suggestion) and Timepoints (**Suggest**, **Clear**, and a clock toggle on every intermediate
   stop in the stop list). These edit the same draft as Frequency and Train length; **Apply** in
   the panel's footer commits them together and buys any trains. The fleet lines show the
-  recovery, and idle cars with a **Sell** button. **H** switches holding at once.
+  recovery, and idle cars with a **Sell** button. **H** switches holding at once and keeps any
+  other unapplied edits in the draft. **Suggest** picks a stop near ⅓ and ⅔ along the line,
+  preferring stops no other route serves when one is close to the target, and never two stops
+  side by side.
 - **Train panel.** A train held at a timepoint reads "Held at 110 St" in amber ("Waiting for an
   even gap behind the train ahead"). The routes list adds "gaps even", "uneven" or "bunching".
 - **Finances** (**M**), in tabs (the open tab is kept for the session):
   - **Overview:** cash, debt, bond room, assets, the credit rating (with an outlook arrow; click
     for the scorecard) and today's new-bond rate; yesterday's ledger with financing fees and bond
     prepayments; this month so far; the monthly chart; **Year in review** (any year with data).
-  - **Fares:** peak (6–10 am, 4–8 pm) and off-peak sliders, *Same fare all day*, the low-income
+  - **Fares:** peak (6–10 am, 4–8 pm) and off-peak sliders (they keep keyboard focus as each step
+    applies; a split policy stays split when the two fares meet), *Same fare all day*, the low-income
     fare (Full / Half / Free), and yesterday's fares: the peak share, the average fare, the lowest
     earners' share and transit share, and revenue by earnings band. In London the sliders move in
     10p steps.
@@ -580,7 +601,9 @@ debt BB.
   bonds issued, prepaid and refinanced, car sales and holding. The month report adds the credit
   rating and financing fees. On the first weekday of January the **year in review** replaces
   December's report: riders by month, money, the rating's path, the bond market's range and
-  shocks, service regularity and the goals of the year.
+  shocks, service regularity and the goals of the year. Every figure, and the date span, covers the
+  closed months; the riders chart follows the window's width. Months closed before v4 get their
+  month-end debt rebuilt from the bonds when the save migrates (unknown debt reads "—").
 
 ## Known issues
 

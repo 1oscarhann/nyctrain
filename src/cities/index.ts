@@ -4,7 +4,7 @@
  * New York defaults in balance.ts, applies the city's CITY_BALANCE overrides, and sets the
  * map projection origin and the currency symbol.
  */
-import { CITY_BALANCE, COMMUTERS, ECONOMY, GOALS, MAP, type CityBalance, type CityId, type ZoneRule } from '../balance';
+import { CITY_BALANCE, COMMUTERS, CREDIT, ECONOMY, GOALS, MAP, type CityBalance, type CityId, type ZoneRule } from '../balance';
 import { setOrigin } from '../core/geo';
 import { setCurrency } from '../core/units';
 import { LONDON } from './london';
@@ -22,6 +22,7 @@ const DEFAULTS = {
   COMMUTERS: structuredClone(COMMUTERS),
   ECONOMY: structuredClone(ECONOMY),
   GOALS: structuredClone(GOALS),
+  CREDIT: structuredClone(CREDIT),
 };
 
 let current: CityConfig = NYC;
@@ -36,6 +37,7 @@ export function applyCity(id: CityId): CityConfig {
   Object.assign(COMMUTERS, structuredClone(DEFAULTS.COMMUTERS), structuredClone(b.commuters));
   Object.assign(ECONOMY, structuredClone(DEFAULTS.ECONOMY), structuredClone(b.economy));
   Object.assign(GOALS, structuredClone(DEFAULTS.GOALS), structuredClone(b.goals));
+  Object.assign(CREDIT, structuredClone(DEFAULTS.CREDIT), structuredClone(b.credit));
   setOrigin(b.origin[0], b.origin[1]);
   current = CITIES[id];
   setCurrency(current.currency);

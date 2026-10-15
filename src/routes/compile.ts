@@ -210,7 +210,7 @@ type FleetRoute = Pick<Route, 'headways'> & { control?: Partial<Pick<RouteContro
  * Scheduled round trip, s: both one-way runs plus recovery (a share of the run time, split over
  * the two terminal layovers) plus two standard turnarounds.
  */
-export function roundTripTime(r: FleetRoute, runTimes: [number, number]): number {
+export function roundTripTime(r: Pick<FleetRoute, 'control'>, runTimes: [number, number]): number {
   const run = runTimes[0] + runTimes[1];
   const rec = r.control?.recoveryPct ?? 0;
   return (rec ? run * (1 + rec) : run) + 2 * OPERATIONS.turnaround;

@@ -1434,6 +1434,10 @@ table.fleet td {
   text-transform: uppercase;
   padding-top: 2px;
 }
+.yr-grid > * {
+  /* Lets the 1fr column shrink below the chart's current width (the chart then follows it). */
+  min-width: 0;
+}
 .yr-grid .chart {
   margin: 0 -4px;
 }

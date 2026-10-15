@@ -3,8 +3,8 @@
  * Pure (worker + Node). TrainSim keeps one RouteReg per route id and feeds it; the day's figures
  * go into the DayReport and the route query.
  *
- * Headways are measured as h / H against the scheduled headway H in force (event service
- * included). The coefficient of variation of h / H is the headline; "bunched" is the share of
+ * Headways are measured as h / H against the scheduled headway H the trains were dispatched
+ * under (event service included). The coefficient of variation of h / H is the headline; "bunched" is the share of
  * headways under OPS_CONTROL.bunchFactor × H, and the excess wait is what a rider arriving at
  * random waits beyond a perfectly even service: Σh²/(2Σh) − ΣhH/(2Σh).
  */
@@ -32,6 +32,12 @@ export interface RouteReg {
   routeId: number;
   /** Last departure time per stop (−Infinity = none yet). */
   lastDep: [Float64Array, Float64Array];
+  /**
+   * Dispatch slot (schedStart) of the train that made that departure. Headways are judged against
+   * the headway the trains were dispatched under, not the one in force when they reach a stop
+   * downstream (a train sent at 09:58 under the 4-minute peak reaches stop 10 under midday's 8).
+   */
+  lastSched: [Float64Array, Float64Array];
   n: [Float64Array, Float64Array];
   sx: [Float64Array, Float64Array];
   sxx: [Float64Array, Float64Array];
@@ -55,6 +61,7 @@ export function newRouteReg(routeId: number, stops0: number, stops1: number, run
   return {
     routeId,
     lastDep: [z(stops0).fill(-Infinity), z(stops1).fill(-Infinity)],
+    lastSched: [z(stops0).fill(-Infinity), z(stops1).fill(-Infinity)],
     n: [z(stops0), z(stops1)],
     sx: [z(stops0), z(stops1)],
     sxx: [z(stops0), z(stops1)],

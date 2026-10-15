@@ -3,14 +3,14 @@
  * finance history. Pure, so it is tested without a DOM.
  */
 import { ECONOMY } from '../balance';
-import { dateOfDay, yearOf } from '../core/calendar';
+import { dateOfDay, monthKey, yearOf } from '../core/calendar';
 import type { GoalState } from '../core/goals';
 import type { Rating } from './credit';
 import type { FinanceData, MonthReport } from './finance';
 
 export interface YearReview {
   year: number;
-  /** First and last settled game day of the year in the history (null if none is kept). */
+  /** First and last settled game day of the year's closed months in the history (null if none is kept). */
   firstDay: number | null;
   lastDay: number | null;
   /** Weekdays (game days) settled in the year's months. */
@@ -33,8 +33,9 @@ export interface YearReview {
     profit: number;
     cashStart: number;
     cashEnd: number;
-    debtStart: number;
-    debtEnd: number;
+    /** Null when unknown (months closed before v4 whose debt could not be rebuilt). */
+    debtStart: number | null;
+    debtEnd: number | null;
   };
   credit: { start: Rating | null; end: Rating | null; changes: { label: string; from: Rating; to: Rating }[] };
   market: {
@@ -60,7 +61,10 @@ export function buildYearReview(f: Pick<FinanceData, 'months' | 'history' | 'mar
   const prev: MonthReport | undefined = before[before.length - 1];
   const sum = (g: (m: MonthReport) => number) => months.reduce((s, m) => s + g(m), 0);
   const weekdays = sum((m) => m.days);
-  const days = f.history.filter((h) => yearOf(h.day) === year);
+  // The year's settled days in its closed months only, like every total here (a review "so far"
+  // opened in February covers January; the open month's days aren't in the totals or the span).
+  const closed = new Set(months.map((m) => m.key));
+  const days = f.history.filter((h) => yearOf(h.day) === year && closed.has(monthKey(h.day)));
   // Peak day from the daily history (≤ 400 days, which covers a 261-day year).
   let peak: { day: number; riders: number } | null = null;
   for (const h of days) if (h.riders > 0 && (!peak || h.riders > peak.riders)) peak = { day: h.day, riders: h.riders };
@@ -88,7 +92,8 @@ export function buildYearReview(f: Pick<FinanceData, 'months' | 'history' | 'mar
     if (!low || m.base < low.rate) low = { label: m.label, rate: m.base };
     if (!high || m.base > high.rate) high = { label: m.label, rate: m.base };
   }
-  const debtOf = (m: MonthReport | undefined) => (m && m.debtEnd !== null && m.debtEnd !== undefined ? m.debtEnd : 0);
+  // No month before: the game's start (no debt). A month closed before v4 without a figure: unknown.
+  const debtOf = (m: MonthReport | undefined) => (!m ? 0 : typeof m.debtEnd === 'number' ? m.debtEnd : null);
   return {
     year,
     firstDay: days.length ? days[0].day : null,

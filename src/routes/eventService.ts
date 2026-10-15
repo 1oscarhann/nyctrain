@@ -6,6 +6,7 @@ import { ECONOMY, EVENTS, OPERATIONS } from '../balance';
 import type { CityEvent } from '../core/cityCalendar';
 import type { CompiledNetwork, CRoute } from '../sim/protocol';
 import { periodIndex } from '../sim/trainSim';
+import { roundTripTime } from './compile';
 
 export interface RouteNearVenue {
   routeId: number;
@@ -63,7 +64,10 @@ export interface ServiceEstimate {
   extraCarKm: number;
   /** At ECONOMY.operatingPerCarKm. */
   cost: number;
-  /** Trains to run the requested headway (incl. spares), like trainsNeeded() in compile.ts. */
+  /**
+   * Trains to run the requested headway (incl. spares), sized like trainsNeeded() in compile.ts:
+   * the round trip includes the route's recovery, so it agrees with the route panel.
+   */
   trainsNeeded: number;
   trainsOwned: number;
   /** The headway the owned fleet can actually run, seconds (≥ the requested one). */
@@ -74,10 +78,14 @@ export interface ServiceEstimate {
  * What running `cr` every `headwayMin` minutes in [from, to) (absolute game seconds) adds. The
  * route's own headway applies where it is shorter, and the fleet caps the frequency at
  * roundTrip / fleet. Extra trips are counted per 10-minute slice against the route's own service.
+ * `recoveryPct` is the route's recovery (Route.control): it sizes the fleet the timetable needs,
+ * while the frequency cap uses the physical round trip (the sim adds no layover; recovery is the
+ * extra trains waiting at the terminals).
  */
-export function serviceEstimate(cr: CRoute, from: number, to: number, headwayMin: number): ServiceEstimate {
+export function serviceEstimate(cr: CRoute, from: number, to: number, headwayMin: number, recoveryPct = 0): ServiceEstimate {
   const h = headwayMin * 60;
-  const roundTrip = cr.dirs[0].runTime + cr.dirs[1].runTime + 2 * OPERATIONS.turnaround;
+  const runTimes: [number, number] = [cr.dirs[0].runTime, cr.dirs[1].runTime];
+  const roundTrip = roundTripTime({}, runTimes);
   const fleet = cr.fleet;
   const effectiveHeadway = fleet > 0 ? Math.max(h, roundTrip / fleet) : Infinity;
   let trips = 0;
@@ -93,7 +101,7 @@ export function serviceEstimate(cr: CRoute, from: number, to: number, headwayMin
   return {
     extraCarKm,
     cost: extraCarKm * ECONOMY.operatingPerCarKm,
-    trainsNeeded: Math.ceil(roundTrip / h) + OPERATIONS.spareTrains,
+    trainsNeeded: Math.ceil(roundTripTime({ control: { recoveryPct } }, runTimes) / h) + OPERATIONS.spareTrains,
     trainsOwned: fleet,
     effectiveHeadway,
   };

@@ -756,8 +756,12 @@ export class TrainSim {
    */
   private holdAtTerminal(ri: number, r: CRoute, ds: DispatchState, d: 0 | 1, t: number): boolean {
     if (r.hold) {
-      const H = this.headwayAt(ri, r, t);
-      if (H > 0 && t + OPERATIONS.dwellBase - this.regs[ri].lastDep[d][0] < r.hold * H) {
+      const g = this.regs[ri];
+      const last = g.lastDep[d][0];
+      // Judged against the gap the timetable gives behind the train ahead (see gapHeadway), from
+      // its slot and the slot this departure takes.
+      const H = isFinite(last) ? this.gapHeadway(ri, r, g.lastSched[d][0], ds.pending[d][0]) : 0;
+      if (H > 0 && t + OPERATIONS.dwellBase - last < r.hold * H) {
         if (isNaN(ds.holdSince[d])) ds.holdSince[d] = t;
         return true;
       }
@@ -772,17 +776,36 @@ export class TrainSim {
   }
 
   /**
-   * Regularity: the headway behind the previous departure from this stop, counted when that one
-   * left in the same period of the same day, at the same headway in force (event service).
+   * Regularity: the headway behind the previous departure from this stop, judged against the
+   * headway this train was dispatched under (its slot, schedStart), not the one in force when it
+   * gets here: a train sent at 09:58 under the 4-minute peak reaches stop 10 after 10:00. It counts
+   * when the previous train was dispatched in the same period of the same day, at the same headway
+   * in force (event service).
    */
   private noteDeparture(tr: Train, r: CRoute, t: number): void {
     const g = this.regs[tr.route];
-    const last = g.lastDep[tr.dir][tr.stop];
-    const day0 = Math.floor(t / SECONDS_PER_DAY) * SECONDS_PER_DAY;
-    const pi = periodOfTod(t - day0);
+    const d = tr.dir, k = tr.stop;
+    const prev = g.lastSched[d][k];
+    const s = tr.schedStart;
+    g.lastSched[d][k] = s;
+    const day0 = Math.floor(s / SECONDS_PER_DAY) * SECONDS_PER_DAY;
+    const pi = periodOfTod(s - day0);
     const ov = this.ovByRoute[tr.route] !== undefined;
-    const H = ov ? this.headwayAt(tr.route, r, t) : r.headways[pi];
-    recordHeadway(g, tr.dir, tr.stop, t, H, last >= day0 + PERIOD_START[pi] && (!ov || this.headwayAt(tr.route, r, last) === H));
+    const H = ov ? this.headwayAt(tr.route, r, s) : r.headways[pi];
+    recordHeadway(g, d, k, t, H, prev >= day0 + PERIOD_START[pi] && prev <= s && (!ov || this.headwayAt(tr.route, r, prev) === H));
+  }
+
+  /**
+   * The headway to hold against behind the train ahead: the shorter of the headways in force at
+   * its dispatch slot and at this train's. The timetable's gap between two consecutive slots is
+   * never shorter (it is the first one's headway, or the second's where event service pulls a slot
+   * in), so an on-time train is never held across a period change or the start or end of event
+   * service, while a late one is still spaced out.
+   */
+  private gapHeadway(ri: number, r: CRoute, aheadSlot: number, slot: number): number {
+    const ha = this.headwayAt(ri, r, aheadSlot);
+    const hb = this.headwayAt(ri, r, slot);
+    return ha > 0 ? (hb > 0 ? Math.min(ha, hb) : ha) : hb;
   }
 
   /**
@@ -800,8 +823,10 @@ export class TrainSim {
     // service or no train ahead yet: no hold (and one in progress ends).
     let ok = !!r.hold && !!dir.timepoint && dir.timepoint[tr.stop] === 1;
     if (ok && this.closedUntil.length && this.closedUntil[dir.stopStation[tr.stop]] > t) ok = false;
-    const H = ok ? this.headwayAt(tr.route, r, t) : 0;
-    const last = ok ? this.regs[tr.route].lastDep[tr.dir][tr.stop] : -Infinity;
+    const g = this.regs[tr.route];
+    const last = ok ? g.lastDep[tr.dir][tr.stop] : -Infinity;
+    // The headway the two trains were dispatched under (not the one in force here and now).
+    const H = ok && isFinite(last) ? this.gapHeadway(tr.route, r, g.lastSched[tr.dir][tr.stop], tr.schedStart) : 0;
     if (!ok || !(H > 0) || !isFinite(last)) {
       if (held) this.endHold(tr, t);
       return false;

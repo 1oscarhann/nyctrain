@@ -8,6 +8,8 @@ export interface Panel {
   /** Called after a day closes. */
   dayEnd?(): void;
   destroy?(): void;
+  /** State a rebuild of the same panel starts from (the route panel's unapplied edits). */
+  carry?(): unknown;
 }
 
 export function shell(kicker: string, title: Node | string, onClose: () => void, lead?: Node | null): { el: HTMLElement; body: HTMLElement; titleEl: HTMLElement } {

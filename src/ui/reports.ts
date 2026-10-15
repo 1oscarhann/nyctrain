@@ -64,7 +64,8 @@ export function showYearReview(app: App, year: number): void {
   // This year's months so far (the review of a finished year is shown from 1 January on).
   const partial = year >= yearOf(g.day);
   const t = yearReviewText(rev, { sandbox: g.sandbox, partial });
-  let chart: { destroy(): void } | null = null;
+  let chart: ReturnType<typeof barChart> | null = null;
+  let resize: ResizeObserver | null = null;
   let close: () => void = () => {};
   const cards = h('div', { class: 'yr-cards' });
   for (const c of t.cards) {
@@ -99,7 +100,12 @@ export function showYearReview(app: App, year: number): void {
       h('button', { class: 'hw-btn primary', onclick: () => close() }, 'Continue'),
     ),
   );
-  close = modal(app.root, content, { onClose: () => chart?.destroy() });
+  close = modal(app.root, content, {
+    onClose: () => {
+      resize?.disconnect();
+      chart?.destroy();
+    },
+  });
   content.parentElement?.classList.add('year-review');
   const by = rev.riders.byMonth;
   if (by.length) {
@@ -109,8 +115,16 @@ export function showYearReview(app: App, year: number): void {
       const k = MONTHS.indexOf(m.label.slice(0, 3));
       if (k >= 0) ys[k] = m.avg;
     }
-    const w = Math.max(280, Math.min(480, chartWrap.clientWidth || 470));
-    chart = barChart(chartWrap, MONTHS.map((_, i) => i), ys as number[], CHART_TEAL, (i) => MONTHS[i] ?? '', 'Riders/day', w, 140, 'Month');
+    // The chart follows its column as the window (and so the modal) resizes.
+    const fit = () => Math.max(160, Math.min(480, Math.floor(chartWrap.clientWidth) || 470));
+    chart = barChart(chartWrap, MONTHS.map((_, i) => i), ys as number[], CHART_TEAL, (i) => MONTHS[i] ?? '', 'Riders/day', fit(), 140, 'Month');
+    if (typeof ResizeObserver !== 'undefined') {
+      resize = new ResizeObserver(() => {
+        const w = fit();
+        if (chart && chart.width !== w) chart.setSize({ width: w, height: 140 });
+      });
+      resize.observe(chartWrap);
+    }
   } else chartWrap.append(h('div', { class: 'hw-muted' }, 'No month has closed yet.'));
 }
 
