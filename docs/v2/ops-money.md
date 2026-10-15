@@ -224,6 +224,12 @@ pool after deleting a route); a real month end (month report with the rating, ra
 rate history's first month); the year in review from the panel and on the first weekday of
 January (from a save moved to late December); a v3 save loaded through the migration (holding
 off, no recovery, bonds at 2.50%, flat fare); sandbox; and the Service alerts panel alongside.
+The final pass also covered event service planned on a holding route (its row in the route
+panel, held trains next to it), Revert, M over the route tool (fixed: `openFinance` re-selects
+instead of redrawing the route editor), the toolbar and Holding tooltips, and an export → import
+round trip through the menu (fares, route control, bond coupons and the market seed survive and
+the compiled `opsKey` reaches the worker). Perf after the UI pass: peak hour 151–156 ms at
+`pre-ops`, 154–164 ms now (152 ms with `ops=off`; chaos Normal 161 → 189 ms, single runs).
 
 ## 0. Summary
 

@@ -947,7 +947,9 @@ export class App implements AppContext {
   /** Open Finances at a tab. */
   openFinance(tab?: FinanceTab): void {
     if (tab) this.financeTab = tab;
-    if (this.game.selection?.kind === 'finance') this.refreshPanel();
+    // Over the route tool (Finances may still be the selection under its editor), selecting
+    // again switches back to Select, as any other panel does; refreshing would redraw the editor.
+    if (this.game.selection?.kind === 'finance' && this.tools.active?.id !== 'route') this.refreshPanel();
     else this.game.select({ kind: 'finance' });
   }
 
