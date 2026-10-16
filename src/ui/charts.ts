@@ -106,8 +106,11 @@ const GUIDE = '#C9D1D9';
  * Living City (tract panel): residents (teal) and jobs (orange) as an index of the start (= 100),
  * one point per stored month plus the start, with a dashed guide at 100.
  */
-export function indexChart(el: HTMLElement, labels: string[], res: (number | null)[], jobs: (number | null)[], width = 330, height = 150): uPlot {
-  const xs = labels.map((_, i) => i);
+export function indexChart(el: HTMLElement, xs: number[], label: (x: number) => string, res: (number | null)[], jobs: (number | null)[], width = 330, height = 150): uPlot {
+  const maxX = Math.max(1, xs[xs.length - 1] ?? 1);
+  const step = Math.max(1, Math.ceil((maxX + 1) / 5));
+  const ticks: number[] = [];
+  for (let x = 0; x <= maxX; x += step) ticks.push(x);
   const vals = [...res, ...jobs].filter((v): v is number => v != null && Number.isFinite(v));
   const lo = Math.min(100, ...vals);
   const hi = Math.max(100, ...vals);
@@ -115,7 +118,7 @@ export function indexChart(el: HTMLElement, labels: string[], res: (number | nul
   const pad = Math.max(0.5, (hi - lo) * 0.12);
   const yLo = Math.min(98, lo - pad);
   const yHi = Math.max(102, hi + pad);
-  const few = labels.length < 4;
+  const few = xs.length < 4;
   const fmt = (v: number | null) => (v == null ? '—' : v.toFixed(1));
   return new uPlot(
     {
@@ -124,13 +127,14 @@ export function indexChart(el: HTMLElement, labels: string[], res: (number | nul
       padding: [10, 8, 0, 0],
       legend: { show: true, live: true },
       cursor: { points: { size: 7 }, drag: { x: false, y: false } },
-      scales: { x: { time: false, range: () => [-0.3, Math.max(1, xs.length - 1) + 0.3] }, y: { range: () => [yLo, yHi] } },
+      // A month axis: months without a close (growth Off) keep their width.
+      scales: { x: { time: false, range: () => [-0.3, maxX + 0.3] }, y: { range: () => [yLo, yHi] } },
       axes: [
-        axis({ splits: () => xs.filter((i) => i % Math.max(1, Math.ceil(xs.length / 5)) === 0), values: (_u, vals2) => vals2.map((v) => labels[v] ?? ''), size: 22 }),
+        axis({ splits: () => ticks, values: (_u, vals2) => vals2.map((v) => label(v)), size: 22 }),
         axis({ values: (_u, vals2) => vals2.map((v) => (Math.abs(v - Math.round(v)) < 1e-6 ? String(Math.round(v)) : v.toFixed(1))), size: 36 }),
       ],
       series: [
-        { label: 'Month', value: (_u, v) => (v == null ? '—' : labels[v] ?? '') },
+        { label: 'Month', value: (_u, v) => (v == null ? '—' : label(v)) },
         { label: 'Residents', stroke: CHART_TEAL, width: 2, points: { show: few, size: 7, fill: CHART_TEAL }, value: (_u, v) => fmt(v) },
         { label: 'Jobs', stroke: CHART_ORANGE, width: 2, points: { show: few, size: 7, fill: CHART_ORANGE }, value: (_u, v) => fmt(v) },
         { label: 'Start', stroke: GUIDE, width: 1, dash: [4, 3], points: { show: false }, value: () => '100' },

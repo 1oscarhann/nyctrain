@@ -73,6 +73,15 @@ export function placeClasses(): string[] {
   return city().naming === 'place' ? ['neighbourhood', 'quarter', 'suburb', 'village', 'hamlet'] : ['neighbourhood', 'quarter', 'suburb'];
 }
 
+/**
+ * Tract names (PlaceNames) also take London's `town` labels (Greenwich, Ilford, Lewisham,
+ * Woolwich, Bromley…), which the tiles carry from low zooms on, so an outer MSOA gets a real name
+ * before the player zooms in; station names keep the finer classes above.
+ */
+export function tractPlaceClasses(): string[] {
+  return city().naming === 'place' ? [...placeClasses(), 'town'] : placeClasses();
+}
+
 /** Streets crossing at less than this angle count as parallel ("W 47th St & W 46th St"). */
 const MIN_CROSSING_SIN = Math.sin((35 * Math.PI) / 180);
 

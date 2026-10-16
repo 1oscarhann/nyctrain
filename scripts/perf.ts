@@ -11,8 +11,9 @@
  * worker must simulate one game-hour per real second, so the budget is 1000 ms.
  * Then (Living City, unless month=0) it runs on through two growth month closes, at the
  * midnights after day 1 and day 3 (the engine closes a growth month every 2 days here, so the
- * timed peak hour is the same as without it), and times each: the first re-places every agent
- * with per-agent seeds, the second is a typical month. The budget is 600 ms.
+ * timed peak hour is the same as without it), and times each: the first switches every agent
+ * to its per-agent placement (computed a few thousand agents per step beforehand, so the close
+ * copies them), the second is a typical month. The budget is 600 ms; the worst is printed too.
  */
 import { CHAOS, TIME, type ChaosLevel, type WeatherKind } from '../src/balance';
 import { GROWTH_LABEL } from '../src/sim/protocol';
@@ -116,7 +117,7 @@ if (monthClose) {
   const g = engine.growth!;
   const st = engine.lastRegen;
   console.log(
-    `month close: ${closes.map((ms) => `${ms.toFixed(0)} ms`).join(', then ')} (budget 600 ms; the first re-places every agent) · ${g.months} growth months` +
+    `month close: ${closes.map((ms) => `${ms.toFixed(0)} ms`).join(', then ')} · worst ${Math.max(0, ...closes).toFixed(0)} ms (budget 600 ms; the first gives every agent its per-agent placement, pre-placed during the month) · ${g.months} growth months` +
       ` · ${engine.commuters!.A.toLocaleString()} agents · last regeneration kept ${st?.kept.toLocaleString()} groups, ${st?.newBands} new bands, ${st?.newPairs} new pairs · ran days 1–3 in ${Date.now() - t0} ms`,
   );
 }

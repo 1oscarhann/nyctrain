@@ -194,7 +194,12 @@ export type Query =
 export type FromWorker =
   | { type: 'ready'; agents: number; groups: number; baseline: number }
   | { type: 'snapshot'; snap: Snapshot }
-  | { type: 'dayEnd'; report: DayReport }
+  /**
+   * Midnight: the day's report, and the mode shares and growth state as they are right after it
+   * (so a save made at once holds finances and growth of the same day; a month close's new
+   * groups and growth arrive in the same message as its value capture).
+   */
+  | { type: 'dayEnd'; report: DayReport; state: SimState }
   | { type: 'busy'; label: string | null }
   | { type: 'reply'; id: number; data: unknown }
   | { type: 'event'; title: string; body?: string; tone?: 'green' | 'amber' | 'red' }
@@ -448,6 +453,8 @@ export interface GrowthData {
   sbar: [number, number];
   history: GrowthSnapshot[];
   city: GrowthCityPoint[];
+  /** This month's commute-benefit samples (Growth.accumulateBenefit; missing: none yet). */
+  benefit?: { days: number; throughDay: number; meanSum: number; home: Float64Array; work: Float64Array };
 }
 
 /** Atomic capture for saving: mode shares and the growth state their groups belong to, in one reply. */

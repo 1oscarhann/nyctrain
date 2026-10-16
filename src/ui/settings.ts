@@ -1,33 +1,71 @@
 /** Per-viewer settings (units, agent scale, last city and new-game chaos level) remembered in localStorage when available. */
 import { CHAOS, COMMUTERS, type ChaosLevel, type CityId } from '../balance';
-import { isCityId } from '../cities';
+import { CITIES, city, isCityId } from '../cities';
 import type { UnitSystem } from '../core/units';
 import type { SaveSettings } from '../save/format';
 
 const KEY = 'headway-ny-settings';
 
-export function loadSettings(): SaveSettings {
-  const def: SaveSettings = { units: 'imperial', agentScale: COMMUTERS.agentScale, seed: COMMUTERS.seed };
+/** What localStorage holds under KEY. */
+export interface StoredSettings {
+  agentScale?: number;
+  /** Units the player picked, per city (Settings on the title screen, or the in-game menu). */
+  unitsByCity?: Partial<Record<CityId, UnitSystem>>;
+  /** Before Living City: one unit for both cities, stored with any settings change (miles by default). */
+  units?: UnitSystem;
+}
+
+const isUnits = (u: unknown): u is UnitSystem => u === 'imperial' || u === 'metric';
+
+/**
+ * The units for a city: the player's explicit choice for it, else the city's own (New York miles,
+ * London kilometres). An older single setting counts only when it is "metric": miles was its
+ * default, so only kilometres can have been picked.
+ */
+export function unitsFor(id: CityId, s: StoredSettings | null): UnitSystem {
+  const chosen = s?.unitsByCity?.[id];
+  if (isUnits(chosen)) return chosen;
+  if (s?.units === 'metric') return 'metric';
+  return CITIES[id].defaultUnits;
+}
+
+function readStored(): StoredSettings | null {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return def;
-    const s = JSON.parse(raw) as Partial<SaveSettings>;
-    return {
-      units: s.units === 'metric' ? 'metric' : 'imperial',
-      agentScale: COMMUTERS.agentScaleChoices.includes(Number(s.agentScale)) ? Number(s.agentScale) : def.agentScale,
-      seed: def.seed,
-    };
+    const s = raw ? (JSON.parse(raw) as unknown) : null;
+    return s && typeof s === 'object' ? (s as StoredSettings) : null;
   } catch {
-    return def;
+    return null;
   }
 }
 
-export function storeSettings(s: { units: UnitSystem; agentScale: number }): void {
+function writeStored(s: StoredSettings): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ units: s.units, agentScale: s.agentScale }));
+    localStorage.setItem(KEY, JSON.stringify(s));
   } catch {
     /* private mode: settings just won't persist */
   }
+}
+
+/** Settings for the current city (its units follow unitsFor). */
+export function loadSettings(): SaveSettings {
+  const s = readStored();
+  return {
+    units: unitsFor(city().id, s),
+    agentScale: COMMUTERS.agentScaleChoices.includes(Number(s?.agentScale)) ? Number(s!.agentScale) : COMMUTERS.agentScale,
+    seed: COMMUTERS.seed,
+  };
+}
+
+/** Remember the agent scale (units are only stored when the player picks them: storeUnits). */
+export function storeSettings(s: { agentScale: number }): void {
+  writeStored({ ...readStored(), agentScale: s.agentScale });
+}
+
+/** The player picked units for the current city: kept for it from now on. */
+export function storeUnits(u: UnitSystem): void {
+  const s = readStored() ?? {};
+  writeStored({ ...s, unitsByCity: { ...(s.unitsByCity ?? {}), [city().id]: u } });
 }
 
 const CITY_KEY = 'headway-city';

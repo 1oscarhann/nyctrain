@@ -4,6 +4,7 @@
  * first months are visible), and the 3D columns' radius classes. Used by the overlay, the hover
  * tip, the goals panel and the tests.
  */
+import { MAP } from '../balance';
 import type { Tract } from '../data/world';
 import type { GrowthView } from '../sim/protocol';
 
@@ -56,4 +57,10 @@ export function growthLegendEnds(span: number): [string, string] {
 /** ColumnLayer has one radius per layer, so the 3D columns go in 25 m radius classes (at least 25 m). */
 export function columnRadiusClass(r: number): number {
   return Math.max(25, Math.round(r / 25) * 25);
+}
+
+/** A 3D growth column's height (metres) for the people a tract added; 0 = no column (below MAP.growthColumnMinPeople). */
+export function columnHeight(added: number): number {
+  if (!(added >= MAP.growthColumnMinPeople)) return 0;
+  return Math.min(MAP.growthColumnMaxMetres, MAP.growthColumnMetresPerSqrtPerson * Math.sqrt(added));
 }

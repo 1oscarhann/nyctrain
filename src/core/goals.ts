@@ -29,7 +29,9 @@ export function goalDefs(): GoalDef[] {
     { id: 'share-50', title: 'Transit mode share above 50%', detail: `More than half of commuters choose your trains.` },
     { id: 'commute-10', title: 'Commute 10 minutes faster', detail: 'Average commute (all modes) 10 minutes below the no-transit baseline.' },
     ...trips,
-    { id: 'monthly-profit', title: 'Make a monthly profit', detail: 'Fares beat operating costs and bond interest for a month.' },
+    // MonthReport.profit includes Living City value capture (it is the authority's income, and it
+    // counts in the scorecard's interest coverage too), so the text names it.
+    { id: 'monthly-profit', title: 'Make a monthly profit', detail: 'Fares and value capture beat operating costs and bond interest for a month.' },
     { id: 'rating-a', title: 'Investment grade', detail: `Hold an ${GOALS.ratingGoal} rating or better while owing at least ${fmtMoney(GOALS.ratingGoalMinDebt)}.` },
     {
       id: 'clockwork',

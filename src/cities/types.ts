@@ -3,6 +3,7 @@
  * parking, money) live in src/balance.ts CITY_BALANCE.
  */
 import type { CityId } from '../balance';
+import type { UnitSystem } from '../core/units';
 
 export type { CityId };
 
@@ -56,6 +57,10 @@ export interface CityConfig {
   lowIncomeBand: string;
   /** Living City: the tax whose increment value capture shares ("property tax"; London: council tax and business rates). */
   valueCaptureTax: string;
+  /** Units until the player picks some for this city (Settings or the menu): New York miles, London kilometres. */
+  defaultUnits: UnitSystem;
+  /** Living City: what the value-capture district is called (finance panel heading). */
+  valueCaptureDistrict: string;
   goals: CityGoal[];
   tutorial: { jobs: string; track: string };
   /** Extra data attribution shown on the map (licence requirements). */

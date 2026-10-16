@@ -133,7 +133,22 @@ describe('10. regeneration equals a from-scratch build (real data, scale 10)', (
       const a = new Commuters(world, { agentScale: 10, seed: SEED, fares: defaultFares() });
       const s1 = a.regenerate(f1, 0);
       expect(s1.replaced).toBe(true);
-      expectSameGeneration(a, new Commuters(world, { agentScale: 10, seed: SEED, fares: defaultFares(), factors: f1 }));
+      const ref1 = new Commuters(world, { agentScale: 10, seed: SEED, fares: defaultFares(), factors: f1 });
+      expectSameGeneration(a, ref1);
+      // Pre-placed ahead of the first growth (the engine does it a few thousand agents per step),
+      // partly or fully: the starting city's own agents are untouched, and the regeneration copies
+      // the pre-placed groups and still equals the from-scratch build.
+      for (const part of [1 / 3, 1]) {
+        const p = new Commuters(world, { agentScale: 10, seed: SEED, fares: defaultFares() });
+        const before = AGENT_FIELDS.map((f) => bytes(p[f]).toString('base64'));
+        let full = false;
+        while (!full && p.prePlaced() < part * p.G) full = p.prePlace(4096);
+        expect(full).toBe(part === 1);
+        expect(AGENT_FIELDS.map((f) => bytes(p[f]).toString('base64'))).toEqual(before);
+        expect(p.regenerate(f1, 0).replaced).toBe(true);
+        expectSameGeneration(p, ref1);
+        expect(p.prePlace(4096)).toBe(true);
+      }
       const s2 = a.regenerate(f2, 0);
       expect(s2.replaced).toBe(false);
       expect(s2.kept).toBeGreaterThan(0.95 * s2.groups);

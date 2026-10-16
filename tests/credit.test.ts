@@ -17,7 +17,7 @@ import { SAVE_VERSION } from '../src/save/format';
 import { migrate } from '../src/save/migrate';
 import { applySave, buildSave } from '../src/save/serialize';
 import { Rng } from '../src/core/rng';
-import { checkGoals, emptyGoals } from '../src/core/goals';
+import { checkGoals, emptyGoals, goalDefs } from '../src/core/goals';
 import type { DayReport } from '../src/sim/protocol';
 import { emptyStats } from '../src/sim/regularity';
 
@@ -546,10 +546,31 @@ describe('Living City in the credit scorecard and the year in review', () => {
     expect(creditScore({ ...base, valueCapturePerDay: 0 })).toEqual(without);
   });
 
-  it('the finance model averages a month’s payment over the window’s service days', () => {
+  it('the finance model annualises the monthly payments: the same rate at every review and mid-month', () => {
+    // A payment of 4M at every month close is 48M a year, so 48M / 261 per service day, whatever the
+    // day: the old mean over the window's days counted 2 or 3 payments (×0.73 … ×1.15).
     const f = new Finance(false);
-    for (let d = 0; d < 20; d++) f.settleDay({ day: d, riders: 1e5, revenue: 1e6, carKm: 100, stationsOpen: 10, ...(d === 18 ? { valueCapture: 4e6 } : {}) });
-    expect(f.creditInputs().valueCapturePerDay).toBeCloseTo(4e6 / 20, 6);
+    const rate = (4e6 * 12) / ECONOMY.daysPerYear;
+    expect(f.creditInputs().valueCapturePerDay).toBe(0);
+    const seen: number[] = [];
+    for (let d = 0; d < 200; d++) {
+      const close = isNewMonth(d + 1);
+      f.settleDay({ day: d, riders: 1e5, revenue: 1e6, carKm: 100, stationsOpen: 10, ...(close ? { valueCapture: 4e6 } : {}) });
+      if (f.months.length) {
+        const v = f.creditInputs().valueCapturePerDay!;
+        expect(v).toBeCloseTo(rate, 6);
+        seen.push(v);
+      } else expect(f.creditInputs().valueCapturePerDay).toBe(0);
+    }
+    expect(seen.length).toBeGreaterThan(150);
+    // A month that paid nothing (growth Off) counts as 0 in the mean, so the rate falls with it.
+    const g = new Finance(false);
+    for (let d = 0; d < 120; d++) g.settleDay({ day: d, riders: 1e5, revenue: 1e6, carKm: 100, stationsOpen: 10, ...(isNewMonth(d + 1) && monthKey(d) !== '2030-04' ? { valueCapture: 4e6 } : {}) });
+    const k0 = monthKey(g.history.slice(-CREDIT.windowDays)[0].day);
+    const months = g.months.filter((m) => m.key >= k0);
+    const paid = months.filter((m) => m.valueCapture).length;
+    expect(paid).toBeLessThan(months.length);
+    expect(g.creditInputs().valueCapturePerDay).toBeCloseTo((rate * paid) / months.length, 6);
   });
 
   it('the year in review has a value-capture line, and its profit includes it', () => {
@@ -565,6 +586,21 @@ describe('Living City in the credit scorecard and the year in review', () => {
 });
 
 describe('Living City goals', () => {
+  it('a monthly profit counts value capture (the profit includes it), and the goal says so', () => {
+    expect(goalDefs().find((g) => g.id === 'monthly-profit')!.detail).toMatch(/fares and value capture/i);
+    const game = new Game({} as World, {} as Terrain, { sandbox: false, fare: 3 });
+    const month = (revenue: number, valueCapture?: number): MonthReport => ({
+      key: '2030-02', label: 'Feb 2030', days: 20, revenue, operatingCosts: 20.6e6, capital: 0, bondPayments: 0, interest: 18.7e6, fees: 0, prepaid: 0, debtEnd: 0, riders: 1e6, cashEnd: 1e9,
+      profit: revenue + (valueCapture ?? 0) - 20.6e6 - 18.7e6,
+      ...(valueCapture !== undefined ? { valueCapture } : {}),
+    });
+    // Fares alone lose ≈ $0.7M; $1.5M of value capture turns the month into a profit.
+    game.finance.months.push(month(38.6e6));
+    expect(checkGoals(game, emptyGoals(), null, () => 0)).not.toContain('monthly-profit');
+    game.finance.months.push(month(38.6e6, 1.5e6));
+    expect(checkGoals(game, emptyGoals(), null, () => 0)).toContain('monthly-profit');
+  });
+
   it('Boomtown from the month’s largest tract growth; Land value pays from one month’s value capture, not in the sandbox', () => {
     const report = (growth?: Partial<NonNullable<DayReport['growth']>>) =>
       ({ riders: 1000, transitShare: 0.1, baselineCommute: 50, avgCommute: 49, goalTrip: null, regularity: emptyStats(), routeRegularity: {}, ...(growth ? { growth } : {}) }) as unknown as DayReport;

@@ -1,10 +1,11 @@
 /**
  * Names for tracts (Living City toasts, the month report, hover; docs/v2/living-city.md §2.4).
  * There is no neighbourhood dataset, so a tract's name comes from, in order:
- * 1. the nearest map place label seen this session within 1.2 km, on land (OpenMapTiles `place`
- *    features of the city's classes, the same ones station naming uses: London adds villages and
- *    hamlets), harvested whenever the map goes idle;
- * 2. the nearest served station within 1.2 km, as "around 36 St";
+ * 1. the nearest map place label seen this session within 1.2 km of the tract's edge (its disc;
+ *    London's MSOAs are ≈ 2.5× New York's tracts), on land (OpenMapTiles `place` features of the
+ *    city's classes, the ones station naming uses: London adds villages and hamlets, and towns for
+ *    tract names), harvested whenever the map goes idle;
+ * 2. the nearest served station within the same distance, as "around 36 St";
  * 3. the tract panel's own name: London's MSOA name ("Camden 028"), New York's "Queens tract 57".
  * Labels and stations in another borough than the tract are skipped when both boroughs are known,
  * so a tract on one bank of a river is not named after the other bank.
@@ -12,10 +13,15 @@
 import type { Map as MLMap } from 'maplibre-gl';
 import { toLocal } from '../core/geo';
 import type { Tract } from '../data/world';
-import { placeClasses } from './naming';
+import { tractPlaceClasses } from './naming';
 
-/** How far a place label or a station may be from the tract centre to name it (metres). */
+/** How far beyond a tract's edge a place label or a station may be to name it (metres). */
 export const TRACT_NAME_RADIUS = 1200;
+
+/** The naming search radius from a tract's centre: TRACT_NAME_RADIUS beyond its disc. */
+export function tractNameRadius(radius = 0): number {
+  return TRACT_NAME_RADIUS + Math.max(0, radius);
+}
 
 export interface PlacePoint {
   name: string;
@@ -95,7 +101,7 @@ export class PlaceNames extends PlaceIndex {
   };
 
   harvest(): void {
-    const classes = placeClasses();
+    const classes = tractPlaceClasses();
     try {
       for (const f of this.map.querySourceFeatures('openmaptiles', { sourceLayer: 'place' })) {
         const props = f.properties as Record<string, unknown>;
@@ -124,20 +130,21 @@ export function formalTractName(t: Pick<Tract, 'name' | 'borough' | 'id'>): stri
 }
 
 /**
- * A tract's name (§2.4): a place label near it, else "around <station>" for a served station
- * within TRACT_NAME_RADIUS, else its formal name. Never empty. `region` is the borough code at
- * the tract (0 = unknown): labels and stations elsewhere are skipped.
+ * A tract's name (§2.4): a place label near it, else "around <station>" for a served station,
+ * both within tractNameRadius(radius) of its centre, else its formal name. Never empty. `region`
+ * is the borough code at the tract (0 = unknown): labels and stations elsewhere are skipped.
  */
 export function tractName(
-  t: Pick<Tract, 'name' | 'borough' | 'id' | 'x' | 'y'>,
+  t: Pick<Tract, 'name' | 'borough' | 'id' | 'x' | 'y'> & { radius?: number },
   places: { nearest(x: number, y: number, maxD?: number, region?: number): string | null } | null,
   served: readonly { name: string; x: number; y: number; region?: number }[],
   region = 0,
 ): string {
-  const place = places?.nearest(t.x, t.y, TRACT_NAME_RADIUS, region);
+  const maxD = tractNameRadius(t.radius);
+  const place = places?.nearest(t.x, t.y, maxD, region);
   if (place) return place;
   let best: { name: string } | null = null;
-  let bestD = TRACT_NAME_RADIUS;
+  let bestD = maxD;
   for (const s of served) {
     if (!sameRegion(region, s.region)) continue;
     const d = Math.hypot(s.x - t.x, s.y - t.y);

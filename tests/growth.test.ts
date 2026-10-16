@@ -16,6 +16,7 @@ import { attractiveness, DISTRICT_SAMPLES, fitTotal, Growth, servedStations, typ
 import { generalisedCosts, logsum, transitBenefit, transitCost, type PairGeometry } from '../src/sim/modeChoice';
 import type { CompiledNetwork, GrowthData } from '../src/sim/protocol';
 import { loadWorldFromDisk } from '../scripts/nodeData';
+import { decodeGrowth, encodeGrowth } from '../src/save/serialize';
 
 afterAll(() => {
   applyCity('nyc');
@@ -217,6 +218,12 @@ describe('3. monotone in the benefit', () => {
     // The month report ranks the best-served tract first.
     const rep = g.step(12, { home, work }, [])!;
     expect(rep.boomtowns[0].tract).toBe(n - 1);
+    // Boomtowns beat the natural rate clearly (×boomtownMinNaturalMultiple); the unserved tract is not one.
+    for (const b of rep.boomtowns) expect(b.rate).toBeGreaterThanOrEqual(GROWTH.boomtownMinNaturalMultiple * gBase());
+    expect(rep.boomtowns.some((b) => b.tract === 0)).toBe(false);
+    // A city growing at its natural rate alone (no network) has no boomtowns.
+    expect(new Growth(equalWorld(n), 'steady').step(0, zeros(n), [])!.boomtowns).toEqual([]);
+    expect(new Growth(equalWorld(n), 'boom').step(0, zeros(n), [])!.boomtowns).toEqual([]);
     expect(Math.abs(rep.residents - rep.jobs) / rep.residents).toBeLessThan(1e-6);
   });
 });
@@ -341,6 +348,46 @@ describe('6. determinism and the state round trip', () => {
     for (let m = 6; m < 12; m++) d.step(m * 21, pattern(10, m), served);
     same(a.toData(), d.toData());
     expect(d.fingerprint()).toBe(a.fingerprint());
+  });
+
+  it('the month’s benefit samples: one per day, averaged at the close, saved exactly, cleared after', () => {
+    const world = equalWorld(10);
+    const g = new Growth(world, 'steady');
+    expect(g.monthBenefit()).toBeNull();
+    expect(g.hasState()).toBe(false);
+    const good = { ...pattern(10, 0), mean: 30 }, bad = { home: new Float64Array(10), work: new Float64Array(10), mean: 0 };
+    for (let d = 0; d < 20; d++) expect(g.accumulateBenefit(d, good)).toBe(true);
+    // A day is sampled once (a reload never samples it again).
+    expect(g.accumulateBenefit(19, bad)).toBe(false);
+    expect(g.hasState()).toBe(true);
+    // Saved mid-month (the save codec and the worker boundary), reloaded: the same samples.
+    const d = Growth.fromData(world, decodeGrowth(JSON.parse(JSON.stringify(encodeGrowth(structuredClone(g.toData()))))), 'steady');
+    expect(d.benefitDays).toBe(20);
+    expect(d.benefitThroughDay).toBe(19);
+    expect(bytes(d.benefitHome).equals(bytes(g.benefitHome))).toBe(true);
+    expect(bytes(d.benefitWork).equals(bytes(g.benefitWork))).toBe(true);
+    // A closing day with no benefit at all (a whole-network outage) moves the mean by 1/21 only.
+    for (const x of [g, d]) x.accumulateBenefit(20, bad);
+    const m = g.monthBenefit()!;
+    expect(m.mean).toBeCloseTo((30 * 20) / 21, 9);
+    for (let i = 0; i < 10; i++) expect(m.home[i]).toBeCloseTo((good.home[i] * 20) / 21, 9);
+    const a = g.step(20, m, served)!, b = d.step(20, d.monthBenefit()!, served)!;
+    expect(b).toEqual(a);
+    same(g.toData(), d.toData());
+    // Against a month of good days, growth is within a few per cent; against the closing day alone it is far off.
+    const ref = new Growth(world, 'steady').step(20, good, served)!;
+    const one = new Growth(world, 'steady').step(20, bad, served)!;
+    expect(Math.abs(a.dResidents / ref.dResidents - 1)).toBeLessThan(0.1);
+    expect(Math.abs(one.dResidents / ref.dResidents - 1)).toBeGreaterThan(0.3);
+    g.resetBenefit();
+    expect(g.monthBenefit()).toBeNull();
+    expect('benefit' in g.toData()).toBe(false);
+    // Samples that do not fit the world are ignored, not the growth.
+    const bad2 = { ...d.toData(), benefit: { days: 3, throughDay: 5, meanSum: 1, home: new Float64Array(9), work: new Float64Array(9) } };
+    const e = Growth.fromData(world, bad2, 'steady');
+    expect(e.dropped).toBe(false);
+    expect(e.months).toBe(1);
+    expect(e.benefitDays).toBe(0);
   });
 
   it('drops state that does not fit the world', () => {

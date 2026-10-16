@@ -6,7 +6,7 @@ import type { GoalState } from '../core/goals';
 import { Finance } from '../economy/finance';
 import { normalizeFares } from '../economy/fares';
 import type { DayExposure, DayReport, GrowthData, ModeState, ServiceOverride } from '../sim/protocol';
-import { b64ToF32, b64ToU16, bytesToB64, f32ToB64, SAVE_VERSION, type SavedGrowth, type SaveFile, type SaveSettings } from './format';
+import { b64ToF32, b64ToF64, b64ToU16, bytesToB64, f32ToB64, SAVE_VERSION, type SavedGrowth, type SaveFile, type SaveSettings } from './format';
 
 /** Living City state for a save (typed arrays as base64). */
 export function encodeGrowth(d: GrowthData): SavedGrowth {
@@ -22,6 +22,7 @@ export function encodeGrowth(d: GrowthData): SavedGrowth {
     premium: f32ToB64(d.premium),
     history: d.history.map((h) => ({ day: h.day, q: bytesToB64(h.q) })),
     city: d.city.map((c) => [c.day, c.residents, c.jobs, c.valueCapture]),
+    ...(d.benefit ? { benefit: { days: d.benefit.days, throughDay: d.benefit.throughDay, meanSum: d.benefit.meanSum, home: bytesToB64(d.benefit.home), work: bytesToB64(d.benefit.work) } } : {}),
   };
 }
 
@@ -45,7 +46,15 @@ export function decodeGrowth(s: SavedGrowth): GrowthData {
       return new Uint16Array(0);
     }
   };
+  const f64 = (x: unknown) => {
+    try {
+      return typeof x === 'string' ? b64ToF64(x) : new Float64Array(0);
+    } catch {
+      return new Float64Array(0);
+    }
+  };
   const num = (x: unknown, d: number) => (typeof x === 'number' && Number.isFinite(x) ? x : d);
+  const b = s.benefit && typeof s.benefit === 'object' ? s.benefit : null;
   return {
     version: 1,
     appliedThroughDay: num(s.appliedThroughDay, -1),
@@ -58,6 +67,8 @@ export function decodeGrowth(s: SavedGrowth): GrowthData {
     premium: f32(s.premium),
     history: (Array.isArray(s.history) ? s.history : []).map((h) => ({ day: num(h?.day, 0), q: u16(h?.q) })),
     city: (Array.isArray(s.city) ? s.city : []).filter(Array.isArray).map((c) => ({ day: num(c[0], 0), residents: num(c[1], 0), jobs: num(c[2], 0), valueCapture: num(c[3], 0) })),
+    // (Arrays that do not fit the city are ignored by Growth.fromData; the month then averages from the load.)
+    ...(b ? { benefit: { days: num(b.days, 0), throughDay: num(b.throughDay, -1), meanSum: num(b.meanSum, 0), home: f64(b.home), work: f64(b.work) } } : {}),
   };
 }
 

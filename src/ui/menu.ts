@@ -9,14 +9,14 @@ import { h } from './dom';
 import { modal } from './widgets';
 import { LEVEL_HINT, LEVEL_LABEL } from './alertFeed';
 import { GROWTH_PACE_HINT, GROWTH_PACE_LABEL } from './livingCity';
-import { storeSettings } from './settings';
+import { storeSettings, storeUnits } from './settings';
 
 const SLOT_LABEL: Record<SlotId, string> = { autosave: 'Autosave', slot1: 'Slot 1', slot2: 'Slot 2', slot3: 'Slot 3' };
 
 export async function openMenu(app: App): Promise<void> {
   const metas = await listSlots();
   let close: () => void = () => {};
-  const body = h('div');
+  const body = h('div', { class: 'menu-body' });
   const slotRow = (slot: SlotId) => {
     const m = metas[slot];
     const info = m ? `${saveSummary(m)} · saved ${new Date(m.savedAt).toLocaleString()}` : 'Empty';
@@ -53,7 +53,7 @@ export async function openMenu(app: App): Promise<void> {
   const renderUnits = () => {
     units.replaceChildren(
       ...(['imperial', 'metric'] as const).map((u) =>
-        h('button', { class: app.settings.units === u ? 'on' : '', onclick: () => { app.settings.units = u; setUnits(u); storeSettings(app.settings); renderUnits(); app.refreshPanel(); app.toolbar.update(); app.legend.set(app.overlays.legend()); } }, u === 'imperial' ? 'Miles, mph' : 'Kilometres, km/h'),
+        h('button', { class: app.settings.units === u ? 'on' : '', onclick: () => { app.settings.units = u; setUnits(u); storeUnits(u); renderUnits(); app.refreshPanel(); app.toolbar.update(); app.legend.set(app.overlays.legend()); } }, u === 'imperial' ? 'Miles, mph' : 'Kilometres, km/h'),
       ),
     );
   };
@@ -75,7 +75,8 @@ export async function openMenu(app: App): Promise<void> {
     pace.replaceChildren(
       ...GROWTH.paces.map((p) => h('button', { class: app.game.growthPace === p ? 'on' : '', 'data-pace': p, title: GROWTH_PACE_HINT[p], onclick: () => { if (p !== app.game.growthPace) app.setGrowthPace(p); renderPace(); } }, GROWTH_PACE_LABEL[p])),
     );
-    paceHint.textContent = `${GROWTH_PACE_HINT[app.game.growthPace]}. Takes effect at the next month end; G shows the growth map.`;
+    // One line (the buttons' tooltips describe each pace): the menu fits a 720p window.
+    paceHint.textContent = `${GROWTH_PACE_HINT[app.game.growthPace]}. From the next month end; G: growth map.`;
   };
   renderPace();
   const scale = h('div', { class: 'seg' });

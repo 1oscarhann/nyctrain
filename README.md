@@ -22,7 +22,9 @@ npm run preview      # serve dist/
 
 From the title screen: pick the city (New York / London; remembered), then **New game**
 (career, $6B in New York, £5B in London), **Sandbox** (unlimited money, instant construction),
-**Load game**, **Settings** (units, agent scale) and **Continue** (the autosave). Saves remember
+**Load game**, **Settings** (units, agent scale) and **Continue** (the autosave). Units follow
+the city (miles in New York, kilometres in London) until you pick some for that city in Settings
+or the menu. Saves remember
 their city, so loading a London save from the New York title screen switches over. A new game
 asks for the city chaos level (Off / Calm / Normal / Wild, remembered; Normal by default) and
 offers an 8-step tutorial. The city grows around good transit once a month ([Living City](#living-city);
@@ -142,8 +144,8 @@ commuters are rebuilt from the data, scaled by the saved growth, when the save i
 ## Testing each part
 
 ```bash
-npm test                 # all 218 tests (unit + headless, both cities)
-npm run test:unit        # 195: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+npm test                 # all 225 tests (unit + headless, both cities)
+npm run test:unit        # 200: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
                          # chaos (calendar, weather, incidents, train-sim hooks and the watchdog's scope, event
                          # trips, event service, save v3 with today's level), chaos UI (alert text, feed and
                          # ticker order, announcements, cancelled service, wrap-up toasts, London wording and £),
@@ -161,13 +163,14 @@ npm run test:unit        # 195: geometry, costs, ramps, water, pathfinding, logi
                          # cities (toasts and their selection, the month report's City rows, the tract,
                          # station and finance lines, goals, the year's City line, units and currency), the
                          # growth ramp and its span, and tract names (map labels, stations, the fallback)
-npm run test:headless    # 23: 3 days on the test network (with regularity and fares by band and period),
+npm run test:headless    # 25: 3 days on the test network (with regularity and fares by band and period),
                          # holding against no holding, holding next to Wild chaos and event service, chaos end
                          # to end (closures, event agents, determinism, snow, breakdowns, Off is inert, mid-day
                          # loads after a level change, an edit or an event, a London venue event), the
                          # browser's message order (an edit followed at once by a skip), and Living City (the
                          # commute benefit, a month close in New York and London, a save mid-growth, value
-                         # capture through the finances, pace Off, an event day right after a month close)
+                         # capture through the finances, pace Off, an event day right after a month close,
+                         # one snowy closing day against a clear one, a save made at once after a close)
 npm run sim -- days=3    # headless run of the test network, with a daily summary (and regularity, fares, market)
 npm run sim -- days=3 chaos=normal           # the same with city chaos: weather, incidents and events per day
 npm run sim -- days=3 ops=off                # operations control, fare policy and bond market all off: as before v2
@@ -347,13 +350,20 @@ closes (the midnights after days 1 and 3) and times each, with a 600 ms budget:
 
 | Month close (perf grid, scale 10) | New York (285k agents, 300 stations) | London (292k agents, 300 stations) |
 |---|---|---|
-| The first (every agent is re-placed once) | 500–616 ms, median 502 | 360–391 ms |
-| A typical month | 290–375 ms | 153–340 ms, typically ≈ 220 |
+| The first (every agent switches to its per-agent placement) | 261–311 ms | 180–197 ms |
+| A typical month | 188–243 ms | 117–164 ms |
 
-Of a typical New York close, the commute benefit takes ≈ 50 ms, the growth step ≈ 55 ms (Furness
-over 976k pairs) and regeneration ≈ 170–260 ms (rounding the OD ≈ 70, groups and agents copied in
-runs, paths for the ≈ 160 new pairs ≈ 25). The first close also places all 285k agents again from
-their own seeds (≈ 150 ms). Nothing else in a step changed.
+(After the second review; the script prints the worst close too. Before it, the first New York
+close took 433–616 ms and up to 716 ms with two background jobs, because it placed all 285k agents
+again from their own seeds at midnight, ≈ 110–150 ms. Those placements are now computed ahead, a
+few thousand agents per sim step while the city has not grown, into side arrays the sim never
+reads, and the first close copies them like any later one.) Of a typical New York close, the
+commute benefit takes ≈ 30–50 ms (the closing day's sample; the other days' samples are taken at
+their own midnights), the growth step ≈ 35–55 ms (Furness over 976k pairs) and regeneration
+≈ 115–180 ms (rounding the OD ≈ 70, groups and agents copied in runs, paths for the ≈ 160 new
+pairs ≈ 20). Every other midnight now adds one benefit sample (≈ 30–50 ms) while growth is on.
+Nothing else in a step changed: the peak hour has the same 40,320 boardings and 1,090 waiting
+(157–177 ms against 185–197 ms for `pre-living` in interleaved runs).
 
 ## City chaos
 
@@ -653,9 +663,12 @@ month's last weekday, the same moment the finances close the month, the worker:
 
 1. **Measures each tract's commute benefit:** the minutes per commute the network saves the
    people who live there and who work there, against no network. It is the logsum difference of
-   the mode choice the sim already runs: transit at exactly the cost mode choice uses (yesterday's
+   the mode choice the sim already runs: transit at exactly the cost mode choice uses (the day's
    observed door-to-door time, transfers, crowding and the group's fare by band and period), walk
    and drive on a clear day. Crowding, left-behinds, lateness, incidents and the fare all reduce it.
+   It is sampled at every midnight of the month and averaged at the close, so one snowy or
+   incident-hit day moves the month's growth by about a twentieth of its effect (a snowy closing
+   day alone used to cut the month's value capture by 12% on the perf grid).
 2. **Grows residents and jobs** toward well-served tracts (attractiveness b / (b + 20 min)): the
    city's natural growth (New York 0.8%, London 1.1% a year) plus a boost for good transit, part
    of it drawn from elsewhere in the city. Monthly caps (residents +1.2% / −0.4%, jobs +1.0% /
@@ -672,7 +685,11 @@ month's last weekday, the same moment the finances close the month, the worker:
    development and from an accessibility premium that capitalises over about 10 months (at most
    12%). It is booked as its own line in the day's ledger (and the month report, the profit, the
    year in review and the credit scorecard's interest coverage, but not its farebox recovery: the
-   Hudson Yards bonds for the 7 line were backed by district tax increment).
+   Hudson Yards bonds for the 7 line were backed by district tax increment). The scorecard
+   annualises it from the closed months in its 60-day window (their mean payment × 12 over 261
+   service days), so a review and the panel's preview on any day see the same rate. The *Make a
+   monthly profit* goal counts it too ("Fares and value capture beat operating costs and bond
+   interest for a month").
 
 | | New York | London |
 |---|---|---|
@@ -689,45 +706,52 @@ Goals: *Boomtown* (a neighbourhood of at least 1,000 people grows 25% since the 
 ### In the game
 
 - **Month end.** The busy pill reads "The city is growing" while the worker closes the month (a
-  fraction of a second). Up to three toasts follow: the month's top boomtown when it grew at
-  least 0.3% ("Long Island City is booming: +0.4% this month · +41 residents, +12 jobs · +4.8%
+  fraction of a second). Up to three toasts follow: the month's top boomtown when it is news (it
+  grew at least 0.3% and by at least 25 residents and jobs, and it is not the tract the last such
+  toast named: "Long Island City is booming: +0.4% this month · +41 residents, +12 jobs · +4.8%
   since 2030"), then milestones (+10/25/50/100% in green, "is losing people" at −5/−10/−20% in
   amber). A click flies to the tract and opens its panel.
 - **Month report.** Value capture is its own money row. A **City** section lists residents (with
   the month's change), jobs, commuters and agents, and the district (tracts and the value
-  increment it pays on), then the five **Boomtowns** (a click opens the tract) and **Show growth
-  map**. The sandbox gets a toast instead ("1.35M riders a day · +2,860 residents").
+  increment it pays on), then up to five **Boomtowns** (tracts that grew at least twice the
+  city's natural rate that month; a city growing at its natural rate alone has none: "No
+  neighbourhood grew this month."; a click opens the tract) and **Show growth map**. The sandbox gets a toast instead ("1.35M riders a day · +2,860 residents").
 - **City growth overlay** (layers button or **G**; G again turns it off). Each tract is drawn in a
   diverging ramp of its residents + jobs growth since the start: magenta to violet for decline,
   teal to ice for growth, nothing under ±0.2%. The ramp's ends follow the biggest change so far
   (±2%, ±5%, ±10%, then ±20%, shown in the legend), so the first months are visible. Thin rings
   mark the value-capture district (½ mile, or 800 m, around every served station). Tilted (**V**),
-  growing tracts get hexagonal columns, 0.08 m per added resident or job (+2,500 people is a
-  200 m tower). The Residents and Jobs overlays show the city as it is now. The overlay is
+  growing tracts get hexagonal columns, 6 m × √(residents and jobs added), from 10 people and at
+  most 500 m: a median tract growing at Steady's boomtown rates stands 25–29 m after three months
+  in New York (38–44 m in London's larger zones), +2,500 people is 300 m. On a short window the legend sits right of the tool bar. The Residents and Jobs overlays show the city as it is now. The overlay is
   rebuilt only when new growth arrives (a month close, a network change, a pace change). Hovering
   a tract shows its name and growth.
 - **Tract panel** (click a neighbourhood). The title is the name the toasts use. Residents and
   jobs are today's; *Growth since Jan 2030* has their change, the transit benefit (minutes saved
   per commute) and the land-value premium, an index chart (the start = 100, one point per month
-  end, residents teal and jobs orange), a sentence ("Growing 0.43% a month. Residents here save
+  end on a month axis, so a month with growth Off keeps its gap; residents teal and jobs orange),
+  a sentence ("Growing 0.43% a month. Residents here save
   61 min per commute with your network (city average 7 min).") and the value-capture line ("In the
-  value-capture district (83% of its area) · $1,113/month to the authority · via Inwood", or
-  "Outside the district: no served station within ½ mi").
+  value-capture district (83% of its area) · $1,113/month to the authority · via Inwood";
+  before the first month end "… · first payment at the end of Jan 2030"; or "Outside the
+  district: no served station within ½ mi").
 - **Station panel.** *Value capture nearby*: the month's levy from the district tracts nearest
   the station ("$39k/month · 7 tracts"; the tooltip names the tax).
 - **Finances → Overview.** Yesterday's ledger has a Value capture row (non-zero on month-close
   days), and the month so far once any was paid. The *Value capture (Transit Improvement
-  District)* section counts the district's tracts and gives last month's payment and this
+  District)* section (London: *business rate supplement district*, after Crossrail's) counts the district's tracts and gives last month's payment and this
   month's at today's values. The chart's revenue line is "Revenue (fares + value capture)". The
   year in review adds value capture to its money line and a City row (residents and jobs over the
   year, with **Show growth map**).
-- **Menu → City growth:** Off / Steady / Boom with a one-line hint; it applies from the next
-  month end and a toast confirms. **Goals** shows the best tract and the best month so far.
+- **Menu → City growth:** Off / Steady / Boom with a one-line hint (each button's tooltip
+  describes its pace); it applies from the next month end and a toast confirms. The menu's
+  *Exit to title* / *Resume* row stays in view when the menu scrolls (720p). **Goals** shows the best tract and the best month so far.
 - **Names.** There is no neighbourhood dataset, so a tract is named after the nearest map place
-  label seen this session within 1.2 km, on land and in the same borough (each city's place
-  classes: London adds villages and hamlets; neighbourhood labels load when you zoom in close),
-  else the nearest served station ("around 36 St"), else its own name ("Queens tract 57",
-  "Camden 028"). When two boomtowns share a name, the report adds their own names.
+  label seen this session within 1.2 km of its edge (London's MSOAs are about 2.5× New York's
+  tracts), on land and in the same borough (each city's place classes: London adds villages and
+  hamlets, and its towns for tract names; neighbourhood labels load when you zoom in close),
+  else the nearest served station within the same reach ("around 36 St"), else its own name
+  ("Queens tract 57", "Camden 028"). When two boomtowns share a name, the report adds their own names.
 - **Older saves** join on Steady. A toast says so when the save loads, and the first month report
   carries a one-time hint ("Living City: your city now grows around good transit. Menu → City
   growth.").
@@ -735,10 +759,14 @@ Goals: *Boomtown* (a neighbourhood of at least 1,000 people grows 25% since the 
 **Placement and determinism.** The starting city's agents are placed exactly as before (one
 seeded stream). At the first growth regeneration every agent is placed again once from its own
 seed, hash(seed, home·3 + band, work, k), so from then on a kept agent is copied unchanged and a
-reload of a grown city rebuilds the same agents bit for bit (tested in both cities). Growth uses
-no random numbers, stores Float32 state canonicalised with `Math.fround`, and closes a month once
-(a save from just before midnight re-runs it on load, idempotently). The midnight autosave takes
-the mode shares and the growth state in one reply, so they always describe the same groups. A
+reload of a grown city rebuilds the same agents bit for bit (tested in both cities). The
+starting city's per-agent placements are computed ahead, a few thousand agents per sim step while
+the city has not grown (side arrays the sim never reads), so the first close copies them. Growth
+uses no random numbers, stores Float32 state canonicalised with `Math.fround` (the month's benefit
+samples in Float64, saved exactly), and closes a month once (a save from just before midnight
+re-runs it on load, idempotently). The worker sends the mode shares and the growth state with each
+day's report, so any save after it (the midnight autosave, or one on quit or tab hide) holds that
+day's finances with the growth and groups they belong to. A
 save whose growth no longer fits the city's data starts the city over, with a "City growth was
 reset" toast. With chaos on, event-goers come from the grown city's residents; fans still out at
 a month-end midnight are sent home with everyone else (as at 3 am), and the next day's events run
@@ -764,7 +792,10 @@ agree within 3%:
 | London core | £0.02M/day | £0.12M/day | **£0.21M/day** (£4.5M in December) | 764k (day 11) → 828k, still rising | ×1.016; best zone +5.1% |
 | London sprawl | £0.0002M/day | £0.0008M/day | **£0.002M/day** | 18k | ×1.011 |
 
-London's core earns 59% of New York's value capture in pounds, in step with its riders (58%) and
+After the second review (the benefit averaged over the month's days, boomtowns above twice the
+natural rate) the same `months=12` runs give $353k/day (New York core, 1.42M riders and rising),
+$3.1k/day (sprawl, which now lists no boomtowns), £207k/day (London core, 825k riders) and
+£1.5k/day (London sprawl): the table stands. London's core earns 59% of New York's value capture in pounds, in step with its riders (58%) and
 fares (value capture is ≈ 9% of fares in both cities). With month 12's value capture the New York core goes from
 −$0.08M/day after bond interest to about **+$0.27M/day**; London's core improves from −£2.0M to
 −£1.8M/day (it is the harder city, as before); both sprawl networks keep losing ($0.80M and
@@ -781,8 +812,6 @@ about month 17–19 on Steady (extrapolated) and month 6–7 on Boom.
   removes is cancelled, with a toast.
 - After a mid-day load, the day's report counts boardings from the load onwards only (as in v1),
   so event fans' trips to the venue made before the save are missing from its event riders.
-- Units are one setting for both cities (miles by default), so London shows miles until you
-  switch to kilometres in the menu.
 - London uses 2011 census flows, because the 2021 census was taken in lockdown. Its commuter
   totals are 2011's, and its earnings bands are modelled from area income rather than measured.
 

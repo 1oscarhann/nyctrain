@@ -18,7 +18,8 @@ export interface CreditInputs {
   /** Mean fare revenue per service day (days with riders) in the review window. */
   revenuePerDay: number;
   /**
-   * Living City: mean value capture per service day in the window (missing: 0). It counts in
+   * Living City: value capture per service day, annualised from the closed months that overlap
+   * the window (mean monthly payment × 12 / ECONOMY.daysPerYear; missing: 0). It counts in
    * interest coverage, as pledged, recurring revenue (the Hudson Yards bonds that paid for the 7
    * line extension were backed by the district's PILOTs and tax increment), but not in farebox
    * recovery, which is fares over operating costs by definition.

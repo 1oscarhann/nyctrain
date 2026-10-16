@@ -13,9 +13,12 @@ import { generalisedCosts, logsum } from '../src/sim/modeChoice';
 import { buildGroups, type Commuters } from '../src/sim/commuters';
 import { Engine } from '../src/sim/engine';
 import { compileNetwork } from '../src/routes/compile';
-import { CLEAR } from '../src/core/cityCalendar';
+import { CLEAR, type DayWeather } from '../src/core/cityCalendar';
 import { fmtMoney } from '../src/core/units';
-import type { Alert, DayReport } from '../src/sim/protocol';
+import { GROWTH_LABEL, type Alert, type DayReport, type GrowthData } from '../src/sim/protocol';
+import { applySave, buildSave } from '../src/save/serialize';
+import { migrate } from '../src/save/migrate';
+import type { SaveFile } from '../src/save/format';
 import { loadLandFromDisk, loadWorldFromDisk } from '../scripts/nodeData';
 
 afterAll(() => {
@@ -286,6 +289,45 @@ describe('Living City month close (headless)', () => {
     expect(closes[1].growth!.valueCapture).toBeGreaterThan(closes[0].growth!.valueCapture);
   });
 
+  it('a save made at once after a month-close midnight (quit, tab hide) holds the month’s growth with its value capture', () => {
+    // The worker sends the sim state with each day's report (worker.ts), so a save right after the
+    // settle holds this day's finances and growth together; the month is never skipped on load.
+    applyCity('nyc');
+    const world = loadWorldFromDisk();
+    const game = createHeadlessGame(world, loadLandFromDisk());
+    buildTestNetwork(game);
+    let quit: { save: SaveFile; day: number; growth: GrowthData } | null = null;
+    let e: Engine | null = null;
+    e = startEngine(game, {
+      monthEvery: 2,
+      onDay: (r) => {
+        // As the worker's dayEnd message and the app's synchronous save path (after settleDay).
+        const st = e!.simState();
+        if (!r.growth || quit) return;
+        game.time = (r.day + 1) * D;
+        const save = buildSave(game, { name: 'quit', goals: {} as never, lastReport: r, tutorialDone: true, settings: { units: 'imperial', agentScale: 10, seed: 1885 }, modeState: st.mode, growth: st.growth });
+        quit = { save: JSON.parse(JSON.stringify(save)), day: r.day, growth: st.growth! };
+      },
+    });
+    stepUntil(e, 2 * D + 60);
+    const q = quit as { save: SaveFile; day: number; growth: GrowthData } | null;
+    expect(q).not.toBeNull();
+    const vc = game.finance.history.find((h) => h.day === q!.day)!.valueCapture!;
+    expect(vc).toBeGreaterThan(0);
+    expect(q!.growth.months).toBe(1);
+    expect(q!.growth.appliedThroughDay).toBe(q!.day);
+    // Reload: the finances have the value capture, the growth is the month's, and the next day runs on it.
+    const loaded = createHeadlessGame(world, loadLandFromDisk());
+    const r = applySave(loaded, migrate(q!.save));
+    expect(loaded.finance.history.find((h) => h.day === q!.day)!.valueCapture).toBe(vc);
+    expect(r.growth!.months).toBe(1);
+    const reports: DayReport[] = [];
+    const x = startEngine(loaded, { reports, monthEvery: 2, modeState: r.modeState, growth: r.growth });
+    expect(x.growth!.months).toBe(1);
+    expect(x.commuters!.key).toBe(r.modeState!.key);
+    expect(x.growth!.fingerprint()).toBe(e.growth!.fingerprint());
+  });
+
   it('pace Off: a month close does nothing and the city stays as it was', () => {
     applyCity('nyc');
     const world = loadWorldFromDisk();
@@ -345,6 +387,50 @@ describe('Living City month close (headless)', () => {
     expect(c.stuckCount()).toBe(0);
     expect(c.inFlight()).toBe(0);
     expect(r2.riders).toBeGreaterThanOrEqual(0.9 * riders1);
+  });
+
+  it('one bad-weather closing day moves the month’s growth by a bounded amount: the month averages its days’ benefits', () => {
+    applyCity('nyc');
+    const world = loadWorldFromDisk();
+    const land = loadLandFromDisk();
+    // Months of 3 days, clear but for the closing day, which is clear in one run and heavy snow in
+    // the other. The closing day alone (sampled when the close starts) loses a lot of benefit (slow
+    // trains against clear-weather walking and driving); the month's growth sees a third of it.
+    const run = (last: DayWeather) => {
+      const game = createHeadlessGame(world, land, { chaos: 'calm' });
+      buildTestNetwork(game);
+      const reports: DayReport[] = [];
+      let closeDay = NaN;
+      let engine: Engine | null = null;
+      engine = startEngine(game, {
+        reports,
+        monthEvery: 3,
+        busy: (label) => {
+          if (label === GROWTH_LABEL) closeDay = engine!.commuters!.commuteBenefit().mean;
+        },
+      });
+      for (let d = 0; d < 2; d++) {
+        engine.chaos.forceWeather(d, CLEAR);
+        engine.chaos.forceEvents(d, []);
+      }
+      engine.chaos.forceWeather(2, last);
+      engine.chaos.forceEvents(2, []);
+      stepUntil(engine, 3 * D + 60);
+      const gm = reports[2].growth!;
+      expect(gm).toBeDefined();
+      expect(engine.growth!.benefitDays).toBe(0);
+      return { closeDay, gm };
+    };
+    const clear = run(CLEAR);
+    const snow = run({ kind: 'snow', severity: 1, carried: false });
+    const dayDrop = 1 - snow.closeDay / clear.closeDay;
+    const monthDrop = 1 - snow.gm.benefitMean / clear.gm.benefitMean;
+    expect(dayDrop).toBeGreaterThan(0.05);
+    expect(monthDrop).toBeGreaterThan(0);
+    expect(monthDrop).toBeLessThan(dayDrop / 2);
+    expect(Math.abs(snow.gm.dResidents / clear.gm.dResidents - 1)).toBeLessThan(0.02);
+    expect(Math.abs(snow.gm.valueCapture / clear.gm.valueCapture - 1)).toBeLessThan(0.03);
+    console.log(`snow on the closing day: that day's benefit −${(dayDrop * 100).toFixed(1)}%, the month's −${(monthDrop * 100).toFixed(1)}%, residents added ${(100 * (snow.gm.dResidents / clear.gm.dResidents - 1)).toFixed(1)}%, value capture ${(100 * (snow.gm.valueCapture / clear.gm.valueCapture - 1)).toFixed(1)}%`);
   });
 
   it('city chaos: fans in flight at the month-end midnight are dropped cleanly, and the next day’s event runs on the regenerated city', () => {

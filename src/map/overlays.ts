@@ -7,12 +7,12 @@
  */
 import { ScatterplotLayer, ArcLayer, ColumnLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
-import { MAP, VALUE_CAPTURE } from '../balance';
+import { VALUE_CAPTURE } from '../balance';
 import { monthLabel } from '../core/calendar';
 import type { Tract } from '../data/world';
 import type { GrowthView } from '../sim/protocol';
 import { RAMP_COOL, RAMP_DIVERGE, RAMP_VIOLET, RAMP_WARM, logT, type RGBA } from './colorRamp';
-import { columnRadiusClass, GROWTH_MIN_DRAWN, GROWTH_RAMP_SPAN, growthLegendEnds, growthSpan, growthT, tractGrowthSince, tractPeopleAdded } from './growthMath';
+import { columnHeight, columnRadiusClass, GROWTH_MIN_DRAWN, GROWTH_RAMP_SPAN, growthLegendEnds, growthSpan, growthT, tractGrowthSince, tractPeopleAdded } from './growthMath';
 import { Emitter } from '../core/emitter';
 
 export type OverlayMode = 'none' | 'residents' | 'jobs' | 'growth' | 'unserved' | 'crowding' | 'flows';
@@ -196,12 +196,12 @@ export class Overlays {
           maxAbs = Math.max(maxAbs, Math.abs(u));
         }
         // New development (3D): a hexagonal column per growing tract, its height the people added.
-        const added = tractPeopleAdded(t, gv);
-        if (added > 50) {
+        const height = columnHeight(tractPeopleAdded(t, gv));
+        if (height > 0) {
           const r = columnRadiusClass(Math.min(250, 0.6 * t.radius));
           let arr = byR.get(r);
           if (!arr) byR.set(r, (arr = []));
-          arr.push({ pos: [t.lon, t.lat], r, height: added * MAP.growthColumnMetresPerPerson });
+          arr.push({ pos: [t.lon, t.lat], r, height });
         }
       }
       // The ramp widens with the biggest change (±2% … ±20%), so the first months show.

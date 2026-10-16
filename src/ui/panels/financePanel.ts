@@ -41,7 +41,7 @@ import {
   scoreParts,
 } from '../opsMoney';
 import { attachTip } from '../widgets';
-import { valueCaptureSection } from '../livingCity';
+import { valueCaptureHeading, valueCaptureSection } from '../livingCity';
 import { kv, section, shareBar, shell, statCard, type Panel } from './common';
 
 export type FinanceTab = 'overview' | 'fares' | 'borrowing' | 'fleet';
@@ -134,7 +134,7 @@ export function financePanel(app: App): Panel {
     const vcText = valueCaptureSection(app.growthView, lastVc, game.growthPace);
     const vcBody = h('div', { class: 'hw-muted', style: 'font-size:12.5px;line-height:1.45' }, vcText.body);
     const vcLast = h('div', { class: 'fin-line', style: 'margin-top:4px' }, vcText.last);
-    content.append(section('Value capture (Transit Improvement District)'), vcBody, vcLast);
+    content.append(section(valueCaptureHeading()), vcBody, vcLast);
     if (!app.growthView && game.growthPace !== 'off') {
       app.loadGrowthView().then((v) => {
         if (!v || !vcBody.isConnected) return;

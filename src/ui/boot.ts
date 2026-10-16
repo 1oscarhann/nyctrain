@@ -15,7 +15,7 @@ import { saveSummary } from '../save/summary';
 import { App } from './app';
 import { h, svgIcon } from './dom';
 import { ICONS } from './icons';
-import { loadChaosLevel, loadLastCity, loadSettings, storeChaosLevel, storeLastCity, storeSettings } from './settings';
+import { loadChaosLevel, loadLastCity, loadSettings, storeChaosLevel, storeLastCity, storeSettings, storeUnits } from './settings';
 import { LEVEL_HINT, LEVEL_LABEL } from './alertFeed';
 import { modal } from './widgets';
 
@@ -220,7 +220,7 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
     const units = h('div', { class: 'seg' });
     const scale = h('div', { class: 'seg' });
     const render = () => {
-      units.replaceChildren(...(['imperial', 'metric'] as const).map((u) => h('button', { class: s.units === u ? 'on' : '', onclick: () => { s.units = u; setUnits(u); storeSettings(s); render(); } }, u === 'imperial' ? 'Miles, mph' : 'Kilometres, km/h')));
+      units.replaceChildren(...(['imperial', 'metric'] as const).map((u) => h('button', { class: s.units === u ? 'on' : '', onclick: () => { s.units = u; setUnits(u); storeUnits(u); render(); } }, u === 'imperial' ? 'Miles, mph' : 'Kilometres, km/h')));
       scale.replaceChildren(...COMMUTERS.agentScaleChoices.map((n) => h('button', { class: s.agentScale === n ? 'on' : '', onclick: () => { s.agentScale = n; storeSettings(s); render(); } }, `1 : ${n}`)));
     };
     render();

@@ -131,10 +131,12 @@ export class App implements AppContext {
   private stationFlows: { id: number | null; arcs: FlowLine[] } = { id: null, arcs: [] };
   private tractHL: number | null = null;
   private crowdSegs: CrowdSeg[] = [];
-  /** Mode shares and the growth state their groups belong to, from the worker's last simState reply (saves). */
+  /** Mode shares and the growth state their groups belong to, from the last dayEnd message (or a simState reply before a manual save). */
   private lastSimState: { mode: ModeState | null; growth: GrowthData | null } | null = null;
   /** Living City: the last month close's report (the month report's City section, toasts), and the growth overlay's data (lazy, see loadGrowthView). */
   lastGrowth: GrowthMonth | null = null;
+  /** The tract the last "is booming" toast named (this session): it is not toasted again until another tract tops a month. */
+  private lastBoomToast: number | null = null;
   growthView: GrowthView | null = null;
   private growthViewPending: Promise<GrowthView | null> | null = null;
   /** Bumped whenever the cached growth view is dropped, so a reply to an older query isn't cached. */
@@ -267,7 +269,7 @@ export class App implements AppContext {
       this.topbar.update();
     });
     this.sim.events.on('snapshot', (s) => this.onSnapshot(s));
-    this.sim.events.on('dayEnd', (r) => this.onDayEnd(r));
+    this.sim.events.on('dayEnd', ({ report, state }) => this.onDayEnd(report, state));
     this.sim.events.on('busy', (l) => this.busy.set(l));
     this.sim.events.on('event', (e) => this.toast(e.title, e.body, e.tone));
     this.sim.events.on('error', (m) => this.toast('Simulation error', m, 'red'));
@@ -508,11 +510,15 @@ export class App implements AppContext {
     return this.stations.stats.get(stationId)?.crowding ?? 0;
   }
 
-  private onDayEnd(r: DayReport): void {
+  private onDayEnd(r: DayReport, st: SimState): void {
     const g = this.game;
     // The worker is already past midnight; move the mirrored clock too, so the autosave below
     // can't hold a time from before the day it has settled.
     g.setTime(Math.max(g.time, (r.day + 1) * SECONDS_PER_DAY));
+    // The mode shares and growth right after this day, in the same message as its report: any
+    // save from here on (the midnight autosave, or one on quit or tab hide) holds this day's
+    // finances (and a month close's value capture) with the growth and groups they belong to.
+    this.lastSimState = st;
     g.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen, kpi: dayKpi(r), ...(r.growth ? { valueCapture: r.growth.valueCapture } : {}) });
     this.report = r;
     if (r.growth) this.onGrowth(r.growth);
@@ -539,12 +545,8 @@ export class App implements AppContext {
     this.feed.endDay(r.chaos, g.time);
     // Event service that has ended is dropped before the autosave.
     g.pruneService(g.time);
-    // Autosave at midnight with fresh mode shares and the growth their groups belong to (one
-    // reply, so the two always match; after a month close both describe the new groups).
-    this.sim.query<SimState>({ kind: 'simState' }).then((st) => {
-      this.lastSimState = st;
-      this.save('autosave');
-    });
+    // Autosave at midnight with the state that came with the report (no round trip).
+    this.save('autosave');
   }
 
   // ------------------------------------------------------------------ Living City (plumbing; the UI reads these)
@@ -556,8 +558,9 @@ export class App implements AppContext {
   private onGrowth(gm: GrowthMonth): void {
     this.lastGrowth = gm;
     this.dropGrowthView();
-    // Up to three toasts: the month's top boomtown, then milestones (§2.1). A click shows the tract.
-    for (const t of growthToasts(gm, (i) => this.tractName(i))) {
+    // Up to three toasts: the month's top boomtown when it is news, then milestones (§2.1). A click shows the tract.
+    for (const t of growthToasts(gm, (i) => this.tractName(i), this.lastBoomToast)) {
+      if (t.kind === 'boom') this.lastBoomToast = t.tract;
       this.toasts.show(t.title, t.body, t.tone, 8000, () => this.showTract(t.tract));
     }
   }

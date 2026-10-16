@@ -45,7 +45,11 @@ async function init(msg: Extract<ToWorker, { type: 'init' }>) {
       growthPace: msg.growthPace,
     },
     {
-      dayEnd: (report) => post({ type: 'dayEnd', report }),
+      dayEnd: (report) => {
+        // The state right after the day (fresh copies: the mode arrays are transferred, not cloned).
+        const state = engine!.simState();
+        post({ type: 'dayEnd', report, state }, [state.mode.shares.buffer, state.mode.obsTime.buffer, state.mode.obsCrowd.buffer]);
+      },
       busy: (label) => post({ type: 'busy', label: label === null && skipping ? SKIP_LABEL : label }),
       event: (title, body, tone) => post({ type: 'event', title, body, tone }),
       alert: (alert) => post({ type: 'alert', alert }),

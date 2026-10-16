@@ -5,14 +5,15 @@
  * the formal fallback) — in both cities.
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
-import { GROWTH, TIME } from '../src/balance';
+import { GROWTH, MAP, TIME } from '../src/balance';
 import { applyCity } from '../src/cities';
 import { isNewMonth } from '../src/core/calendar';
 import { setUnits } from '../src/core/units';
-import { columnRadiusClass, GROWTH_RAMP_SPAN, growthLegendEnds, growthSpan, growthT, tractGrowthSince, tractPeopleAdded } from '../src/map/growthMath';
-import { placeClasses } from '../src/map/naming';
-import { formalTractName, PlaceIndex, TRACT_NAME_RADIUS, tractName } from '../src/map/placeNames';
+import { columnHeight, columnRadiusClass, GROWTH_RAMP_SPAN, growthLegendEnds, growthSpan, growthT, tractGrowthSince, tractPeopleAdded } from '../src/map/growthMath';
+import { placeClasses, tractPlaceClasses } from '../src/map/naming';
+import { formalTractName, PlaceIndex, TRACT_NAME_RADIUS, tractName, tractNameRadius } from '../src/map/placeNames';
 import type { Boomtown, GrowthMonth, GrowthView, TractGrowth } from '../src/sim/protocol';
+import { loadWorldFromDisk } from '../scripts/nodeData';
 import {
   boomtownLine,
   boomtownToast,
@@ -27,6 +28,7 @@ import {
   growthToasts,
   indexSeries,
   milestoneToast,
+  monthAfterStart,
   sandboxMonthBody,
   sinceStart,
   startDateText,
@@ -36,6 +38,7 @@ import {
   tractGrowthSentence,
   tractPanelTitle,
   tractValueCaptureLine,
+  valueCaptureHeading,
   valueCaptureSection,
   yearCityLine,
 } from '../src/ui/livingCity';
@@ -119,7 +122,7 @@ describe('Living City text (New York)', () => {
   it('builds the boomtown toast, leaving out a count that rounds to nothing', () => {
     applyCity('nyc');
     const t = boomtownToast(boom(), 'Long Island City');
-    expect(t).toEqual({ tract: 7, title: 'Long Island City is booming', body: '+0.6% this month · +41 residents, +12 jobs · +4.8% since 2030', tone: 'green' });
+    expect(t).toEqual({ kind: 'boom', tract: 7, title: 'Long Island City is booming', body: '+0.6% this month · +41 residents, +12 jobs · +4.8% since 2030', tone: 'green' });
     expect(boomtownToast(boom({ dJobs: 0.17, dRes: 7, rate: 0.0043, sinceStart: 0.0043 }), 'around Inwood')).toMatchObject({ title: 'Around Inwood is booming', body: '+0.4% this month · +7 residents · +0.4% since 2030' });
     expect(boomtownToast(boom({ dJobs: 1.2, dRes: 77 }), 'Bow').body).toBe('+0.6% this month · +77 residents, +1 job · +4.8% since 2030');
   });
@@ -146,6 +149,13 @@ describe('Living City text (New York)', () => {
     const quiet = growthToasts(month({ boomtowns: [boom({ tract: 1, rate: GROWTH.boomToastMonthlyRate * 0.9 })], milestones: ms.slice(0, 2) }), name);
     expect(quiet.map((t) => t.title)).toEqual(['T1 has grown 10% since 2030', 'T8 has grown 25% since 2030']);
     expect(growthToasts(month({ boomtowns: [], milestones: [] }), name)).toEqual([]);
+    // Single-digit gains are no news, however fast the rate: +7 residents in a tract of 1,600.
+    expect(growthToasts(month({ boomtowns: [boom({ tract: 1, rate: 0.0043, dRes: 7, dJobs: 0.2 })] }), name)).toEqual([]);
+    expect(growthToasts(month({ boomtowns: [boom({ tract: 1, dRes: GROWTH.boomToastMinPeople - 5, dJobs: 5 })] }), name).map((t) => t.kind)).toEqual(['boom']);
+    // The tract the last boomtown toast named is not toasted again (its milestones still are).
+    expect(growthToasts(month(), name, 1)).toEqual([]);
+    expect(growthToasts(month({ milestones: [{ tract: 1, pct: 0.1 }] }), name, 1).map((t) => [t.kind, t.title])).toEqual([['milestone', 'T1 has grown 10% since 2030']]);
+    expect(growthToasts(month(), name, 2).map((t) => t.title)).toEqual(['T1 is booming']);
   });
 
   it('fills the month report’s City rows in dollars and census tracts', () => {
@@ -185,6 +195,9 @@ describe('Living City text (New York)', () => {
     expect(tractValueCaptureLine(tg({ districtShare: 0.83, levy: 1113 }), 'steady')).toBe('In the value-capture district (83% of its area) · $1,113/month to the authority');
     expect(tractValueCaptureLine(tg({ inDistrict: false }), 'steady')).toBe('Outside the district: no served station within ½ mi');
     expect(tractValueCaptureLine(tg(), 'off')).toMatch(/nothing is collected while city growth is off$/);
+    // Before the first month end there is no increment yet: not "$0/month", but when it starts.
+    expect(tractValueCaptureLine(tg({ districtShare: 0.83, levy: 0 }), 'steady', 'Jan 2030')).toBe('In the value-capture district (83% of its area) · first payment at the end of Jan 2030');
+    expect(tractValueCaptureLine(tg({ levy: 0.2, history: [{ day: 18, residents: 1500, jobs: 120 }] }), 'steady', 'Feb 2030')).toBe('In the value-capture district · no rise in value to tax yet');
     setUnits('metric');
     expect(tractValueCaptureLine(tg({ inDistrict: false }), 'steady')).toBe('Outside the district: no served station within 800 m');
   });
@@ -202,6 +215,14 @@ describe('Living City text (New York)', () => {
     expect(s.res[0]).toBe(100);
     expect(s.res[2]).toBeCloseTo(101, 9);
     expect(s.jobs).toEqual([null, null, null]);
+    expect(s.xs).toEqual([0, 1, 2]);
+    // A month with growth Off stores no snapshot: the axis keeps its place (Mar → May is two months).
+    const mar = MONTH_ENDS[2], may = MONTH_ENDS[4];
+    const t = indexSeries({ residents0: 1000, jobs0: 500, history: [jan, feb, mar, may].map((day, k) => ({ day, residents: 1000 + k, jobs: 500 })) });
+    expect(t.xs).toEqual([0, 1, 2, 3, 5]);
+    expect(t.labels).toEqual(['Start', 'Jan 2030', 'Feb 2030', 'Mar 2030', 'May 2030']);
+    expect([0, 1, 4, 5, 13].map(t.label)).toEqual(['Start', 'Jan 2030', 'Apr 2030', 'May 2030', 'Jan 2031']);
+    expect(monthAfterStart(-1)).toBe('Dec 2029');
   });
 
   it('writes the station panel and finance value-capture lines', () => {
@@ -209,6 +230,7 @@ describe('Living City text (New York)', () => {
     expect(stationValueCaptureText(400_000, 6)).toBe('$400k/month · 6 tracts');
     expect(stationValueCaptureText(38_775, 1)).toBe('$39k/month · 1 tract');
     expect(stationValueCaptureTip()).toBe('12% of the extra property tax from the tracts nearest this station, paid at each month end');
+    expect(valueCaptureHeading()).toBe('Value capture (Transit Improvement District)');
     expect(captureWords()).toBe('12% of the extra property tax');
     const v = { district: new Uint8Array([1, 0, 1, 1]), projectedValueCapture: 1.8e6 } as unknown as GrowthView;
     expect(valueCaptureSection(v, 403_000, 'steady')).toEqual({
@@ -256,14 +278,19 @@ describe('Living City text (London)', () => {
     expect(tractValueCaptureLine(tg({ levy: 52_000 }), 'steady')).toBe('In the value-capture district · £52k/month to the authority');
     const v = { district: new Uint8Array([1, 1]), projectedValueCapture: 3e5 } as unknown as GrowthView;
     expect(valueCaptureSection(v, 2e5, 'steady').body).toMatch(/^2 neighbourhood areas within ½ mi of a served station\. 14% of the extra business rates and council tax/);
+    // The heading names London's precedent, not the US tax-increment district.
+    expect(valueCaptureHeading()).toBe('Value capture (business rate supplement district)');
     expect(growthGoalProgress('value-capture', null, 4.5e6, 'steady', () => '')).toBe('Best month so far: £4.5M');
   });
 
   it('names places from London’s classes, villages and hamlets included', () => {
     applyCity('london');
     expect(placeClasses()).toEqual(['neighbourhood', 'quarter', 'suburb', 'village', 'hamlet']);
+    // Tract names also take London's towns (station names do not).
+    expect(tractPlaceClasses()).toEqual(['neighbourhood', 'quarter', 'suburb', 'village', 'hamlet', 'town']);
     applyCity('nyc');
     expect(placeClasses()).toEqual(['neighbourhood', 'quarter', 'suburb']);
+    expect(tractPlaceClasses()).toEqual(['neighbourhood', 'quarter', 'suburb']);
   });
 });
 
@@ -309,6 +336,15 @@ describe('tract names', () => {
     const served = [{ name: 'North Greenwich', x: 400, y: 0, region: 3 }, { name: 'Island Gardens', x: 900, y: 0, region: 1 }];
     expect(tractName(t, q, served, 1)).toBe('around Island Gardens');
     expect(tractName(t, q, served.slice(0, 1), 1)).toBe('Tower Hamlets 031');
+    // The search reaches TRACT_NAME_RADIUS beyond the zone's edge: a London MSOA of radius 417 m
+    // is named after a station 1,470 m from its centre (Canary Wharf from Tower Hamlets 031).
+    const cw = [{ name: 'Canary Wharf', x: 0, y: 1470, region: 1 }];
+    expect(tractName(t, new PlaceIndex(), cw, 1)).toBe('Tower Hamlets 031');
+    expect(tractNameRadius(417)).toBe(TRACT_NAME_RADIUS + 417);
+    expect(tractName({ ...t, radius: 417 }, new PlaceIndex(), cw, 1)).toBe('around Canary Wharf');
+    const far = new PlaceIndex();
+    far.add('Cubitt Town', 0, -1500, 1);
+    expect(tractName({ ...t, radius: 417 }, far, cw, 1)).toBe('Cubitt Town');
     // A label with no known borough (on the boundary) still counts.
     q.add('Docklands', 200, 0, 0);
     expect(tractName(t, q, served, 1)).toBe('Docklands');
@@ -357,4 +393,23 @@ describe('growth overlay arithmetic', () => {
     expect(columnRadiusClass(140)).toBe(150);
     expect(columnRadiusClass(250)).toBe(250);
   });
+
+  for (const id of ['nyc', 'london'] as const) {
+    it(`${id}: a typical Steady boomtown's column stands tens of metres after 2–3 months; none is absurd at the ×2 bound`, () => {
+      applyCity(id);
+      const world = loadWorldFromDisk();
+      const sizes = world.tracts.map((t) => t.residents + t.jobs).filter((n) => n >= GROWTH.minTractPeople).sort((a, b) => a - b);
+      const median = sizes[Math.floor(sizes.length / 2)];
+      // Steady's boomtowns grow ≈ 0.3–0.45% a month.
+      expect(columnHeight(median * (1.003 ** 2 - 1))).toBeGreaterThanOrEqual(15);
+      expect(columnHeight(median * (1.0035 ** 3 - 1))).toBeGreaterThanOrEqual(20);
+      // Up to a few hundred metres when a median tract has doubled; the largest are capped.
+      expect(columnHeight(median)).toBeGreaterThan(200);
+      expect(columnHeight(median)).toBeLessThanOrEqual(MAP.growthColumnMaxMetres);
+      expect(columnHeight(sizes[sizes.length - 1])).toBe(MAP.growthColumnMaxMetres);
+      expect(columnHeight(MAP.growthColumnMinPeople - 1)).toBe(0);
+      // Monotone.
+      expect(columnHeight(100)).toBeGreaterThan(columnHeight(50));
+    });
+  }
 });

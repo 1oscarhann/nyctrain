@@ -398,15 +398,24 @@ export class Finance {
   // ------------------------------------------------------------------ credit and the bond market
   /**
    * The scorecard's inputs from the last CREDIT.windowDays settled days and the balance sheet now.
-   * Living City value capture is averaged over the same service days (it arrives once a month) and
-   * counts in interest coverage only: see CreditInputs.valueCapturePerDay.
+   * Living City value capture counts in interest coverage only (see CreditInputs.valueCapturePerDay).
+   * It arrives as one lump at each month close, so a mean over the window's days would count two or
+   * three payments depending on the day (and always three at a month-end review). Instead it is
+   * annualised from the closed months that overlap the window: their mean payment × 12 over
+   * ECONOMY.daysPerYear (a month that paid nothing, e.g. growth Off, counts as 0).
    */
   creditInputs(): CreditInputs {
-    const win = this.history.slice(-CREDIT.windowDays).filter((h) => h.riders > 0);
+    const last = this.history.slice(-CREDIT.windowDays);
+    const win = last.filter((h) => h.riders > 0);
     const n = win.length;
     const revenuePerDay = n ? win.reduce((s, h) => s + h.revenue, 0) / n : 0;
     const opCostPerDay = n ? win.reduce((s, h) => s + h.operating + h.staffing + h.maintenance, 0) / n : 0;
-    const valueCapturePerDay = n ? win.reduce((s, h) => s + (h.valueCapture ?? 0), 0) / n : 0;
+    let valueCapturePerDay = 0;
+    if (n) {
+      const from = monthKey(last[0].day);
+      const closed = this.months.filter((m) => m.key >= from);
+      if (closed.length) valueCapturePerDay = ((closed.reduce((s, m) => s + (m.valueCapture ?? 0), 0) / closed.length) * 12) / ECONOMY.daysPerYear;
+    }
     return {
       revenuePerDay,
       opCostPerDay,

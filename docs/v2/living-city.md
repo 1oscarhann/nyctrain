@@ -15,7 +15,7 @@ read-only `Commuters.commuteBenefit()` (§3.2) so the numbers could be tuned on 
 
 - **`src/balance.ts`**: `GrowthPace`, `GrowthSide`, `GROWTH` (adds `paces`, `cityMax` = 600 city
   rows, `milestonesInReport` = 3), `VALUE_CAPTURE` (see below for the changed fields),
-  `MAP.growthColumnMetresPerPerson`, `GOALS.boomtownGrowth` / `GOALS.valueCaptureMonth`.
+  `MAP.growthColumnMetresPerSqrtPerson` (with `growthColumnMinPeople` and `growthColumnMaxMetres` since the second review), `GOALS.boomtownGrowth` / `GOALS.valueCaptureMonth`.
   `CityBalance` has `growth: Partial<typeof GROWTH>` and `valueCapture: Partial<typeof VALUE_CAPTURE>`
   (nested `residents`/`jobs` are replaced whole). `applyCity` restores both from the `DEFAULTS`
   snapshot like `MAP`/`COMMUTERS`/`ECONOMY`/`GOALS`/`CREDIT`.
@@ -331,14 +331,15 @@ mid-day close schedules the rest of the day but does not re-inject events).
    game that never grows is the code before Living City bit for bit.
 2. `DayLedger.valueCapture` and `MonthReport.valueCapture` are optional and written only when value
    capture is booked (migrated saves get 0), for the identity above; readers use `?? 0`.
-3. Value capture counts in the credit scorecard's interest coverage, averaged over the window's
-   service days.
+3. Value capture counts in the credit scorecard's interest coverage, annualised from the closed
+   months that overlap the window (second review; it was averaged over the window's days).
 4. Event fans in flight at a month-end midnight are sent home (counted as stuck), and their event's
    tallies are kept for the wrap-up; the doc did not cover the pool.
 5. Trip-state arrays keep 2% room and are cleared in place on regeneration (placement arrays stay
    exact), for the month-close budget.
-6. `simState().growth` is null for the starting city; `growthView()` and `tractGrowth()` return
-   null without a world (or for a bad tract index).
+6. `simState().growth` is null for the starting city with no benefit samples yet (since the
+   second review it carries the month's samples from the first midnight); `growthView()` and
+   `tractGrowth()` return null without a world (or for a bad tract index).
 7. `perf` closes a growth month every 2 days after the timed hour (the doc timed one forced close
    mid-day, which would also redraw the day's modes); `balance months=` reports value capture per
    day over an average month's weekdays, not over the 5-day tuning month.
@@ -430,6 +431,67 @@ the top, the ramp at ±5%, Residents now, the 3D columns tilted); the year in re
 end as a toast with "+2,857 residents", the sandbox goal note, value capture on the ledger), pace
 Off (toast, legend, tract panel), metric units (the legend's and tract panel's "800 m"), and the
 year in review on the first weekday of January (a save moved to late December).
+
+## Second review fixes
+
+All against the `pre-living` identity: `pace=off` dumps stay byte-identical in both cities
+(`headless-sim days=3`; `balance` core 25 days with chaos Off and Normal, sprawl 25 days), and on
+Steady `headless-sim days=3` and `balance` core `days=12` stay byte-identical, with 25-day runs
+differing first at day 18's `growth` field. Perf's peak hour has the same 40,320 boardings.
+
+1. **The credit scorecard's value capture** is annualised from the closed months overlapping the
+   60-day window: their mean payment × 12 / `ECONOMY.daysPerYear` (a month that paid nothing
+   counts 0). The mean over the window's days counted three payments at every month-end review
+   (×1.09) and two or three in the panel's preview (×0.73 … ×1.09 within a month).
+2. **The commute benefit is the month's mean.** The engine adds a sample at every midnight while
+   the pace is on (`Growth.accumulateBenefit`, once per day: a reload never samples a day twice)
+   and the close uses `Growth.monthBenefit()` (the closing day included), then clears the
+   samples (also at a month end on pace Off). Walk and drive stay on a clear day (amendment 4:
+   weather acts only through observed times), so a snowy closing day still lowers that day's
+   sample, but it is one of ≈ 21: on the perf grid with 5-day months the snowy close moved the
+   month's value capture −2.3% (was −12.4%) and residents added −1.0% (was −5.4%). The samples
+   (Float64 sums per tract, saved exactly) are in `GrowthData.benefit` and the save's
+   `SavedGrowth.benefit` (optional, so earlier v5 saves load: their month averages from the load).
+   The panels' benefit cache reuses the day's sample. Balance is unchanged (month 12 on Steady:
+   New York core $353k/day, London core £207k/day).
+3. **Saves right after a close.** The worker posts the `SimState` with every `dayEnd` (its mode
+   arrays transferred), and the app sets it before settling the day, so the midnight autosave and
+   any synchronous save on quit or tab hide hold that day's finances with the growth and groups
+   they belong to. The follow-up `simState` query at midnight is gone.
+4. **The first close** no longer places 285k agents at midnight: `Commuters.prePlace` computes the
+   starting city's per-agent placements ahead (whole groups in order, 4,096 agents per sim step
+   while the city has not grown and the pace is on, into side arrays the sim never reads), and the
+   first regeneration copies the pre-placed groups (`OldGroups.placed`) and places any rest.
+   `drawAgent` is the one placement routine for every path, so the result still equals
+   `new Commuters(world, { factors })` byte for byte (test 10 now also with a third and a full
+   pre-placement). New York's first close: 261–311 ms (was 433–616, 716 under load); London
+   180–197 ms; perf prints the worst close.
+5. **Goal text:** "Fares and value capture beat operating costs and bond interest for a month":
+   the month's profit includes value capture, as the scorecard's coverage does.
+6. **Boomtowns** are tracts growing at least `GROWTH.boomtownMinNaturalMultiple` (2) × the city's
+   natural rate at the pace, so a city growing only naturally (no network, sprawl) lists none and
+   the report's "No neighbourhood grew this month." shows.
+7. **Names** reach `TRACT_NAME_RADIUS` (1.2 km) beyond the tract's disc (`tractNameRadius`), for
+   labels and the "around <station>" fallback alike, and London's tract names also take `town`
+   labels (`tractPlaceClasses`; station names keep the finer classes).
+8. **720p.** The menu's Exit / Resume row is sticky at the modal's bottom and the pace hint is one
+   line (the buttons' tooltips describe each pace); below 900 px of height the legend sits right
+   of the tool bar.
+9. **Tract panel:** before the first close a district tract reads "first payment at the end of
+   <month>", later a tract with nothing to tax "no rise in value to tax yet" (not "$0/month"); the
+   index chart has a month axis (`indexSeries().xs`), so an Off month keeps its gap.
+10. **Boomtown toasts** also need `GROWTH.boomToastMinPeople` (25) residents and jobs added, and
+    skip the tract the last boomtown toast named (this session), so a tract that keeps booming is
+    toasted at its milestones instead of every month.
+11. **London's finance heading** comes from `CityConfig.valueCaptureDistrict` ("business rate
+    supplement district"; New York "Transit Improvement District").
+12. **3D columns:** `MAP.growthColumnMetresPerSqrtPerson` (6) × √(people added), from 10 people, at
+    most 500 m: a median tract at Steady's boomtown rates (0.3–0.4%/month) stands 25–29 m after
+    three months in New York and 38–44 m in London, a median tract that doubled 262 m / 396 m,
+    and the largest zones (the City of London) are capped (tested on both cities' data).
+13. **Units follow the city** (`CityConfig.defaultUnits`: New York miles, London kilometres) until
+    the player picks some for that city (`storeUnits`, per city); the agent scale alone no longer
+    stores the units. An older single "metric" setting still counts (miles was its default).
 
 ## 0. Summary
 

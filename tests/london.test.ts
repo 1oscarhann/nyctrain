@@ -16,6 +16,7 @@ import type { WorldTerrain } from '../src/construction/terrain';
 import { loadLandFromDisk, loadWorldFromDisk } from '../scripts/nodeData';
 import { createHeadlessGame, drawLine, makeRoute, runDays, stationNear } from '../src/sim/headless';
 import { defaultFares, fareAt, fareSummary, isFlat, normalizeFares } from '../src/economy/fares';
+import { loadSettings, storeSettings, storeUnits, unitsFor } from '../src/ui/settings';
 
 afterAll(() => {
   applyCity('nyc');
@@ -220,5 +221,44 @@ describe('London credit rating', () => {
     expect(CREDIT.farebox.x).toEqual([0.5, 1.0, 1.5, 2.0]);
     applyCity('london');
     expect(CREDIT.farebox.x).toEqual([0.3, 0.6, 0.9, 1.2]);
+  });
+});
+
+describe('units follow the city unless the player picked some', () => {
+  it('London shows kilometres and New York miles by default; an explicit pick is kept per city; an old "metric" still counts', () => {
+    expect(unitsFor('london', null)).toBe('metric');
+    expect(unitsFor('nyc', null)).toBe('imperial');
+    // Before Living City one unit was stored with any settings change, miles by default.
+    expect(unitsFor('london', { units: 'imperial', agentScale: 10 })).toBe('metric');
+    expect(unitsFor('nyc', { units: 'metric' })).toBe('metric');
+    expect(unitsFor('london', { unitsByCity: { london: 'imperial' } })).toBe('imperial');
+    expect(unitsFor('nyc', { unitsByCity: { london: 'imperial' } })).toBe('imperial');
+    expect(unitsFor('nyc', { units: 'metric', unitsByCity: { nyc: 'imperial' } })).toBe('imperial');
+    // Through localStorage (a stub): the agent scale alone never pins the units.
+    const g = globalThis as { localStorage?: unknown };
+    const saved = g.localStorage;
+    const store = new Map<string, string>();
+    g.localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+    try {
+      applyCity('london');
+      expect(loadSettings().units).toBe('metric');
+      storeSettings({ agentScale: 5 });
+      expect(loadSettings()).toMatchObject({ units: 'metric', agentScale: 5 });
+      applyCity('nyc');
+      expect(loadSettings().units).toBe('imperial');
+      storeUnits('metric');
+      expect(loadSettings().units).toBe('metric');
+      applyCity('london');
+      expect(loadSettings().units).toBe('metric');
+      storeUnits('imperial');
+      expect(loadSettings().units).toBe('imperial');
+      storeSettings({ agentScale: 10 });
+      expect(loadSettings()).toMatchObject({ units: 'imperial', agentScale: 10 });
+      applyCity('nyc');
+      expect(loadSettings().units).toBe('metric');
+    } finally {
+      g.localStorage = saved;
+      applyCity('nyc');
+    }
   });
 });

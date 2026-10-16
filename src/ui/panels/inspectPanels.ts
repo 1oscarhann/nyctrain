@@ -2,7 +2,7 @@
 import { city } from '../../cities';
 import { TRAINS } from '../../balance';
 import { edgeTooltip } from '../../construction/describe';
-import { fmtDate, isNewMonth } from '../../core/calendar';
+import { fmtDate, isNewMonth, monthLabel } from '../../core/calendar';
 import { fmtClock, fmtCount, fmtDensity, fmtSpeed } from '../../core/units';
 import { formalTractName } from '../../map/placeNames';
 import type { App } from '../app';
@@ -144,22 +144,22 @@ export function tractPanel(app: App, index: number): Panel {
         statCard('Land value', fmtSignedPct(g.premium), g.premium > 0.0005 ? 'green' : undefined),
       ),
     );
+    // The next month close: midnight after the month's last weekday.
+    let last = app.game.day;
+    while (!isNewMonth(last + 1)) last++;
     if (g.history.length) {
       // Index chart: the start (= 100), then each stored month close.
       const sr = indexSeries(g);
       const wrap = h('div', { class: 'chart', style: 'margin-top:8px' });
       growthWrap.append(h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:8px' }, `Index: ${startDateText()} = 100, then each month end`), wrap);
-      chart = indexChart(wrap, sr.labels, sr.res, sr.jobs);
+      chart = indexChart(wrap, sr.xs, sr.label, sr.res, sr.jobs);
     } else {
-      // The next month close: midnight after the month's last weekday.
-      let last = app.game.day;
-      while (!isNewMonth(last + 1)) last++;
       growthWrap.append(h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:8px' }, app.game.growthPace === 'off' ? 'City growth is off: the city stays as it is.' : `The city grows at each month end. The next one closes after ${fmtDate(last)}.`));
     }
     const near = g.nearestStation !== null ? app.game.network.stations.get(g.nearestStation) : undefined;
     growthWrap.append(
       h('div', { style: 'font-size:12.5px;line-height:1.45;margin-top:8px' }, tractGrowthSentence(g, app.game.growthPace)),
-      h('div', { class: g.inDistrict ? 'fin-line' : 'hw-muted', style: 'font-size:12.5px;margin-top:6px' }, tractValueCaptureLine(g, app.game.growthPace), near && g.inDistrict && app.game.growthPace !== 'off' ? h('span', { class: 'hw-muted' }, ` · via ${near.name}`) : ''),
+      h('div', { class: g.inDistrict ? 'fin-line' : 'hw-muted', style: 'font-size:12.5px;margin-top:6px' }, tractValueCaptureLine(g, app.game.growthPace, monthLabel(last)), near && g.inDistrict && app.game.growthPace !== 'off' ? h('span', { class: 'hw-muted' }, ` · via ${near.name}`) : ''),
     );
   };
   render();

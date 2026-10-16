@@ -32,6 +32,8 @@ export interface SavedGrowth {
   /** base64 Uint16Array(2T): round(multiplier × 10000), residents then jobs. */
   history: { day: number; q: string }[];
   city: [day: number, residents: number, jobs: number, valueCapture: number][];
+  /** This month's commute-benefit samples (home and work: base64 Float64Array per tract); missing: none. */
+  benefit?: { days: number; throughDay: number; meanSum: number; home: string; work: string };
 }
 
 /**
@@ -121,4 +123,8 @@ export function b64ToF32(s: string): Float32Array {
 
 export function b64ToU16(s: string): Uint16Array {
   return new Uint16Array(b64ToBytes(s).buffer);
+}
+
+export function b64ToF64(s: string): Float64Array {
+  return new Float64Array(b64ToBytes(s).buffer);
 }

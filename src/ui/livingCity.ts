@@ -7,7 +7,7 @@
  */
 import { GROWTH, TIME, VALUE_CAPTURE, type GrowthPace } from '../balance';
 import { city } from '../cities';
-import { fmtDate, monthLabel, yearOf } from '../core/calendar';
+import { fmtDate, monthIndex, monthLabel, yearOf } from '../core/calendar';
 import { fmtCount, fmtDistance, fmtMoney, getUnits } from '../core/units';
 import type { Boomtown, GrowthMonth, GrowthView, TractGrowth } from '../sim/protocol';
 
@@ -60,6 +60,7 @@ export function capFirst(s: string): string {
 }
 
 export interface GrowthToast {
+  kind: 'boom' | 'milestone';
   tract: number;
   title: string;
   body: string;
@@ -74,6 +75,7 @@ export function boomtownToast(b: Boomtown, name: string): GrowthToast {
   const count = (n: number, one: string) => (Math.round(n) === 0 ? '' : `${fmtSignedCount(n)} ${one}${Math.abs(Math.round(n)) === 1 ? '' : 's'}`);
   const counts = [count(b.dRes, 'resident'), count(b.dJobs, 'job')].filter(Boolean);
   return {
+    kind: 'boom',
     tract: b.tract,
     title: `${capFirst(name)} is booming`,
     body: [`${fmtSignedPct(b.rate)} this month`, counts.join(', '), `${fmtSignedPct(b.sinceStart)} ${sinceStart()}`].filter(Boolean).join(' · '),
@@ -84,19 +86,21 @@ export function boomtownToast(b: Boomtown, name: string): GrowthToast {
 /** A milestone: "Astoria has grown 10% since 2030" (green) or "Mott Haven is losing people" (amber). */
 export function milestoneToast(m: { tract: number; pct: number }, name: string): GrowthToast {
   if (m.pct > 0) {
-    return { tract: m.tract, title: `${capFirst(name)} has grown ${Math.round(m.pct * 100)}% ${sinceStart()}`, body: 'Residents and jobs follow good transit.', tone: 'green' };
+    return { kind: 'milestone', tract: m.tract, title: `${capFirst(name)} has grown ${Math.round(m.pct * 100)}% ${sinceStart()}`, body: 'Residents and jobs follow good transit.', tone: 'green' };
   }
-  return { tract: m.tract, title: `${capFirst(name)} is losing people`, body: `${fmtSignedPct(m.pct, 0)} ${sinceStart()} · no good transit`, tone: 'amber' };
+  return { kind: 'milestone', tract: m.tract, title: `${capFirst(name)} is losing people`, body: `${fmtSignedPct(m.pct, 0)} ${sinceStart()} · no good transit`, tone: 'amber' };
 }
 
 /**
- * A month close's toasts (§2.1): the top boomtown when it grew at least
- * GROWTH.boomToastMonthlyRate this month, then up to two milestones, never the same tract twice.
+ * A month close's toasts (§2.1): the top boomtown when it is news (it grew at least
+ * GROWTH.boomToastMonthlyRate and GROWTH.boomToastMinPeople residents and jobs this month, and
+ * it is not `lastBoom`, the tract the last boomtown toast named), then up to two milestones,
+ * never the same tract twice. A tract that keeps booming is toasted again at its milestones.
  */
-export function growthToasts(gm: GrowthMonth, name: (tract: number) => string): GrowthToast[] {
+export function growthToasts(gm: GrowthMonth, name: (tract: number) => string, lastBoom: number | null = null): GrowthToast[] {
   const out: GrowthToast[] = [];
   const top = gm.boomtowns[0];
-  if (top && top.rate >= GROWTH.boomToastMonthlyRate) out.push(boomtownToast(top, name(top.tract)));
+  if (top && top.rate >= GROWTH.boomToastMonthlyRate && top.dRes + top.dJobs >= GROWTH.boomToastMinPeople && top.tract !== lastBoom) out.push(boomtownToast(top, name(top.tract)));
   for (const m of gm.milestones) {
     if (out.length >= 3) break;
     if (out.some((t) => t.tract === m.tract)) continue;
@@ -174,15 +178,28 @@ export function startDateText(): string {
   return fmtDate(0).replace(/^\S+ /, '');
 }
 
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "Mar 2030": the month `offset` months after the start month (0 = the start month, as monthLabel(0)). */
+export function monthAfterStart(offset: number): string {
+  const m = TIME.startDate.month + offset;
+  return `${MONTH_SHORT[((m % 12) + 12) % 12]} ${TIME.startDate.year + Math.floor(m / 12)}`;
+}
+
 /**
  * The tract panel's index chart: the start (= 100) and then one point per stored month close,
- * labelled with the month that closed ("Start", "Jan 2030", "Feb 2030"…). A side with nobody at
- * the start has no line (null).
+ * labelled with the month that closed ("Start", "Jan 2030", "Feb 2030"…), placed on a month axis
+ * (`xs`: months since the start; the start month's close is 1), so a month without a close (city
+ * growth Off) or one thinned from the history leaves its gap. `label(x)` names any x. A side
+ * with nobody at the start has no line (null).
  */
-export function indexSeries(tg: Pick<TractGrowth, 'history' | 'residents0' | 'jobs0'>): { labels: string[]; res: (number | null)[]; jobs: (number | null)[] } {
+export function indexSeries(tg: Pick<TractGrowth, 'history' | 'residents0' | 'jobs0'>): { xs: number[]; labels: string[]; label: (x: number) => string; res: (number | null)[]; jobs: (number | null)[] } {
   const idx = (v: number, v0: number) => (v0 > 0 ? (v / v0) * 100 : null);
+  const m0 = monthIndex(0);
   return {
+    xs: [0, ...tg.history.map((p) => monthIndex(p.day) - m0 + 1)],
     labels: ['Start', ...tg.history.map((p) => monthLabel(p.day))],
+    label: (x) => (x <= 0 ? 'Start' : monthAfterStart(Math.round(x) - 1)),
     res: [tg.residents0 > 0 ? 100 : null, ...tg.history.map((p) => idx(p.residents, tg.residents0))],
     jobs: [tg.jobs0 > 0 ? 100 : null, ...tg.history.map((p) => idx(p.jobs, tg.jobs0))],
   };
@@ -215,12 +232,17 @@ export function tractGrowthSentence(tg: TractGrowth, pace: GrowthPace): string {
 
 /**
  * "In the value-capture district · $41k/month to the authority" (a partial tract names its share),
- * or "Outside the district: no served station within ½ mi".
+ * or "Outside the district: no served station within ½ mi". Before its first month end a district
+ * tract has no increment yet, so it says when the first payment comes (`nextClose`: "Jan 2030")
+ * rather than "$0/month"; later, a tract with nothing to tax says so.
  */
-export function tractValueCaptureLine(tg: TractGrowth, pace: GrowthPace): string {
+export function tractValueCaptureLine(tg: TractGrowth, pace: GrowthPace, nextClose?: string): string {
   if (!tg.inDistrict) return `Outside the district: no served station within ${districtWord()}`;
   const part = tg.districtShare < 0.995 ? ` (${Math.max(1, Math.round(tg.districtShare * 100))}% of its area)` : '';
   if (pace === 'off') return `In the value-capture district${part} · nothing is collected while city growth is off`;
+  if (!(tg.levy >= 0.5)) {
+    return `In the value-capture district${part} · ${tg.history.length ? 'no rise in value to tax yet' : `first payment at the end of ${nextClose ?? 'the month'}`}`;
+  }
   return `In the value-capture district${part} · ${fmtMoney(tg.levy)}/month to the authority`;
 }
 
@@ -234,6 +256,11 @@ export function stationValueCaptureText(levy: number, tracts: number): string {
 /** Its tooltip. */
 export function stationValueCaptureTip(): string {
   return `${captureWords()} from the ${city().id === 'london' ? 'areas' : 'tracts'} nearest this station, paid at each month end`;
+}
+
+/** The finance panel's value-capture heading: "Value capture (Transit Improvement District)"; London names the business rate supplement district. */
+export function valueCaptureHeading(): string {
+  return `Value capture (${city().valueCaptureDistrict})`;
 }
 
 /** The finance panel's value-capture section text. */

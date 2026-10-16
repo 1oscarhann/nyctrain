@@ -557,6 +557,12 @@ table.freq select {
 #legend.open {
   display: block;
 }
+/* Short windows (720p): the tool bar reaches down beside the legend, so the legend moves right of it. */
+@media (max-height: 900px) {
+  #legend {
+    left: 72px;
+  }
+}
 #legend .bar {
   height: 10px;
   border-radius: 5px;
@@ -657,6 +663,16 @@ table.freq select {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+/* The menu's Exit to title / Resume row stays in view when the menu scrolls (short windows, 720p). */
+.modal .menu-body > .actions {
+  position: sticky;
+  bottom: -20px;
+  margin: 16px -22px -20px;
+  padding: 12px 22px 16px;
+  background: var(--panel-solid);
+  border-top: 1px solid var(--panel-line);
+  z-index: 1;
 }
 
 /* ---------------------------------------------------------------- busy */

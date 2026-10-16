@@ -180,6 +180,18 @@ export class Growth {
   sbar: [number, number] = [0, 0];
   history: GrowthSnapshot[] = [];
   city: GrowthCityPoint[] = [];
+  /**
+   * The month's commute benefits so far: one sample per weekday (the engine adds one at each
+   * midnight while the pace is on, accumulateBenefit), averaged at the month close (monthBenefit)
+   * and cleared after it. So one bad-weather or incident-hit day moves a month's growth by about
+   * 1/21 of its effect, not all of it. Sums in Float64, saved exactly.
+   */
+  benefitDays = 0;
+  /** Last day sampled (−1 = none): a day is sampled once, so a reload never samples it again. */
+  benefitThroughDay = -1;
+  benefitHome: Float64Array;
+  benefitWork: Float64Array;
+  benefitMeanSum = 0;
   /** Starting residents and jobs per tract (the OD row and column sums, which equal tracts.json's). */
   readonly R0: Float64Array;
   readonly J0: Float64Array;
@@ -224,6 +236,8 @@ export class Growth {
     this.fHome = new Float32Array(T).fill(1);
     this.fWork = new Float32Array(T).fill(1);
     this.premium = new Float32Array(T);
+    this.benefitHome = new Float64Array(T);
+    this.benefitWork = new Float64Array(T);
   }
 
   /** State from a save (or identity when null). State that does not fit the world is dropped (dropped = true). */
@@ -253,6 +267,22 @@ export class Growth {
     g.sbar = [d.sbar?.[0] ?? 0, d.sbar?.[1] ?? 0];
     g.history = d.history.map((h) => ({ day: h.day, q: h.q.slice() }));
     g.city = d.city.map((c) => ({ ...c }));
+    // The month's benefit samples: kept only when they fit (otherwise the month averages the days from now on).
+    const bs = d.benefit;
+    if (
+      bs &&
+      bs.home instanceof Float64Array &&
+      bs.home.length === T &&
+      bs.work instanceof Float64Array &&
+      bs.work.length === T &&
+      [bs.days, bs.throughDay, bs.meanSum].every(Number.isFinite)
+    ) {
+      g.benefitDays = bs.days;
+      g.benefitThroughDay = bs.throughDay;
+      g.benefitMeanSum = bs.meanSum;
+      g.benefitHome.set(bs.home);
+      g.benefitWork.set(bs.work);
+    }
     return g;
   }
 
@@ -270,7 +300,43 @@ export class Growth {
       sbar: [this.sbar[0], this.sbar[1]],
       history: this.history.map((h) => ({ day: h.day, q: h.q.slice() })),
       city: this.city.map((c) => ({ ...c })),
+      ...(this.benefitDays > 0
+        ? { benefit: { days: this.benefitDays, throughDay: this.benefitThroughDay, meanSum: this.benefitMeanSum, home: this.benefitHome.slice(), work: this.benefitWork.slice() } }
+        : {}),
     };
+  }
+
+  /** Something a save must carry: a grown city, or this month's benefit samples. */
+  hasState(): boolean {
+    return this.months > 0 || this.benefitDays > 0;
+  }
+
+  /** Add one day's commute benefits to the month's samples (once per day; false when `day` was already sampled). */
+  accumulateBenefit(day: number, b: Benefits): boolean {
+    if (day <= this.benefitThroughDay) return false;
+    for (let i = 0; i < this.T; i++) {
+      this.benefitHome[i] += b.home[i] ?? 0;
+      this.benefitWork[i] += b.work[i] ?? 0;
+    }
+    this.benefitMeanSum += b.mean ?? meanBenefit(b.home, this.currentResidents());
+    this.benefitDays++;
+    this.benefitThroughDay = day;
+    return true;
+  }
+
+  /** The month's mean commute benefits (null before any sample). */
+  monthBenefit(): Benefits | null {
+    const n = this.benefitDays;
+    if (!(n > 0)) return null;
+    return { home: this.benefitHome.map((v) => v / n), work: this.benefitWork.map((v) => v / n), mean: this.benefitMeanSum / n };
+  }
+
+  /** A month closed (or was skipped on pace Off): the next month starts its samples afresh. */
+  resetBenefit(): void {
+    this.benefitDays = 0;
+    this.benefitMeanSum = 0;
+    this.benefitHome.fill(0);
+    this.benefitWork.fill(0);
   }
 
   /** The starting city: no month has been applied (OD' = OD, agents exactly as before Living City). */
@@ -358,7 +424,7 @@ export class Growth {
     this.furness(GROWTH.balanceIterations);
     this.updatePremium(sR, sJ, k);
     const vc = this.valueCapture(served);
-    const report = this.buildReport(day, Rc, Jc, vc, b);
+    const report = this.buildReport(day, Rc, Jc, vc, b, GROWTH.boomtownMinNaturalMultiple * k * gBase);
     this.history.push(this.snapshot(day));
     thin(this.history, GROWTH.historyMax);
     this.city.push({ day, residents: report.residents, jobs: report.jobs, valueCapture: vc.total });
@@ -553,7 +619,8 @@ export class Growth {
     return { day, q };
   }
 
-  private buildReport(day: number, Rc: Float64Array, Jc: Float64Array, vc: ValueCaptureResult, b: Benefits): GrowthMonth {
+  /** The month report; `boomRate`: the lowest monthly rate (residents + jobs) listed as a boomtown. */
+  private buildReport(day: number, Rc: Float64Array, Jc: Float64Array, vc: ValueCaptureResult, b: Benefits, boomRate: number): GrowthMonth {
     const T = this.T;
     let res = 0, jobs = 0, res0 = 0, jobs0 = 0;
     const boom: Boomtown[] = [];
@@ -571,7 +638,7 @@ export class Growth {
       const after = (rn + jn) / base - 1;
       if (after > maxTractGrowth) maxTractGrowth = after;
       const rate = (rn + jn) / (Rc[i] + Jc[i]) - 1;
-      if (rate > 0) boom.push({ tract: i, rate, dRes: rn - Rc[i], dJobs: jn - Jc[i], sinceStart: after });
+      if (rate > 0 && rate >= boomRate) boom.push({ tract: i, rate, dRes: rn - Rc[i], dJobs: jn - Jc[i], sinceStart: after });
       for (const th of GROWTH.milestonesUp) if (before < th && after >= th) miles.push({ tract: i, pct: th, people: base });
       for (const th of GROWTH.milestonesDown) if (before > th && after <= th) miles.push({ tract: i, pct: th, people: base });
     }

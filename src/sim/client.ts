@@ -4,13 +4,14 @@
  */
 import { city } from '../cities';
 import { Emitter } from '../core/emitter';
-import type { Alert, ChaosInit, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, FarePolicy, FromWorker, GrowthData, GrowthPace, ModeState, Query, ServiceOverride, Snapshot, ToWorker } from './protocol';
+import type { Alert, ChaosInit, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, FarePolicy, FromWorker, GrowthData, GrowthPace, ModeState, Query, ServiceOverride, SimState, Snapshot, ToWorker } from './protocol';
 import { SKIP_LABEL, TRAIN_STRIDE } from './protocol';
 
 export interface SimEvents extends Record<string, unknown> {
   ready: { agents: number; groups: number; baseline: number };
   snapshot: Snapshot;
-  dayEnd: DayReport;
+  /** Midnight: the day's report and the sim state right after it (mode shares and growth, for saves). */
+  dayEnd: { report: DayReport; state: SimState };
   busy: string | null;
   event: { title: string; body?: string; tone?: 'green' | 'amber' | 'red' };
   error: string;
@@ -160,7 +161,7 @@ export class SimClient {
         break;
       }
       case 'dayEnd':
-        this.events.emit('dayEnd', m.report);
+        this.events.emit('dayEnd', { report: m.report, state: m.state });
         break;
       case 'busy':
         if (m.label === SKIP_LABEL) this.skipping = true;

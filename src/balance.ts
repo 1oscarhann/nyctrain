@@ -56,8 +56,16 @@ export const MAP = {
   /** Pixel spacing between interlined route lines. */
   interlineSpacingPx: 4.5,
   routeLineWidthPx: 4,
-  /** Living City 3D growth columns: metres of height per added resident or job (+2,500 people ≈ 200 m). */
-  growthColumnMetresPerPerson: 0.08,
+  /**
+   * Living City 3D growth columns: height = growthColumnMetresPerSqrtPerson × √(residents + jobs
+   * added), from growthColumnMinPeople, capped at growthColumnMaxMetres. The square root makes a
+   * typical Steady boomtown visible within 2–3 months (+20 people ≈ 27 m, +150 ≈ 73 m) without
+   * absurd towers near a tract's ×2 bound (+2,500 ≈ 300 m; the City of London's jobs hit the cap).
+   * One scale for both cities: London's larger zones add more people, so stand a little taller.
+   */
+  growthColumnMetresPerSqrtPerson: 6,
+  growthColumnMinPeople: 10,
+  growthColumnMaxMetres: 500,
 };
 
 // ---------------------------------------------------------------------------
@@ -489,8 +497,16 @@ export const GROWTH = {
   minTractPeople: 1000,
   /** Boomtowns listed in the month report. */
   boomtownsInReport: 5,
-  /** Toast the month's top boomtown when it grew at least this much that month (Steady's best is ≈ 0.35–0.45%). */
+  /**
+   * A tract is a boomtown only when it grew at least this multiple of the city's natural rate at
+   * the pace that month (Steady: New York 0.13%/month, London 0.18%), so a city growing at its
+   * natural rate alone (no network, or a sprawl one) lists none.
+   */
+  boomtownMinNaturalMultiple: 2,
+  /** Toast the month's top boomtown when it grew at least this much that month (Steady's best is ≈ 0.35–0.45%)… */
   boomToastMonthlyRate: 0.003,
+  /** …by at least this many residents and jobs (real people), and it was not the last tract toasted (no news). */
+  boomToastMinPeople: 25,
   /** Since-start thresholds that trigger milestone toasts (up to milestonesInReport a month). */
   milestonesUp: [0.1, 0.25, 0.5, 1],
   milestonesDown: [-0.05, -0.1, -0.2],

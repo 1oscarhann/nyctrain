@@ -240,8 +240,13 @@ interface OldGroups {
   obsCrowd: Float32Array;
   pathAM: (GroupPath | null)[];
   pathPM: (GroupPath | null)[];
-  /** Agents were placed with per-agent seeds (only then are they copied). */
+  /** Agents were placed with per-agent seeds. */
   hashed: boolean;
+  /**
+   * Old groups 0 … placed−1 have per-agent placements in the arrays below (only those are
+   * copied): all of them for a hashed city, the pre-placed prefix for the starting city (prePlace).
+   */
+  placed: number;
   aHx: Float32Array;
   aHy: Float32Array;
   aWx: Float32Array;
@@ -258,6 +263,52 @@ interface Carry {
   old: OldGroups;
   exact: Int32Array;
   pair: Int32Array;
+}
+
+/** Where agents are placed and when they travel (agent-indexed). */
+interface AgentPlacement {
+  aHx: Float32Array;
+  aHy: Float32Array;
+  aWx: Float32Array;
+  aWy: Float32Array;
+  aDepart: Float32Array;
+  aReturn: Float32Array;
+}
+
+/**
+ * Living City: per-agent placements of the starting city's agents, computed a few thousand per
+ * step ahead of the first growth (Commuters.prePlace) into side arrays the sim never reads, so
+ * the first regeneration copies them instead of re-placing every agent at the month-end midnight.
+ */
+interface PrePlacement extends AgentPlacement {
+  /** Groups 0 … done−1 are placed. */
+  done: number;
+  aPeak: Uint8Array;
+  peakFrac: Float32Array;
+}
+
+/**
+ * Draw agent `a`: its home point in tract h, its work point in w (pointInDisc's draws and
+ * arithmetic, inlined), its departure and its return. Shared by every placement path, so a
+ * pre-placed, copied or freshly placed agent is bit-identical.
+ */
+function drawAgent(gen: Rng, h: { x: number; y: number; radius: number }, w: { x: number; y: number; radius: number }, a: number, out: AgentPlacement): void {
+  const ah = gen.next() * Math.PI * 2;
+  const dh = Math.sqrt(gen.next()) * h.radius;
+  out.aHx[a] = h.x + Math.cos(ah) * dh;
+  out.aHy[a] = h.y + Math.sin(ah) * dh;
+  const aw = gen.next() * Math.PI * 2;
+  const dw = Math.sqrt(gen.next()) * w.radius;
+  out.aWx[a] = w.x + Math.cos(aw) * dw;
+  out.aWy[a] = w.y + Math.sin(aw) * dw;
+  const dep = COMMUTERS.departMean + gen.normal() * COMMUTERS.departSd;
+  out.aDepart[a] = Math.max(COMMUTERS.departMin, Math.min(COMMUTERS.departMax, dep));
+  out.aReturn[a] = COMMUTERS.workDuration + (gen.next() * 2 - 1) * COMMUTERS.returnJitter;
+}
+
+/** Fare periods of an agent's two trips (bit 0: the morning trip starts in a peak, bit 1: the return), from its stored times. */
+function peakBits(depart: number, ret: number): number {
+  return (isPeakTod(depart) ? 1 : 0) | (isPeakTod(depart + FARES.amTripEstimate + ret) ? 2 : 0);
 }
 
 /**
@@ -366,6 +417,9 @@ export class Commuters implements PassengerHooks {
    * first growth regeneration.
    */
   private hashed = false;
+  /** Living City: the starting city's per-agent placements, computed ahead of the first growth (prePlace). */
+  private pre: PrePlacement | null = null;
+  private readonly preGen = new Rng(1);
   // Event heap
   private hT = new Float64Array(1024);
   private hV = new Int32Array(1024);
@@ -614,16 +668,19 @@ export class Commuters implements PassengerHooks {
     const hashed = this.hashed;
     const seed = this.seed;
     const gen = hashed ? new Rng(1) : tbl.gen;
-    const old = carry && carry.old.hashed ? carry.old : null;
+    const old = carry && carry.old.placed > 0 ? carry.old : null;
+    const placed = old ? old.placed : 0;
     const exact = carry ? carry.exact : null;
-    const { departMean, departSd, departMin, departMax, workDuration, returnJitter } = COMMUTERS;
-    const amTrip = FARES.amTripEstimate;
+    const out: AgentPlacement = { aHx, aHy, aWx, aWy, aDepart, aReturn };
     // Kept groups whose count did not change (nearly all): their agents are copied in bulk.
     const done = new Uint8Array(G);
     if (old && exact) {
       forExactRuns(
         exact,
-        (g0, o0, len) => {
+        (g0, o0, run) => {
+          // (Only old groups with per-agent placements: a partly pre-placed starting city places the rest below.)
+          if (o0 >= placed) return;
+          const len = Math.min(run, placed - o0);
           const s0 = gStart[g0], os = old.start[o0], oe = old.start[o0 + len];
           aHx.set(old.aHx.subarray(os, oe), s0);
           aHy.set(old.aHy.subarray(os, oe), s0);
@@ -649,7 +706,7 @@ export class Commuters implements PassengerHooks {
       const s = gStart[g], n = gCount[g];
       let kept = 0;
       const o = old && exact ? exact[g] : -1;
-      if (old && o >= 0) {
+      if (old && o >= 0 && o < placed) {
         // Most groups hold one or two agents: a plain loop beats subarray views here.
         kept = Math.min(n, old.count[o]);
         const d = old.start[o] - s;
@@ -669,21 +726,10 @@ export class Commuters implements PassengerHooks {
         aBand[a] = b;
         if (k >= kept) {
           if (hashed) gen.reseed(hash32x4(seed, hi * 3 + b, wi, k));
-          // pointInDisc for the home, then the work place (the same draws and arithmetic, inlined).
-          const ah = gen.next() * Math.PI * 2;
-          const dh = Math.sqrt(gen.next()) * h.radius;
-          aHx[a] = h.x + Math.cos(ah) * dh;
-          aHy[a] = h.y + Math.sin(ah) * dh;
-          const aw = gen.next() * Math.PI * 2;
-          const dw = Math.sqrt(gen.next()) * w.radius;
-          aWx[a] = w.x + Math.cos(aw) * dw;
-          aWy[a] = w.y + Math.sin(aw) * dw;
-          const dep = departMean + gen.normal() * departSd;
-          aDepart[a] = Math.max(departMin, Math.min(departMax, dep));
-          aReturn[a] = workDuration + (gen.next() * 2 - 1) * returnJitter;
+          drawAgent(gen, h, w, a, out);
         }
         // Fare periods of the two trips (from the stored values; no extra draws).
-        const pk = (isPeakTod(aDepart[a]) ? 1 : 0) | (isPeakTod(aDepart[a] + amTrip + aReturn[a]) ? 2 : 0);
+        const pk = peakBits(aDepart[a], aReturn[a]);
         aPeak[a] = pk;
         peak += ((pk & 1) + (pk >> 1)) / 2;
       }
@@ -728,7 +774,8 @@ export class Commuters implements PassengerHooks {
    * - a new pair is searched (recomputePaths(only)).
    * New groups start at their logit target with the timetable's transit time (clear weather).
    * Agents: the first regeneration re-places every agent with per-agent seeds (a one-time
-   * change from v1's sequential stream); later ones copy kept groups' agents exactly. Either way
+   * change from v1's sequential stream; the groups prePlace has done ahead are copied from its
+   * side arrays); later ones copy kept groups' agents exactly. Either way
    * the result equals `new Commuters(world, { factors })` group for group and agent for agent.
    * Mid-day (tests, scripts) the rest of the day is scheduled again (startDay).
    */
@@ -740,6 +787,9 @@ export class Commuters implements PassengerHooks {
     this.evUsed = 0;
     this.evGroups = [];
     const T = this.world.tracts.length;
+    // The starting city's agents get per-agent placements now: the ones pre-placed ahead are copied.
+    const pre = this.hashed ? null : this.pre;
+    this.pre = null;
     const old: OldGroups = {
       G: this.G,
       keys: groupKeys(this.gHome, this.gWork, this.gBand, this.G, T),
@@ -758,15 +808,16 @@ export class Commuters implements PassengerHooks {
       pathAM: this.pathAM,
       pathPM: this.pathPM,
       hashed: this.hashed,
-      aHx: this.aHx,
-      aHy: this.aHy,
-      aWx: this.aWx,
-      aWy: this.aWy,
-      aDepart: this.aDepart,
-      aReturn: this.aReturn,
+      placed: this.hashed ? this.G : pre ? pre.done : 0,
+      aHx: pre ? pre.aHx : this.aHx,
+      aHy: pre ? pre.aHy : this.aHy,
+      aWx: pre ? pre.aWx : this.aWx,
+      aWy: pre ? pre.aWy : this.aWy,
+      aDepart: pre ? pre.aDepart : this.aDepart,
+      aReturn: pre ? pre.aReturn : this.aReturn,
       aBand: this.aBand,
-      aPeak: this.aPeak,
-      peakFrac: this.gPeakFrac,
+      aPeak: pre ? pre.aPeak : this.aPeak,
+      peakFrac: pre ? pre.peakFrac : this.gPeakFrac,
     };
     const tbl = buildGroups(this.world.od, T, this.scale, this.seed, factors, this.G);
     const m = matchGroups(old.keys, groupKeys(tbl.home, tbl.work, tbl.band, tbl.G, T), old.sorted && tbl.sorted);
@@ -825,6 +876,59 @@ export class Commuters implements PassengerHooks {
   /** Living City: event-goers' origin weights per tract (current residents); null for tracts.json's. */
   setOriginWeights(w: ArrayLike<number> | null): void {
     this.originWeights = w;
+  }
+
+  /**
+   * Living City, ahead of the first growth: give up to about `budget` more of the starting city's
+   * agents their per-agent placements (whole groups, in group order) in side arrays the sim never
+   * reads, so the first regeneration copies them (docs/v2/living-city.md, amendment 3: the one-time
+   * re-placement) instead of placing ≈ 285k agents at the month-end midnight. True when every
+   * group is done (or the city is already hashed). The engine calls it each step while growth is on.
+   */
+  prePlace(budget: number): boolean {
+    if (this.hashed) return true;
+    const G = this.G, A = this.A;
+    let p = this.pre;
+    if (!p) {
+      p = this.pre = {
+        done: 0,
+        aHx: new Float32Array(A),
+        aHy: new Float32Array(A),
+        aWx: new Float32Array(A),
+        aWy: new Float32Array(A),
+        aDepart: new Float32Array(A),
+        aReturn: new Float32Array(A),
+        aPeak: new Uint8Array(A),
+        peakFrac: new Float32Array(G),
+      };
+    }
+    const tr = this.world.tracts;
+    const gen = this.preGen;
+    const { gHome, gWork, gBand, gStart, gCount, seed } = this;
+    let used = 0;
+    while (p.done < G && used < budget) {
+      const g = p.done;
+      const hi = gHome[g], wi = gWork[g], b = gBand[g];
+      const s = gStart[g], n = gCount[g];
+      let peak = 0;
+      for (let k = 0; k < n; k++) {
+        const a = s + k;
+        gen.reseed(hash32x4(seed, hi * 3 + b, wi, k));
+        drawAgent(gen, tr[hi], tr[wi], a, p);
+        const pk = peakBits(p.aDepart[a], p.aReturn[a]);
+        p.aPeak[a] = pk;
+        peak += ((pk & 1) + (pk >> 1)) / 2;
+      }
+      p.peakFrac[g] = peak / Math.max(1, n);
+      used += n;
+      p.done++;
+    }
+    return p.done >= G;
+  }
+
+  /** How far prePlace has got: groups placed ahead, of G (tests). */
+  prePlaced(): number {
+    return this.hashed ? this.G : this.pre?.done ?? 0;
   }
 
   // ------------------------------------------------------------------ network & pathfinding

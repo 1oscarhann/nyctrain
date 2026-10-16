@@ -44,6 +44,9 @@ export const LONDON: CityConfig = {
   lowIncomeBand: 'commuters in the lowest of three earnings bands (modelled from area income, about 30%)',
   // No ad valorem property tax in the UK: business rates (most of it) and council tax.
   valueCaptureTax: 'business rates and council tax',
+  // The precedent is the Crossrail business rate supplement (2010), not US-style tax increment.
+  defaultUnits: 'metric',
+  valueCaptureDistrict: 'business rate supplement district',
   goals: [
     { id: 'cross-thames', title: 'Cross the Thames', detail: 'A running route linking boroughs north and south of the river.', kind: 'crossing', a: NORTH, b: SOUTH },
     { id: 'all-boroughs', title: 'Reach every borough', detail: 'One connected network with a station in the City and all 32 boroughs.', stretch: true, kind: 'connect', regions: BOROUGHS },

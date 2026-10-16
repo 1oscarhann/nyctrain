@@ -45,6 +45,9 @@ export interface EngineOptions {
   monthEvery?: number;
 }
 
+/** Living City: starting-city agents given their per-agent placement per sim step ahead of the first growth (≈ 1 ms). */
+const PRE_PLACE_PER_STEP = 4096;
+
 export class Engine {
   time: number;
   readonly trains: TrainSim;
@@ -61,6 +64,8 @@ export class Engine {
   private readonly monthEvery: number;
   /** Commute benefits for panel queries, cached until the next midnight, network, fare or regeneration. */
   private benefitCache: Benefits | null = null;
+  /** The starting city's agents are all pre-placed (or need not be): see Commuters.prePlace. */
+  private prePlaceDone = false;
   private cb: EngineCallbacks;
 
   constructor(world: World | null, opts: EngineOptions, cb: EngineCallbacks = {}) {
@@ -161,6 +166,13 @@ export class Engine {
     this.chaos.step(t1);
     this.trains.step(t1, dt);
     this.commuters?.step(t1);
+    // Living City: while the city has not grown yet, its agents get their per-agent placements a
+    // few thousand per step (side arrays; ≈ 70 steps), so the first month close only copies them.
+    if (!this.prePlaceDone) {
+      const g = this.growth, c = this.commuters;
+      if (!g || !c || g.months > 0) this.prePlaceDone = true;
+      else if (GROWTH.paceMultiplier[g.pace] > 0) this.prePlaceDone = c.prePlace(PRE_PLACE_PER_STEP);
+    }
   }
 
   /** Jump forward (e.g. "Skip to 6am"), stepping the sim quickly through the gap. */
@@ -183,7 +195,11 @@ export class Engine {
     this.benefitCache = null;
     // Living City: the month closes at the same midnight as the finances' month (fresh
     // observations are in; nobody is travelling), before the report goes out and the autosave.
-    const growth = this.isMonthEnd(day) ? this.monthClose(day) : null;
+    // Every other midnight adds the day's benefits to the month's mean.
+    const monthEnd = this.isMonthEnd(day);
+    if (!monthEnd) this.sampleBenefit(day);
+    const growth = monthEnd ? this.monthClose(day) : null;
+    if (monthEnd) this.growth?.resetBenefit();
     const report: DayReport = {
       ...base,
       carKm: tr.carKm,
@@ -208,8 +224,8 @@ export class Engine {
   }
 
   /**
-   * Close a growth month on `day` (docs/v2/living-city.md §3.6): measure the commute benefits,
-   * grow the city, rebalance the OD and regenerate the agents from it. Null (nothing changes) on
+   * Close a growth month on `day` (docs/v2/living-city.md §3.6): take the month's mean commute
+   * benefits (one sample per weekday, the closing day included), grow the city, rebalance the OD and regenerate the agents from it. Null (nothing changes) on
    * pace Off, without a world, or for a day already applied, so it is idempotent. Public so
    * tests and scripts can force one; the engine calls it at each month-end midnight.
    */
@@ -218,9 +234,12 @@ export class Engine {
     if (!g || !c || !(GROWTH.paceMultiplier[g.pace] > 0) || day <= g.appliedThroughDay) return null;
     this.cb.busy?.(GROWTH_LABEL);
     try {
-      const b = c.commuteBenefit();
+      // The month's mean benefit, the closing day included (a no-op when it is already sampled).
+      this.sampleBenefit(day);
+      const b = g.monthBenefit() ?? c.commuteBenefit();
       const rep = g.step(day, b, servedStations(this.net));
       if (!rep) return null;
+      g.resetBenefit();
       this.lastRegen = c.regenerate(g.factors()!, this.time);
       c.setOriginWeights(g.currentResidents());
       this.benefitCache = null;
@@ -232,10 +251,23 @@ export class Engine {
     }
   }
 
+  /**
+   * Living City: add the day's commute benefits (from the observed times the day just left,
+   * which the next 3 am mode choice uses) to the month's samples, while the pace is on.
+   * Read-only for the sim; the panels reuse the result until the next change.
+   */
+  private sampleBenefit(day: number): void {
+    const g = this.growth, c = this.commuters;
+    if (!g || !c || !(GROWTH.paceMultiplier[g.pace] > 0) || day <= g.benefitThroughDay) return;
+    const b = c.commuteBenefit();
+    g.accumulateBenefit(day, b);
+    this.benefitCache = b;
+  }
+
   /** Mode shares and the growth state their groups belong to, captured together (saves). */
   simState(): SimState {
     const g = this.growth;
-    return { mode: this.commuters!.modeState(), growth: g && !g.isIdentity() ? g.toData() : null };
+    return { mode: this.commuters!.modeState(), growth: g && g.hasState() ? g.toData() : null };
   }
 
   /** The growth overlay's and panels' data (null without a world). */
