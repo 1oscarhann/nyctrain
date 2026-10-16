@@ -2,7 +2,7 @@
  * Game state on the main thread: the network design, routes, money and the clock mirror.
  * The sim worker owns the moving parts (trains, commuters); this owns what the player builds.
  */
-import { CHAOS, ECONOMY, TIME, TRACK, type ChaosLevel } from '../balance';
+import { CHAOS, ECONOMY, GROWTH, TIME, TRACK, type ChaosLevel, type GrowthPace } from '../balance';
 import { Network } from '../construction/network';
 import {
   advanceConstruction,
@@ -78,6 +78,8 @@ export class Game {
   /** Fare policy (v2): peak and off-peak fares and the low-income multiplier. */
   fares: FarePolicy;
   sandbox: boolean;
+  /** Living City pace (menu → City growth; saved). The sim applies it at the next month close. */
+  growthPace: GrowthPace = GROWTH.defaultPace;
   selection: Selection | null = null;
   /** City chaos: level (default Normal for new games), seed and planned event service. */
   chaos: ChaosSettings;
@@ -97,9 +99,12 @@ export class Game {
       marketSeed?: number;
       /** New bonds always at v1's fixed rate with no spread (the all-off configuration). */
       fixedRate?: boolean;
+      /** Living City pace (default GROWTH.defaultPace). */
+      growthPace?: GrowthPace;
     },
   ) {
     this.sandbox = opts.sandbox;
+    if (opts.growthPace) this.growthPace = opts.growthPace;
     this.fares = opts.fares ? normalizeFares(opts.fares) : opts.fare !== undefined ? flatFares(opts.fare) : defaultFares();
     const level = opts.chaos ?? CHAOS.defaultLevel;
     this.chaos = { level, levelToday: level, seed: (opts.chaosSeed ?? CHAOS.defaultSeed) >>> 0, service: [], nextServiceId: 1 };

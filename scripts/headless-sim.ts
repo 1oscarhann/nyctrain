@@ -1,13 +1,14 @@
 /**
- * Headless simulation run for balance tuning:  npm run sim [-- days=3 scale=10 chaos=off|calm|normal|wild seed=2030 ops=off dump=file.json]
+ * Headless simulation run for balance tuning:  npm run sim [-- days=3 scale=10 chaos=off|calm|normal|wild seed=2030 ops=off pace=off|steady|boom dump=file.json]
  * Builds the spec's test network, runs it at full speed and prints a daily summary. Operations
  * control and the money market play as in a new game; ops=off turns them off (the output then
- * matches the code before them exactly).
+ * matches the code before them exactly). pace= is the Living City pace (default Steady, as a new
+ * game; a growth month first closes after day 18, 31 Jan 2030); pace=off is the code before it.
  */
 import { loadLandFromDisk, loadWorldFromDisk } from './nodeData';
 import { buildTestNetwork, createHeadlessGame, runDays } from '../src/sim/headless';
 import { fmtMoney } from '../src/core/units';
-import { CHAOS, type ChaosLevel } from '../src/balance';
+import { CHAOS, GROWTH, type ChaosLevel, type GrowthPace } from '../src/balance';
 import { weatherLabel } from '../src/core/cityCalendar';
 import { dumpRun } from './dump';
 
@@ -16,11 +17,13 @@ const days = Number(args.days ?? 3);
 const scale = Number(args.scale ?? 10);
 const chaos = (args.chaos ?? 'off') as ChaosLevel;
 if (!CHAOS.levels.includes(chaos)) throw new Error(`Unknown chaos level ${chaos}`);
+const pace = (args.pace ?? GROWTH.defaultPace) as GrowthPace;
+if (!GROWTH.paces.includes(pace)) throw new Error(`Unknown pace ${pace} (off|steady|boom)`);
 
 const t0 = Date.now();
 const world = loadWorldFromDisk();
 const opsOff = args.ops === 'off';
-const game = createHeadlessGame(world, loadLandFromDisk(), { chaos, chaosSeed: Number(args.seed ?? CHAOS.defaultSeed), ops: opsOff ? 'off' : 'default' });
+const game = createHeadlessGame(world, loadLandFromDisk(), { chaos, chaosSeed: Number(args.seed ?? CHAOS.defaultSeed), ops: opsOff ? 'off' : 'default', growthPace: pace });
 const { r1, r2, errors } = buildTestNetwork(game);
 console.log(`network: ${game.network.edges.size} edges, ${game.network.stations.size} stations, ${errors.length} invalid`);
 for (const e of errors) console.log('  ! ' + e);
@@ -42,6 +45,9 @@ const run = runDays(game, days, {
         (chaos !== 'off' && r.chaos
           ? `\n        chaos: ${weatherLabel(r.chaos.weather)} · incidents ${JSON.stringify(r.chaos.incidents)} (${r.chaos.incidentMinutes.toFixed(0)} min) · diverted ${r.chaos.diverted} · carried past ${r.chaos.carriedPast}` +
             ` · event riders ${r.chaos.eventRiders} · ${r.chaos.events.map((e) => `${e.label} ${e.attendance.toLocaleString()} (${e.byTransit.toLocaleString()} by transit, ${e.late} late)`).join(', ') || 'no events'}`
+          : '') +
+        (r.growth
+          ? `\n        city growth (${r.growth.label}): value capture ${fmtMoney(r.growth.valueCapture)} · residents ${Math.round(r.growth.residents).toLocaleString()} (${r.growth.dResidents >= 0 ? '+' : ''}${Math.round(r.growth.dResidents).toLocaleString()}) · ${r.growth.districtTracts} district tracts · agents ${r.growth.agents.toLocaleString()}`
           : ''),
     );
   },

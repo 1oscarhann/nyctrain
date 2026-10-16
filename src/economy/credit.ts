@@ -17,6 +17,13 @@ export type Rating = (typeof CREDIT.ratings)[number];
 export interface CreditInputs {
   /** Mean fare revenue per service day (days with riders) in the review window. */
   revenuePerDay: number;
+  /**
+   * Living City: mean value capture per service day in the window (missing: 0). It counts in
+   * interest coverage, as pledged, recurring revenue (the Hudson Yards bonds that paid for the 7
+   * line extension were backed by the district's PILOTs and tax increment), but not in farebox
+   * recovery, which is fares over operating costs by definition.
+   */
+  valueCapturePerDay?: number;
   /** Mean operating + staffing + maintenance per service day. */
   opCostPerDay: number;
   serviceDays: number;
@@ -92,7 +99,7 @@ export function creditScore(inp: CreditInputs): CreditResult {
   });
   // Interest coverage: one new chunk counts pro forma, so a debt-free authority that loses money still rates poorly.
   const denom = inp.annualInterest + ECONOMY.bondChunk * inp.newRate;
-  const C = rated ? (denom > 0 ? ((inp.revenuePerDay - inp.opCostPerDay) * ECONOMY.daysPerYear) / denom : 0) : null;
+  const C = rated ? (denom > 0 ? ((inp.revenuePerDay + (inp.valueCapturePerDay ?? 0) - inp.opCostPerDay) * ECONOMY.daysPerYear) / denom : 0) : null;
   metrics.push({
     id: 'coverage',
     label: 'Interest coverage',

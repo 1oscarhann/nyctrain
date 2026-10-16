@@ -4,7 +4,7 @@
  */
 import { city } from '../cities';
 import { Emitter } from '../core/emitter';
-import type { Alert, ChaosInit, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, FarePolicy, FromWorker, ModeState, Query, ServiceOverride, Snapshot, ToWorker } from './protocol';
+import type { Alert, ChaosInit, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, FarePolicy, FromWorker, GrowthData, GrowthPace, ModeState, Query, ServiceOverride, Snapshot, ToWorker } from './protocol';
 import { SKIP_LABEL, TRAIN_STRIDE } from './protocol';
 
 export interface SimEvents extends Record<string, unknown> {
@@ -68,6 +68,9 @@ export class SimClient {
     modeState?: ModeState;
     chaos: ChaosInit;
     service: ServiceOverride[];
+    /** Living City: the saved growth the saved groups belong to (null: the starting city), and the pace. */
+    growth?: GrowthData | null;
+    growthPace?: GrowthPace;
   }): void {
     const c = city();
     this.send({ type: 'init', city: c.id, dataBase: new URL(c.dataPath, document.baseURI).href, ...opts });
@@ -121,6 +124,11 @@ export class SimClient {
   /** Event service overrides (the full list, replacing the previous one). */
   setService(overrides: ServiceOverride[]): void {
     this.send({ type: 'service', overrides });
+  }
+
+  /** Living City pace; the worker applies it from the next month close. */
+  setGrowthPace(pace: GrowthPace): void {
+    this.send({ type: 'growthPace', pace });
   }
 
   query<T>(q: Query): Promise<T> {

@@ -1,5 +1,5 @@
-/** In-game menu: save to slots, export/import, load, city chaos level, settings, exit to title. */
-import { CHAOS, COMMUTERS } from '../balance';
+/** In-game menu: save to slots, export/import, load, city chaos level, city growth pace, settings, exit to title. */
+import { CHAOS, COMMUTERS, GROWTH } from '../balance';
 import { setUnits } from '../core/units';
 import { exportFile, importFile, listSlots, readSlot, SLOTS, type SlotId } from '../save/store';
 import { saveSummary } from '../save/summary';
@@ -8,6 +8,7 @@ import type { App } from './app';
 import { h } from './dom';
 import { modal } from './widgets';
 import { LEVEL_HINT, LEVEL_LABEL } from './alertFeed';
+import { GROWTH_PACE_HINT, GROWTH_PACE_LABEL } from './livingCity';
 import { storeSettings } from './settings';
 
 const SLOT_LABEL: Record<SlotId, string> = { autosave: 'Autosave', slot1: 'Slot 1', slot2: 'Slot 2', slot3: 'Slot 3' };
@@ -67,6 +68,16 @@ export async function openMenu(app: App): Promise<void> {
     chaosHint.textContent = `${LEVEL_HINT[app.game.chaos.level]}. Changes apply from 3 am; Service alerts (A) shows what is happening.`;
   };
   renderChaos();
+  // Living City pace for this game (applies from the next month end).
+  const pace = h('div', { class: 'seg', id: 'menu-growth' });
+  const paceHint = h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:4px' });
+  const renderPace = () => {
+    pace.replaceChildren(
+      ...GROWTH.paces.map((p) => h('button', { class: app.game.growthPace === p ? 'on' : '', 'data-pace': p, title: GROWTH_PACE_HINT[p], onclick: () => { if (p !== app.game.growthPace) app.setGrowthPace(p); renderPace(); } }, GROWTH_PACE_LABEL[p])),
+    );
+    paceHint.textContent = `${GROWTH_PACE_HINT[app.game.growthPace]}. Takes effect at the next month end; G shows the growth map.`;
+  };
+  renderPace();
   const scale = h('div', { class: 'seg' });
   for (const s of COMMUTERS.agentScaleChoices) {
     scale.append(
@@ -107,6 +118,9 @@ export async function openMenu(app: App): Promise<void> {
     h('div', { class: 'section' }, 'City chaos (events, disruptions, weather)'),
     chaos,
     chaosHint,
+    h('div', { class: 'section' }, 'City growth (neighbourhoods grow around good transit)'),
+    pace,
+    paceHint,
     h('div', { class: 'section' }, 'Units'),
     units,
     h('div', { class: 'section' }, 'Agent scale (real commuters per simulated agent)'),

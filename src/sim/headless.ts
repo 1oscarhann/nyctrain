@@ -2,7 +2,7 @@
  * Headless game harness (no rendering, no worker): used by the headless test and the balance
  * tuning script. Builds networks in code, runs the engine at full speed and settles finances.
  */
-import { ECONOMY, EVENTS, OPERATIONS, STATION, TIME, TRAINS, type ChaosLevel, type TrackClass, type TrackLevel } from '../balance';
+import { ECONOMY, EVENTS, OPERATIONS, STATION, TIME, TRAINS, type ChaosLevel, type GrowthPace, type TrackClass, type TrackLevel } from '../balance';
 import { cityBalance } from '../cities';
 import { MAX_VENUES, type CityEvent } from '../core/cityCalendar';
 import { Game } from '../core/game';
@@ -22,7 +22,7 @@ import { defaultFares, flatFares, type FarePolicy } from '../economy/fares';
 import { dayKpi } from '../economy/finance';
 import { runProfile } from '../trains/kinematics';
 import { Engine, type EngineCallbacks } from './engine';
-import type { CompiledNetwork, CRoute, CRouteDir, DayReport, ModeState } from './protocol';
+import type { CompiledNetwork, CRoute, CRouteDir, DayReport, GrowthData, ModeState } from './protocol';
 import type { Snap } from '../construction/types';
 import { edgeReport } from '../construction/validate';
 
@@ -44,6 +44,8 @@ export interface HeadlessGameOptions {
    * reproduces the code before operations control bit for bit.
    */
   ops?: 'default' | 'off';
+  /** Living City pace (default GROWTH.defaultPace, as a new game; 'off' is the code before Living City). */
+  growthPace?: GrowthPace;
 }
 
 /**
@@ -56,7 +58,7 @@ export function createHeadlessGame(world: World, land: LandCollection, opts: Hea
   const terrain = new WorldTerrain(new LandMask(land), new TractIndex(world.tracts));
   const off = opts.ops === 'off';
   const fares = off ? flatFares(opts.fare ?? ECONOMY.fareDefault) : (opts.fares ?? (opts.fare !== undefined ? flatFares(opts.fare) : defaultFares()));
-  const game = new Game(world, terrain, { sandbox: opts.sandbox ?? false, fares, chaos: opts.chaos ?? 'off', chaosSeed: opts.chaosSeed, marketSeed: opts.marketSeed, fixedRate: off });
+  const game = new Game(world, terrain, { sandbox: opts.sandbox ?? false, fares, chaos: opts.chaos ?? 'off', chaosSeed: opts.chaosSeed, marketSeed: opts.marketSeed, fixedRate: off, growthPace: opts.growthPace });
   if (off) game.routes.newControl = offControl;
   return game;
 }
@@ -201,11 +203,19 @@ export interface EngineRunOptions {
   seed?: number;
   /** Each closed day (after the finances settle). */
   onDay?: (r: DayReport) => void;
+  /** Busy labels (e.g. the growth month close), for timing in scripts. */
+  busy?: EngineCallbacks['busy'];
   /** City chaos callbacks. */
   alert?: EngineCallbacks['alert'];
   dayChaos?: EngineCallbacks['dayChaos'];
   /** Mode shares from a save (as the browser passes them after a load). */
   modeState?: ModeState;
+  /** Living City pace (default: the game's, game.growthPace). */
+  growthPace?: GrowthPace;
+  /** Living City state from a save (the groups the mode shares belong to). */
+  growth?: GrowthData | null;
+  /** Tuning only: close a growth month every N days instead of at calendar month ends. */
+  monthEvery?: number;
 }
 
 /**
@@ -223,14 +233,19 @@ export function startEngine(game: Game, opts: EngineRunOptions & { reports?: Day
       modeState: opts.modeState,
       chaos: game.chaosInit(),
       service: game.chaos.service,
+      growth: opts.growth ?? null,
+      growthPace: opts.growthPace ?? game.growthPace,
+      monthEvery: opts.monthEvery,
     },
     {
       dayEnd: (r) => {
         opts.reports?.push(r);
-        game.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen, kpi: dayKpi(r) });
+        // Like the browser: a growth month's value capture is booked on its own ledger line.
+        game.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen, kpi: dayKpi(r), ...(r.growth ? { valueCapture: r.growth.valueCapture } : {}) });
         opts.onDay?.(r);
       },
       alert: opts.alert,
+      busy: opts.busy,
       // Like the browser: the game keeps today's level and plan basis for saves.
       dayChaos: (info) => {
         game.setChaosToday(info);
@@ -240,6 +255,16 @@ export function startEngine(game: Game, opts: EngineRunOptions & { reports?: Day
   );
   engine.setNetwork(compileNetwork(game).net);
   return engine;
+}
+
+/** Test helper: tract indices within `radius` metres (centre to station) of a built station of the game. */
+export function nearStations(game: Game, radius: number): number[] {
+  const pts = [...game.network.stations.values()].filter((s) => s.status !== 'blueprint').map((s) => game.network.stationPos(s));
+  const out: number[] = [];
+  game.world.tracts.forEach((t, i) => {
+    if (pts.some((p) => Math.hypot(p.x - t.x, p.y - t.y) <= radius)) out.push(i);
+  });
+  return out;
 }
 
 /** Step the engine at the fixed timestep until its clock reaches t. */
@@ -281,19 +306,35 @@ export function midtownArenaEvent(day: number, attendance: number, startHour: nu
  * Large synthetic network for performance checks (the spec's 300 stations / 25 routes / ~400
  * trains): a grid of straight deep-tunnel lines, a station about every kilometre on land.
  */
-export function buildPerfNetwork(game: Game, opts: { ns?: number; ew?: number; perLine?: number; control?: Partial<RouteControl> } = {}): { routes: Route[]; fleet: number } {
+/** The perf grid's extent: north–south lines from lon0 across lonSpan (latNs), crosstown lines from lat0 across latSpan (lonEw). */
+export interface PerfArea {
+  lon0: number;
+  lonSpan: number;
+  latNs: [number, number];
+  lat0: number;
+  latSpan: number;
+  lonEw: [number, number];
+}
+
+/** New York's grid (Brooklyn, Manhattan and Queens), the default. */
+export const PERF_AREA_NYC: PerfArea = { lon0: -74.02, lonSpan: 0.27, latNs: [40.6, 40.79], lat0: 40.63, latSpan: 0.14, lonEw: [-74.03, -73.74] };
+/** London's grid of the same size around Charing Cross (≈ 23 × 21 km; 1° of longitude is shorter at 51.5° N). */
+export const PERF_AREA_LONDON: PerfArea = { lon0: -0.29, lonSpan: 0.33, latNs: [51.42, 51.61], lat0: 51.44, latSpan: 0.14, lonEw: [-0.3, 0.06] };
+
+export function buildPerfNetwork(game: Game, opts: { ns?: number; ew?: number; perLine?: number; control?: Partial<RouteControl>; area?: PerfArea } = {}): { routes: Route[]; fleet: number } {
   const ns = opts.ns ?? 17, ew = opts.ew ?? 8, perLine = opts.perLine ?? 12;
+  const ar = opts.area ?? PERF_AREA_NYC;
   const net = game.network;
   const cars = STATION.cars.heavy.default;
   // North–south lines, then crosstown lines across them.
   const strokes: LonLat[][] = [];
   for (let i = 0; i < ns; i++) {
-    const lon = -74.02 + (i * 0.27) / Math.max(1, ns - 1);
-    strokes.push([[lon, 40.6], [lon + 0.01, 40.79]]);
+    const lon = ar.lon0 + (i * ar.lonSpan) / Math.max(1, ns - 1);
+    strokes.push([[lon, ar.latNs[0]], [lon + 0.01, ar.latNs[1]]]);
   }
   for (let i = 0; i < ew; i++) {
-    const lat = 40.63 + (i * 0.14) / Math.max(1, ew - 1);
-    strokes.push([[-74.03, lat], [-73.74, lat + 0.005]]);
+    const lat = ar.lat0 + (i * ar.latSpan) / Math.max(1, ew - 1);
+    strokes.push([[ar.lonEw[0], lat], [ar.lonEw[1], lat + 0.005]]);
   }
   const lines: number[][] = [];
   for (let i = 0; i < strokes.length; i++) {

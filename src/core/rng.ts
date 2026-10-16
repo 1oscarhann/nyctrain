@@ -4,6 +4,10 @@ export class Rng {
   constructor(seed: number) {
     this.s = seed >>> 0 || 1;
   }
+  /** Restart the stream from a new seed (Living City: one stream per agent, no allocation). */
+  reseed(seed: number): void {
+    this.s = seed >>> 0 || 1;
+  }
   next(): number {
     let t = (this.s = (this.s + 0x6d2b79f5) | 0);
     t = Math.imul(t ^ (t >>> 15), 1 | t);
@@ -84,4 +88,42 @@ export function pickWeighted(pairs: readonly (readonly [number, number])[], u: n
     if (target < acc) return v;
   }
   return pairs[pairs.length - 1][0];
+}
+
+// ---------------------------------------------------------------------------
+// Living City: identity hashes (no allocation, so they can run once per agent).
+
+/** One murmur3 block: mix a 32-bit word into the running hash. */
+function mm3(h: number, k: number): number {
+  k = Math.imul(k | 0, 0xcc9e2d51);
+  k = (k << 15) | (k >>> 17);
+  k = Math.imul(k, 0x1b873593);
+  h ^= k;
+  h = (h << 13) | (h >>> 19);
+  return (Math.imul(h, 5) + 0xe6546b64) | 0;
+}
+
+/**
+ * Hash of four integers (murmur3-32 over the four words with its finaliser): e.g. the seed of agent
+ * k of group (home, work, band). Unsigned 32-bit; may be 0 (Rng maps a 0 seed to 1).
+ */
+export function hash32x4(a: number, b: number, c: number, d: number): number {
+  let h = 0x9747b28c;
+  h = mm3(h, a);
+  h = mm3(h, b);
+  h = mm3(h, c);
+  h = mm3(h, d);
+  h ^= 16;
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/** FNV-1a over bytes, chainable through `h` (Living City growth fingerprint). Unsigned 32-bit. */
+export function fnv32(bytes: Uint8Array, h = 0x811c9dc5): number {
+  for (let i = 0; i < bytes.length; i++) h = Math.imul(h ^ bytes[i], 0x01000193);
+  return h >>> 0;
 }

@@ -30,6 +30,12 @@ export interface DayLedger {
   fees: number;
   /** Bond principal prepaid at once (not in the settle formula). */
   prepaid: number;
+  /**
+   * Living City value capture paid to the authority this day (the month's payment, booked on the
+   * month-close day). Set only on days a growth month closed, so a game with growth Off keeps
+   * exactly the ledgers it had before Living City; read it as `valueCapture ?? 0`.
+   */
+  valueCapture?: number;
   /** Service figures for monthly and yearly reviews. */
   kpi?: DayKpi;
 }
@@ -53,8 +59,10 @@ export interface MonthReport {
   operatingCosts: number;
   capital: number;
   bondPayments: number;
-  /** Operating profit: revenue − (operating + staffing + maintenance + bond interest + financing fees). */
+  /** Operating profit: revenue + value capture − (operating + staffing + maintenance + bond interest + financing fees). */
   profit: number;
+  /** Living City value capture in the month (present when a growth month closed in it; read as `?? 0`). */
+  valueCapture?: number;
   riders: number;
   cashEnd: number;
   /** Bond interest paid. */
@@ -140,6 +148,8 @@ export interface DayInputs {
   stationsOpen: number;
   /** Service figures for the reviews (optional). */
   kpi?: DayKpi;
+  /** Living City: the month's value capture, on the day a growth month closed (DayReport.growth.valueCapture); omit on other days. */
+  valueCapture?: number;
 }
 
 export interface FinanceData {
@@ -307,6 +317,9 @@ export class Finance {
     d.riders = inp.riders;
     d.carKm = inp.carKm;
     d.revenue = inp.revenue;
+    // Living City: its own ledger line, not fares (sandbox: recorded, no cash change, like fares).
+    if (inp.valueCapture !== undefined) d.valueCapture = inp.valueCapture;
+    const vc = d.valueCapture ?? 0;
     d.operating = inp.carKm * ECONOMY.operatingPerCarKm;
     d.staffing = inp.stationsOpen * ECONOMY.staffingPerStationDay;
     d.maintenance = (this.assetValue * ECONOMY.maintenanceRatePerYear) / ECONOMY.daysPerYear;
@@ -329,7 +342,7 @@ export class Finance {
       this.bonds = this.bonds.filter((b) => b.balance > 1);
     }
     if (!this.sandbox) {
-      this.cash += d.revenue - d.operating - d.staffing - d.maintenance - d.bondInterest - d.bondPrincipal;
+      this.cash += d.revenue + vc - d.operating - d.staffing - d.maintenance - d.bondInterest - d.bondPrincipal;
     }
     d.cash = this.cash;
     this.history.push(d);
@@ -356,6 +369,9 @@ export class Finance {
     const operatingCosts = sum((h) => h.operating + h.staffing + h.maintenance);
     const interest = sum((h) => h.bondInterest);
     const fees = sum((h) => h.fees ?? 0);
+    // Value capture is its own line, and counts towards the month's profit.
+    const hasVc = days.some((h) => h.valueCapture !== undefined);
+    const valueCapture = sum((h) => h.valueCapture ?? 0);
     const withKpi = days.filter((h) => h.kpi);
     const kpiMean = (f: (k: DayKpi) => number) => withKpi.reduce((s, h) => s + f(h.kpi!), 0) / withKpi.length;
     this.months.push({
@@ -366,7 +382,8 @@ export class Finance {
       operatingCosts,
       capital: sum((h) => h.construction + h.trains - h.refunds),
       bondPayments: sum((h) => h.bondInterest + h.bondPrincipal),
-      profit: revenue - operatingCosts - interest - fees,
+      profit: revenue + valueCapture - operatingCosts - interest - fees,
+      ...(hasVc ? { valueCapture } : {}),
       riders: sum((h) => h.riders),
       cashEnd: this.cash,
       interest,
@@ -379,15 +396,21 @@ export class Finance {
   }
 
   // ------------------------------------------------------------------ credit and the bond market
-  /** The scorecard's inputs from the last CREDIT.windowDays settled days and the balance sheet now. */
+  /**
+   * The scorecard's inputs from the last CREDIT.windowDays settled days and the balance sheet now.
+   * Living City value capture is averaged over the same service days (it arrives once a month) and
+   * counts in interest coverage only: see CreditInputs.valueCapturePerDay.
+   */
   creditInputs(): CreditInputs {
     const win = this.history.slice(-CREDIT.windowDays).filter((h) => h.riders > 0);
     const n = win.length;
     const revenuePerDay = n ? win.reduce((s, h) => s + h.revenue, 0) / n : 0;
     const opCostPerDay = n ? win.reduce((s, h) => s + h.operating + h.staffing + h.maintenance, 0) / n : 0;
+    const valueCapturePerDay = n ? win.reduce((s, h) => s + (h.valueCapture ?? 0), 0) / n : 0;
     return {
       revenuePerDay,
       opCostPerDay,
+      valueCapturePerDay,
       serviceDays: n,
       debt: this.debt(),
       annualInterest: this.bonds.reduce((s, b) => s + b.balance * b.rate, 0),

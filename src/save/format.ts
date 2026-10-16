@@ -7,12 +7,32 @@ import type { FinanceData } from '../economy/finance';
 import type { RouteSetData } from '../routes/routeSet';
 import type { GoalState } from '../core/goals';
 import type { UnitSystem } from '../core/units';
-import type { ChaosLevel, CityId } from '../balance';
+import type { ChaosLevel, CityId, GrowthPace } from '../balance';
 import type { DayExposure, ServiceOverride } from '../sim/protocol';
 import type { FarePolicy } from '../economy/fares';
 
-/** v3: city chaos (events, disruptions, weather). v4: operations control and the money market. */
-export const SAVE_VERSION = 4;
+/** v3: city chaos (events, disruptions, weather). v4: operations control and the money market. v5: Living City. */
+export const SAVE_VERSION = 5;
+
+/**
+ * Living City growth state (v5): what the saved groups (and so the saved mode shares) were
+ * generated from. Null for the starting city.
+ */
+export interface SavedGrowth {
+  version: 1;
+  appliedThroughDay: number;
+  months: number;
+  sbar: [number, number];
+  /** base64 Float32Array, one value per tract. */
+  mRes: string;
+  mJobs: string;
+  fHome: string;
+  fWork: string;
+  premium: string;
+  /** base64 Uint16Array(2T): round(multiplier × 10000), residents then jobs. */
+  history: { day: number; q: string }[];
+  city: [day: number, residents: number, jobs: number, valueCapture: number][];
+}
 
 /**
  * City chaos: the level, the seed (calendar, weather and the incident plan all derive from it) and
@@ -64,24 +84,41 @@ export interface SaveFile {
     lastReport: unknown | null;
     tutorialDone: boolean;
     chaos: SavedChaos;
+    /** Living City pace (v5; older saves join on Steady). */
+    growthPace: GrowthPace;
   };
   settings: SaveSettings;
   modeState: SavedModeState | null;
+  /** Living City (v5): the growth the mode state's groups belong to (null: the starting city). */
+  growth: SavedGrowth | null;
   /** Set by migrate() (not stored) when the file was older: the version it had. */
   migratedFrom?: number;
 }
 
-export function f32ToB64(a: Float32Array): string {
-  const bytes = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+/** base64 of any typed array's bytes (little-endian, as the platform stores them). */
+export function bytesToB64(v: ArrayBufferView): string {
+  const bytes = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
   let s = '';
   const CH = 0x8000;
   for (let i = 0; i < bytes.length; i += CH) s += String.fromCharCode(...bytes.subarray(i, i + CH));
   return btoa(s);
 }
 
-export function b64ToF32(s: string): Float32Array {
+export function f32ToB64(a: Float32Array): string {
+  return bytesToB64(a);
+}
+
+function b64ToBytes(s: string): Uint8Array {
   const bin = atob(s);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Float32Array(bytes.buffer);
+  return bytes;
+}
+
+export function b64ToF32(s: string): Float32Array {
+  return new Float32Array(b64ToBytes(s).buffer);
+}
+
+export function b64ToU16(s: string): Uint16Array {
+  return new Uint16Array(b64ToBytes(s).buffer);
 }

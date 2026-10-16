@@ -6,7 +6,9 @@ import { TRACK } from '../balance';
 import { pickEdge } from '../construction/pick';
 import { edgeTooltip } from '../construction/describe';
 import { fmtCount } from '../core/units';
+import { tractGrowthSince } from '../map/overlays';
 import type { App } from './app';
+import { growthHoverText } from './livingCity';
 import type { Pointer, Tool } from './toolTypes';
 
 export class SelectTool implements Tool {
@@ -43,7 +45,24 @@ export class SelectTool implements Tool {
       app.tip(edgeTooltip(app.game, hit.edge), p.px);
       return;
     }
+    // City growth overlay: the neighbourhood under the pointer and its growth since the start.
+    const gv = app.overlays.mode === 'growth' ? app.overlays.growth : null;
+    if (gv) {
+      const tract = this.tractAt(p.x, p.y);
+      if (tract) {
+        const name = app.tractName(tract.index).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+        app.tip(`<div class="title">${name}</div><div class="hw-muted">${growthHoverText(tractGrowthSince(tract, gv))}</div>`, p.px);
+        return;
+      }
+    }
     app.tip(null);
+  }
+
+  /** The tract under a point (the same test as a click), on land. */
+  private tractAt(x: number, y: number) {
+    const app = this.app;
+    const tract = app.tractIndex.nearest(x, y);
+    return tract && Math.hypot(tract.x - x, tract.y - y) < Math.max(400, tract.radius * 1.3) && !app.terrain.isWater(x, y) ? tract : null;
   }
 
   click(p: Pointer): void {
@@ -59,10 +78,8 @@ export class SelectTool implements Tool {
     if (sid !== null) return app.game.select({ kind: 'station', id: sid });
     const hit = pickEdge(app.game.network, p.x, p.y, app.tol(TRACK.snapPx * 0.7));
     if (hit) return app.game.select({ kind: 'edge', id: hit.edge });
-    const tract = app.tractIndex.nearest(p.x, p.y);
-    if (tract && Math.hypot(tract.x - p.x, tract.y - p.y) < Math.max(400, tract.radius * 1.3) && !app.terrain.isWater(p.x, p.y)) {
-      return app.game.select({ kind: 'tract', index: tract.index });
-    }
+    const tract = this.tractAt(p.x, p.y);
+    if (tract) return app.game.select({ kind: 'tract', index: tract.index });
     app.game.select(null);
   }
 

@@ -19,6 +19,8 @@ let lastSnap = 0;
 let simSeconds = 0;
 let rateWindowStart = performance.now();
 let simRate = 0;
+/** A skip is running: busy labels from inside it (growth month, route updates) hand the pill back to the skip's. */
+let skipping = false;
 const queued: ToWorker[] = [];
 
 function post(msg: FromWorker, transfer: Transferable[] = []) {
@@ -31,10 +33,20 @@ async function init(msg: Extract<ToWorker, { type: 'init' }>) {
   const world = await fetchWorld(msg.dataBase);
   engine = new Engine(
     world,
-    { agentScale: msg.agentScale, seed: msg.seed, time: msg.time, fares: msg.fares, modeState: msg.modeState, chaos: msg.chaos, service: msg.service },
+    {
+      agentScale: msg.agentScale,
+      seed: msg.seed,
+      time: msg.time,
+      fares: msg.fares,
+      modeState: msg.modeState,
+      chaos: msg.chaos,
+      service: msg.service,
+      growth: msg.growth ?? null,
+      growthPace: msg.growthPace,
+    },
     {
       dayEnd: (report) => post({ type: 'dayEnd', report }),
-      busy: (label) => post({ type: 'busy', label }),
+      busy: (label) => post({ type: 'busy', label: label === null && skipping ? SKIP_LABEL : label }),
       event: (title, body, tone) => post({ type: 'event', title, body, tone }),
       alert: (alert) => post({ type: 'alert', alert }),
       dayChaos: (info) => post({ type: 'dayChaos', info }),
@@ -67,7 +79,12 @@ function handle(msg: ToWorker) {
       break;
     case 'skipTo':
       post({ type: 'busy', label: SKIP_LABEL });
-      engine.skipTo(msg.time);
+      skipping = true;
+      try {
+        engine.skipTo(msg.time);
+      } finally {
+        skipping = false;
+      }
       post({ type: 'busy', label: null });
       sendSnapshot();
       break;
@@ -83,14 +100,21 @@ function handle(msg: ToWorker) {
     case 'service':
       engine.setService(msg.overrides);
       break;
+    case 'growthPace':
+      engine.setGrowthPace(msg.pace);
+      break;
   }
 }
 
 function answer(q: Extract<ToWorker, { type: 'query' }>['q']): unknown {
   const c = engine!.commuters!;
   switch (q.kind) {
-    case 'modeState':
-      return c.modeState();
+    case 'simState':
+      return engine!.simState();
+    case 'growthView':
+      return engine!.growthView();
+    case 'tractGrowth':
+      return engine!.tractGrowth(q.tract);
     case 'station':
       return c.stationDetail(q.station);
     case 'route': {

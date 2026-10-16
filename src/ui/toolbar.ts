@@ -17,7 +17,7 @@ const TOOLS: { id: ToolId; icon: string; title: string; key: string; body: strin
   { id: 'bulldoze', icon: ICONS.bulldoze, title: 'Bulldoze', key: 'B', body: 'Remove blueprints free, demolish built items for a 20% refund' },
 ];
 
-const OVERLAYS: OverlayMode[] = ['none', 'residents', 'jobs', 'unserved', 'crowding', 'flows'];
+const OVERLAYS: OverlayMode[] = ['none', 'residents', 'jobs', 'growth', 'unserved', 'crowding', 'flows'];
 
 export class Toolbar {
   readonly el: HTMLElement;
@@ -41,7 +41,7 @@ export class Toolbar {
     this.viewBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-3d', onclick: () => app.view.toggleView3D() }, svgIcon(ICONS.cube));
     attachTip(this.viewBtn, app.tooltip, 'Flat / 3D view', 'V', 'Tilt the camera and raise the skyline');
     this.overlayBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-overlays', onclick: () => this.toggleOverlayMenu() }, svgIcon(ICONS.layers));
-    attachTip(this.overlayBtn, app.tooltip, 'Overlays', undefined, 'Residents, jobs, unserved demand, crowding, flows');
+    attachTip(this.overlayBtn, app.tooltip, 'Overlays', undefined, 'Residents, jobs, city growth (G), unserved demand, crowding, flows');
     const routes = h('button', { class: 'hw-btn ghost tool-btn', onclick: () => app.game.select({ kind: 'routes' }) }, svgIcon(ICONS.routes));
     attachTip(routes, app.tooltip, 'Routes', undefined, 'All routes and their ridership');
     const fin = (this.finBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-finance', onclick: () => app.toggleFinance() }, svgIcon(ICONS.finance)));
@@ -55,7 +55,12 @@ export class Toolbar {
     this.overlayMenu = h('div', { class: 'hw-panel', style: 'position:absolute;left:66px;display:none;flex-direction:column;padding:6px;gap:2px;z-index:25;min-width:200px' });
     for (const m of OVERLAYS) {
       this.overlayMenu.append(
-        h('button', { class: 'hw-btn ghost', 'data-overlay': m, style: 'justify-content:flex-start', onclick: () => { app.setOverlay(m); this.toggleOverlayMenu(false); } }, OVERLAY_LABELS[m]),
+        h(
+          'button',
+          { class: 'hw-btn ghost', 'data-overlay': m, style: 'justify-content:flex-start', onclick: () => { app.setOverlay(m); this.toggleOverlayMenu(false); } },
+          OVERLAY_LABELS[m],
+          m === 'growth' ? h('span', { class: 'kbd', style: 'margin-left:auto' }, 'G') : null,
+        ),
       );
     }
     this.el = h('div', { id: 'toolbar', class: 'hw-panel' }, ...btns, h('div', { class: 'tool-sep' }), this.viewBtn, this.overlayBtn, h('div', { class: 'tool-sep' }), routes, fin, goals, this.alertsBtn, help);

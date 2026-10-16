@@ -2,15 +2,16 @@
  * The simulation engine: clock, trains and commuters. Pure TypeScript with no DOM, so it runs
  * inside the Web Worker and directly in Node for the headless test.
  */
-import { CHAOS, ECONOMY, TIME, type ChaosLevel } from '../balance';
-import { dayIndex, SECONDS_PER_DAY, timeOfDay } from '../core/calendar';
+import { CHAOS, ECONOMY, GROWTH, TIME, type ChaosLevel, type GrowthPace } from '../balance';
+import { dayIndex, isNewMonth, SECONDS_PER_DAY, timeOfDay } from '../core/calendar';
 import type { World } from '../data/world';
 import { ChaosController } from './chaos';
-import { Commuters } from './commuters';
+import { Commuters, type RegenStats } from './commuters';
 import { flatFares, type FarePolicy } from '../economy/fares';
+import { Growth, servedStations, type Benefits } from './growth';
 import { emptyStats } from './regularity';
-import type { Alert, ChaosInit, CompiledNetwork, DayChaosInfo, DayReport, LiveStats, ModeState, ServiceOverride, Snapshot } from './protocol';
-import { SNAP_HELD, TRAIN_STRIDE } from './protocol';
+import type { Alert, ChaosInit, CompiledNetwork, DayChaosInfo, DayReport, GrowthData, GrowthMonth, GrowthView, LiveStats, ModeState, ServiceOverride, SimState, Snapshot, TractGrowth } from './protocol';
+import { GROWTH_LABEL, SNAP_HELD, TRAIN_STRIDE } from './protocol';
 import { TrainSim, TState } from './trainSim';
 
 export interface EngineCallbacks {
@@ -36,6 +37,12 @@ export interface EngineOptions {
   chaos?: ChaosInit;
   /** Planned event service. */
   service?: ServiceOverride[];
+  /** Living City: the growth state the saved groups were generated from (null: the starting city). */
+  growth?: GrowthData | null;
+  /** Living City pace (default GROWTH.defaultPace). */
+  growthPace?: GrowthPace;
+  /** Tuning only (scripts/balance.ts months=): close a growth month every N days instead of at calendar month ends. */
+  monthEvery?: number;
 }
 
 export class Engine {
@@ -45,13 +52,29 @@ export class Engine {
   /** City chaos: weather, events and incidents. */
   readonly chaos: ChaosController;
   net: CompiledNetwork | null = null;
+  /** Living City: the city's growth (null without a world). */
+  readonly growth: Growth | null;
+  /** Saved growth that did not fit this world was dropped (the city starts over; a toast says so). */
+  readonly growthReset: boolean;
+  /** What the last month close's regeneration did (scripts and tests). */
+  lastRegen: RegenStats | null = null;
+  private readonly monthEvery: number;
+  /** Commute benefits for panel queries, cached until the next midnight, network, fare or regeneration. */
+  private benefitCache: Benefits | null = null;
   private cb: EngineCallbacks;
 
   constructor(world: World | null, opts: EngineOptions, cb: EngineCallbacks = {}) {
     this.time = opts.time;
     this.cb = cb;
+    this.monthEvery = opts.monthEvery && opts.monthEvery > 0 ? Math.floor(opts.monthEvery) : 0;
     const fares = opts.fares ?? flatFares(opts.fare ?? ECONOMY.fareDefault);
-    this.commuters = world ? new Commuters(world, { ...opts, fares }, cb) : null;
+    this.growth = world ? Growth.fromData(world, opts.growth ?? null, opts.growthPace ?? GROWTH.defaultPace) : null;
+    this.growthReset = this.growth?.dropped ?? false;
+    const factors = this.growth?.factors() ?? null;
+    this.commuters = world ? new Commuters(world, { agentScale: opts.agentScale, seed: opts.seed, fares, modeState: opts.modeState, factors }, cb) : null;
+    // A grown city's event-goers come from today's residents.
+    if (this.growth && factors) this.commuters?.setOriginWeights(this.growth.currentResidents());
+    if (this.growthReset) cb.event?.('City growth was reset', "The saved city growth doesn't fit this city's data, so the city starts again from today.", 'amber');
     this.trains = new TrainSim(
       this.commuters ?? {
         arrive: () => ({ alight: 0, board: 0 }),
@@ -98,6 +121,7 @@ export class Engine {
 
   setNetwork(net: CompiledNetwork): void {
     this.net = net;
+    this.benefitCache = null;
     this.trains.setNetwork(net, this.time);
     this.commuters?.setNetwork(net, this.time);
     this.chaos.setNetwork(net, this.time);
@@ -106,6 +130,7 @@ export class Engine {
   /** Fare policy: billing from the next boarding, mode choice from the next 3 am. */
   setFares(p: FarePolicy): void {
     this.commuters?.setFares(p);
+    this.benefitCache = null;
   }
 
   /** Event service overrides (the full list). */
@@ -155,6 +180,10 @@ export class Engine {
     const base = c?.dayReport(day) ?? emptyReport(day);
     // Operations control: the day's regularity (the accumulators roll over to tomorrow).
     const reg = this.trains.closeDayRegularity();
+    this.benefitCache = null;
+    // Living City: the month closes at the same midnight as the finances' month (fresh
+    // observations are in; nobody is travelling), before the report goes out and the autosave.
+    const growth = this.isMonthEnd(day) ? this.monthClose(day) : null;
     const report: DayReport = {
       ...base,
       carKm: tr.carKm,
@@ -165,10 +194,66 @@ export class Engine {
       chaos: this.chaos.daySummary(outcomes, chaosStats),
       routeRegularity: reg.routes,
       regularity: reg.network,
+      ...(growth ? { growth } : {}),
     };
     this.chaos.endDay();
     this.trains.resetDay();
     this.cb.dayEnd?.(report);
+  }
+
+  // ------------------------------------------------------------------ Living City
+  /** A growth month closes after this day: the finances' month end (or every monthEvery days, for tuning). */
+  private isMonthEnd(day: number): boolean {
+    return this.monthEvery > 0 ? (day + 1) % this.monthEvery === 0 : isNewMonth(day + 1);
+  }
+
+  /**
+   * Close a growth month on `day` (docs/v2/living-city.md §3.6): measure the commute benefits,
+   * grow the city, rebalance the OD and regenerate the agents from it. Null (nothing changes) on
+   * pace Off, without a world, or for a day already applied, so it is idempotent. Public so
+   * tests and scripts can force one; the engine calls it at each month-end midnight.
+   */
+  monthClose(day: number): GrowthMonth | null {
+    const g = this.growth, c = this.commuters;
+    if (!g || !c || !(GROWTH.paceMultiplier[g.pace] > 0) || day <= g.appliedThroughDay) return null;
+    this.cb.busy?.(GROWTH_LABEL);
+    try {
+      const b = c.commuteBenefit();
+      const rep = g.step(day, b, servedStations(this.net));
+      if (!rep) return null;
+      this.lastRegen = c.regenerate(g.factors()!, this.time);
+      c.setOriginWeights(g.currentResidents());
+      this.benefitCache = null;
+      rep.agents = c.A;
+      rep.commuters = c.A * c.scale;
+      return rep;
+    } finally {
+      this.cb.busy?.(null);
+    }
+  }
+
+  /** Mode shares and the growth state their groups belong to, captured together (saves). */
+  simState(): SimState {
+    const g = this.growth;
+    return { mode: this.commuters!.modeState(), growth: g && !g.isIdentity() ? g.toData() : null };
+  }
+
+  /** The growth overlay's and panels' data (null without a world). */
+  growthView(): GrowthView | null {
+    return this.growth ? this.growth.view(servedStations(this.net)) : null;
+  }
+
+  /** One tract's growth, with today's commute benefits (null without a world or for a bad index). */
+  tractGrowth(i: number): TractGrowth | null {
+    const g = this.growth;
+    if (!g || !this.commuters || !(i >= 0 && i < g.T)) return null;
+    this.benefitCache ??= this.commuters.commuteBenefit();
+    return g.tract(i, servedStations(this.net), this.benefitCache);
+  }
+
+  /** Living City pace: takes effect at the next month close. */
+  setGrowthPace(p: GrowthPace): void {
+    this.growth?.setPace(p);
   }
 
   snapshot(simRate: number): Snapshot {

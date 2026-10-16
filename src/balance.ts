@@ -56,6 +56,8 @@ export const MAP = {
   /** Pixel spacing between interlined route lines. */
   interlineSpacingPx: 4.5,
   routeLineWidthPx: 4,
+  /** Living City 3D growth columns: metres of height per added resident or job (+2,500 people ≈ 200 m). */
+  growthColumnMetresPerPerson: 0.08,
 };
 
 // ---------------------------------------------------------------------------
@@ -423,6 +425,109 @@ export const GOALS = {
   clockworkBunched: 0.05,
   clockworkMinRoutes: 3,
   clockworkMinRiders: 500_000,
+  /** Living City 'boomtown' goal: one tract (≥ GROWTH.minTractPeople) grows this much since the start. */
+  boomtownGrowth: 0.25,
+  /** Living City 'value-capture' goal: one month's value-capture payment (city currency). */
+  valueCaptureMonth: 10e6,
+};
+
+// ---------------------------------------------------------------------------
+// Living City (v2): transit-oriented growth and value capture (docs/v2/living-city.md). New York's
+// values; each city's differences are CITY_BALANCE[city].growth / .valueCapture.
+export type GrowthPace = 'off' | 'steady' | 'boom';
+
+/** Residents or jobs: how one side of a tract responds to its attractiveness. */
+export interface GrowthSide {
+  /** Extra growth per month at attractiveness 1 (before the pace multiplier). */
+  boostPerMonth: number;
+  /** Share of the boost drained uniformly from the whole city (relocation); the rest is in-migration. */
+  relocationShare: number;
+  /** Hard monthly limits before the pace multiplier (building takes time). */
+  maxGrowthPerMonth: number;
+  maxDeclinePerMonth: number;
+  /** Long-run bounds against the start; the boost fades smoothly toward them. */
+  maxMultiple: number;
+  minMultiple: number;
+}
+
+export const GROWTH = {
+  /** How fast the city reacts (menu → City growth). 'off' = frozen city, no value capture (v1 rules). */
+  paceMultiplier: { off: 0, steady: 1, boom: 3 } as Record<GrowthPace, number>,
+  paces: ['off', 'steady', 'boom'] as GrowthPace[],
+  defaultPace: 'steady' as GrowthPace,
+  /** Natural growth of the city's commuters per year, residents and jobs alike (New York ≈ +0.8%/yr over the 2010s, Census 2010→2020 +7.7%). */
+  cityGrowthPerYear: 0.008,
+  /** The city as a whole stays below this multiple of its starting commuters (caps New York's agents at ≈ 428k). */
+  cityMaxMultiple: 1.5,
+  /** Commute benefit (generalised minutes saved per commute vs no network) at which attractiveness is 0.5. */
+  halfBenefit: 20,
+  residents: {
+    /** A typical well-served tract (s ≈ 0.55) grows ≈ 4–5% a year on Steady. */
+    boostPerMonth: 0.006,
+    relocationShare: 0.6,
+    maxGrowthPerMonth: 0.012,
+    maxDeclinePerMonth: 0.004,
+    maxMultiple: 2,
+    minMultiple: 0.7,
+  } as GrowthSide,
+  jobs: {
+    /** Employers follow labour-market access more slowly than homes follow commutes, and mostly move within the city. */
+    boostPerMonth: 0.004,
+    relocationShare: 0.7,
+    maxGrowthPerMonth: 0.01,
+    maxDeclinePerMonth: 0.003,
+    maxMultiple: 2,
+    minMultiple: 0.7,
+  } as GrowthSide,
+  /** Furness (IPF) passes per month, warm-started from last month's factors. */
+  balanceIterations: 2,
+  /** Tract snapshots kept for the tract panel's history chart; older months are thinned to fit. */
+  historyMax: 60,
+  /** City rows kept (one per month close). */
+  cityMax: 600,
+  /** Reports, toasts and goals ignore tracts smaller than this (residents + jobs at the start). */
+  minTractPeople: 1000,
+  /** Boomtowns listed in the month report. */
+  boomtownsInReport: 5,
+  /** Toast the month's top boomtown when it grew at least this much that month (Steady's best is ≈ 0.35–0.45%). */
+  boomToastMonthlyRate: 0.003,
+  /** Since-start thresholds that trigger milestone toasts (up to milestonesInReport a month). */
+  milestonesUp: [0.1, 0.25, 0.5, 1],
+  milestonesDown: [-0.05, -0.1, -0.2],
+  milestonesInReport: 3,
+};
+
+export const VALUE_CAPTURE = {
+  /**
+   * Transit Improvement District: the part of each tract within this distance of a served station
+   * (½ mile, the walk catchment). Membership is the share of the tract's area inside it (sampled),
+   * so London's larger MSOAs count only their station-side part.
+   */
+  districtRadius: 800,
+  /**
+   * Market value per commuter living / working in a tract (start-year money). New York, DOF FY2025
+   * tentative roll: $1.11T of homes (class 1 $739B + class 2 $370B) over 2.85M resident commuters,
+   * $330B of offices and shops (class 4) over 2.85M jobs.
+   */
+  valuePerResident: 390_000,
+  valuePerJob: 115_000,
+  /**
+   * Effective annual property tax on market value. New York: the ≈ $34B levy split by class shares
+   * (class 1 14%, class 2 39%, class 4 38%) gives homes ≈ $18B on $1.11T ≈ 1.6% and commercial
+   * ≈ $13B on $330B ≈ 3.9%.
+   */
+  taxRateHomes: 0.016,
+  taxRateJobs: 0.039,
+  /** Land-value premium at attractiveness 1 (studies find +5–25% near rail stations). */
+  premiumMax: 0.12,
+  /** Share of the gap to the target premium that capitalises each month (≈ 10-month lag). */
+  premiumLagPerMonth: 0.1,
+  /**
+   * Share of the district's tax increment pledged to the authority (tax-increment financing; Hudson
+   * Yards' bonds for the 7 line were backed by the district's PILOTs and tax increment). Tuned: the
+   * README core earns ≈ $0.35M/day by month 12 on Steady (docs/v2/living-city.md, implementation notes).
+   */
+  captureShare: 0.12,
 };
 
 // ---------------------------------------------------------------------------
@@ -694,6 +799,10 @@ export interface CityBalance {
   goals: Partial<typeof GOALS>;
   /** Event venues and kinds, and the climate (CHAOS_BY_CITY). */
   chaos: CityChaos;
+  /** Living City (v2): growth numbers that differ from GROWTH (nested sides are replaced whole). */
+  growth: Partial<typeof GROWTH>;
+  /** Living City (v2): value-capture numbers that differ from VALUE_CAPTURE (money in the city's currency). */
+  valueCapture: Partial<typeof VALUE_CAPTURE>;
 }
 
 /** Each city's events and weather (the shared chaos tunables are CHAOS, WEATHER and EVENTS above). */
@@ -713,6 +822,8 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
     credit: {},
     goals: {},
     chaos: CHAOS_BY_CITY.nyc,
+    growth: {},
+    valueCapture: {},
   },
   london: {
     origin: [-0.1276, 51.5073], // Charing Cross, the traditional centre of London
@@ -767,7 +878,39 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
       /** Bank junction to the Heathrow central terminal area. */
       tripFrom: [-0.0886, 51.5133],
       tripTo: [-0.4543, 51.47],
+      /** Living City: one month's value capture, in proportion to New York's $10M (London's core earns ≈ 58% as much). */
+      valueCaptureMonth: 6e6,
     },
     chaos: CHAOS_BY_CITY.london,
+    growth: {
+      /**
+       * London's 2010s: residents +7.7% (Census 2011 → 2021, ≈ 0.75%/yr) and workforce jobs ≈ +1.6%/yr
+       * (ONS); commuters in between.
+       */
+      cityGrowthPerYear: 0.011,
+    },
+    valueCapture: {
+      /**
+       * Market value per commuter (£, 2011 census commuters): London's ≈ £2T of homes over 2.93M
+       * resident commuters is ≈ £680k; offices and shops ≈ £0.4T (≈ £20B of rateable value at ≈ 5%
+       * yields, VOA) over 2.93M jobs ≈ £140k.
+       */
+      valuePerResident: 680_000,
+      valuePerJob: 140_000,
+      /**
+       * The UK has no ad valorem property tax, so these are effective rates on market value. Homes pay
+       * council tax: ≈ £5B a year across London on ≈ £2T of homes ≈ 0.25% (Band D ≈ £2,000 on a
+       * ≈ £520k average home is 0.38%; bands are capped, so the stock-wide rate is lower).
+       * Workplaces pay business rates: ≈ 51p per £ of rateable value (≈ a year's rent) at ≈ 5% yields
+       * is ≈ 2.5% of capital value. So most of London's value capture comes from workplaces, as in
+       * the real precedents: the Crossrail business rate supplement (2p per £ of rateable value above
+       * £70k, £4.1B towards Crossrail) and the Nine Elms enterprise zone, whose business-rate growth
+       * repays the Northern line extension.
+       */
+      taxRateHomes: 0.0025,
+      taxRateJobs: 0.025,
+      /** A slightly larger pledge (business-rate growth, as at Nine Elms) lands the London core in proportion to New York's: ≈ 11% of its fares by month 12. */
+      captureShare: 0.14,
+    },
   },
 };

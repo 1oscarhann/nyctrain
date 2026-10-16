@@ -10,19 +10,25 @@ import { SECONDS_PER_DAY, dayIndex } from '../core/calendar';
 import { CLEAR_MODS, eventKind, venueOf, weatherMods, SALT_TRIPS, type CityEvent, type DayWeather, type FullWeatherMods } from '../core/cityCalendar';
 import { toLocal } from '../core/geo';
 import { cityBalance, inZone } from '../cities';
-import { hashSeed, pointInDisc, Rng, stochasticRound, triangular } from '../core/rng';
+import { hash32x4, hashSeed, pointInDisc, Rng, stochasticRound, triangular } from '../core/rng';
+import type { ODTable } from '../data/odFormat';
 import type { World } from '../data/world';
 import { eventCosts, originCdf, reverseLegs, sampleBand, sampleCdf, venueGeometry } from './eventTrips';
+import type { OdFactors } from './growth';
 import {
   driveTripTime,
   fareOddsMultiplier,
   generalisedCosts,
   logitShares,
+  logsum,
   MODE_DRIVE,
   MODE_TRANSIT,
   MODE_WALK,
+  transitBenefit,
+  transitCost,
   walkTime,
   type PairGeometry,
+  type TransitCostInput,
 } from './modeChoice';
 import type { CompiledNetwork, CRoute, DayReport, EventDayInfo, EventOutcome, LiveStats, ModeState, ServiceOverride } from './protocol';
 import { TransitGraph } from './transitGraph';
@@ -84,62 +90,282 @@ interface EventTally {
 
 const newTally = (): EventTally => ({ planned: [0, 0, 0], overflow: 0, arrived: 0, late: 0, gaveUp: 0, home: 0, timeSum: 0, timeN: 0 });
 
-export class Commuters implements PassengerHooks {
-  readonly scale: number;
-  /** Commuter agents (0 … A−1); agents A … A+poolCap−1 are the event pool. */
-  readonly A: number;
-  readonly G: number;
-  /** City chaos: event agents available per day. */
-  readonly poolCap: number;
-  private world: World;
-  // Groups (home tract, work tract, band)
-  gHome: Int32Array;
-  gWork: Int32Array;
-  gBand: Uint8Array;
-  gStart: Int32Array;
-  gCount: Int32Array;
-  gWalk: Float32Array;
-  gDrive: Float32Array;
-  gDriveHome: Float32Array;
-  gGeom: PairGeometry[];
-  shares: Float32Array; // G × 3
-  obsTime: Float32Array; // yesterday's average observed transit door-to-door (s), 0 = none
-  obsCrowd: Float32Array; // minutes
-  private todayTimeSum: Float32Array;
-  private todayTimeN: Uint16Array;
-  private todayCrowdSum: Float32Array;
-  pathAM: (GroupPath | null)[] = [];
-  pathPM: (GroupPath | null)[] = [];
-  // Agents
-  aGroup: Int32Array;
+// ---------------------------------------------------------------------------
+// Agent groups (Living City, docs/v2/living-city.md §3.4)
+
+/** Commuter groups (home tract, work tract, earnings band) rounded from the OD table. */
+export interface GroupTable {
+  home: Int32Array;
+  work: Int32Array;
+  band: Uint8Array;
+  count: Int32Array;
+  /** First agent of each group (G + 1 entries; start[G] = A). */
+  start: Int32Array;
+  G: number;
+  A: number;
+  /** Group keys (home·T + work)·3 + band strictly increase (od.bin is sorted by home then work). */
+  sorted: boolean;
+  /** The rounding stream after its last draw: the starting city's agents are placed from it, in v1's order. */
+  gen: Rng;
+}
+
+/**
+ * Round the OD table (scaled by the Living City factors, OD'[h][w] = OD[h][w]·fHome[h]·fWork[w])
+ * to agent groups with common random numbers: one draw from Rng(seed·7919 + 13) per non-zero
+ * cell, in file order, whatever the factors. Growth never creates a non-zero cell, so the stream
+ * stays aligned and each cell's count is monotone in its factor; with no factors the groups are
+ * exactly v1's. Pure.
+ */
+export function buildGroups(od: ODTable, tractCount: number, scale: number, seed: number, factors: OdFactors | null, sizeHint = 0): GroupTable {
+  const gen = new Rng(seed * 7919 + 13);
+  // (A regeneration passes the old group count: the arrays then start about the right size.)
+  let cap = Math.max(1024, sizeHint > 0 ? Math.ceil(sizeHint * 1.02) + 1024 : od.pairCount);
+  let home = new Int32Array(cap), work = new Int32Array(cap), band = new Uint8Array(cap), count = new Int32Array(cap);
+  const fh = factors?.home ?? null, fw = factors?.work ?? null;
+  const odHome = od.home, odWork = od.work;
+  // (One local per band: indexing od.counts[b] in the loop costs as much as the rounding itself.)
+  const c0 = od.counts[0], c1 = od.counts[1], c2 = od.counts[2];
+  let G = 0, A = 0, prev = -1, sorted = true;
+  for (let i = 0; i < od.pairCount; i++) {
+    const h = odHome[i], w = odWork[i];
+    for (let b = 0; b < 3; b++) {
+      const c = b === 0 ? c0[i] : b === 1 ? c1[i] : c2[i];
+      if (!c) continue;
+      const exact = fh && fw ? (c * fh[h] * fw[w]) / scale : c / scale;
+      let n = Math.floor(exact);
+      if (gen.next() < exact - n) n++;
+      if (n === 0) continue;
+      if (G === cap) {
+        cap *= 2;
+        const grow = <T extends Int32Array | Uint8Array>(a: T, make: (n: number) => T): T => {
+          const x = make(cap);
+          x.set(a);
+          return x;
+        };
+        home = grow(home, (n) => new Int32Array(n));
+        work = grow(work, (n) => new Int32Array(n));
+        band = grow(band, (n) => new Uint8Array(n));
+        count = grow(count, (n) => new Int32Array(n));
+      }
+      const key = (h * tractCount + w) * 3 + b;
+      if (key <= prev) sorted = false;
+      prev = key;
+      home[G] = h;
+      work[G] = w;
+      band[G] = b;
+      count[G] = n;
+      A += n;
+      G++;
+    }
+  }
+  const start = new Int32Array(G + 1);
+  for (let g = 0; g < G; g++) start[g + 1] = start[g] + count[g];
+  return { home: home.slice(0, G), work: work.slice(0, G), band: band.slice(0, G), count: count.slice(0, G), start, G, A, sorted, gen };
+}
+
+/**
+ * The ModeState key of a set of groups. With no growth tag it is exactly v1's
+ * `${source}|${tracts}|${pairs}|${scale}|${seed}|${A}|${G}`; a grown city appends `|g<months>:<hash>`.
+ */
+export function makeKey(world: World, scale: number, seed: number, A: number, G: number, tag?: string): string {
+  const base = `${world.meta.source}|${world.tracts.length}|${world.od.pairCount}|${scale}|${seed}|${A}|${G}`;
+  return tag ? `${base}|${tag}` : base;
+}
+
+/** Group keys (home·T + work)·3 + band. */
+export function groupKeys(home: Int32Array, work: Int32Array, band: Uint8Array, G: number, tractCount: number): Float64Array {
+  const k = new Float64Array(G);
+  for (let g = 0; g < G; g++) k[g] = (home[g] * tractCount + work[g]) * 3 + band[g];
+  return k;
+}
+
+/**
+ * Match new groups to old ones by key: `exact` is the old group with the same (home, work, band)
+ * (−1: none), `pair` an old group with the same home and work in any band (the exact one when
+ * there is one). A merge-join when both key lists are sorted, else a Map join (custom data).
+ */
+export function matchGroups(oldKeys: ArrayLike<number>, newKeys: ArrayLike<number>, sorted: boolean): { exact: Int32Array; pair: Int32Array } {
+  const Go = oldKeys.length, Gn = newKeys.length;
+  const exact = new Int32Array(Gn).fill(-1);
+  const pair = new Int32Array(Gn).fill(-1);
+  if (sorted) {
+    let i = 0;
+    for (let g = 0; g < Gn; g++) {
+      const k = newKeys[g];
+      while (i < Go && oldKeys[i] < k) i++;
+      if (i < Go && oldKeys[i] === k) {
+        exact[g] = pair[g] = i;
+        continue;
+      }
+      // Same pair, another band: at most two places either side of the merge position.
+      const pk = Math.floor(k / 3);
+      for (let j = Math.max(0, i - 2); j <= Math.min(Go - 1, i + 1); j++) {
+        if (Math.floor(oldKeys[j] / 3) === pk) {
+          pair[g] = j;
+          break;
+        }
+      }
+    }
+  } else {
+    const byKey = new Map<number, number>(), byPair = new Map<number, number>();
+    for (let i = 0; i < Go; i++) {
+      byKey.set(oldKeys[i], i);
+      const pk = Math.floor(oldKeys[i] / 3);
+      if (!byPair.has(pk)) byPair.set(pk, i);
+    }
+    for (let g = 0; g < Gn; g++) {
+      const e = byKey.get(newKeys[g]);
+      if (e !== undefined) exact[g] = pair[g] = e;
+      else pair[g] = byPair.get(Math.floor(newKeys[g] / 3)) ?? -1;
+    }
+  }
+  return { exact, pair };
+}
+
+/** What regeneration carries over from the groups and agents it replaces. */
+interface OldGroups {
+  G: number;
+  keys: Float64Array;
+  sorted: boolean;
+  count: Int32Array;
+  start: Int32Array;
+  geom: PairGeometry[];
+  walk: Float32Array;
+  drive: Float32Array;
+  driveHome: Float32Array;
+  lsBase: Float32Array;
+  baseT: Float64Array;
+  shares: Float32Array;
+  obsTime: Float32Array;
+  obsCrowd: Float32Array;
+  pathAM: (GroupPath | null)[];
+  pathPM: (GroupPath | null)[];
+  /** Agents were placed with per-agent seeds (only then are they copied). */
+  hashed: boolean;
   aHx: Float32Array;
   aHy: Float32Array;
   aWx: Float32Array;
   aWy: Float32Array;
   aDepart: Float32Array;
   aReturn: Float32Array;
-  aMode: Uint8Array;
-  aState: Uint8Array;
-  aLeg: Uint8Array;
-  aLegN: Uint8Array;
-  aLegs: Int32Array; // A × MAX_LEGS × 3
-  aTripStart: Float64Array;
-  aWaitStart: Float64Array;
-  aPlat: Int32Array;
-  aCrowd: Float32Array;
-  aLeft: Uint8Array;
-  aPM: Uint8Array;
-  /** Did this trip actually board a train? Only those count as riders (and pay a fare). */
-  aBoarded: Uint8Array;
-  /** Earnings band per agent (commuters: their group's; event fans: drawn), for billing. */
   aBand: Uint8Array;
+  aPeak: Uint8Array;
+  peakFrac: Float32Array;
+}
+
+/** Old groups with their exact and pair matches for the new groups. */
+interface Carry {
+  old: OldGroups;
+  exact: Int32Array;
+  pair: Int32Array;
+}
+
+/**
+ * Runs of consecutive exact matches: fn(g0, o0, n) for new groups g0 … g0+n−1 matching old groups
+ * o0 … o0+n−1 (most of a regeneration, so whole runs are copied with TypedArray.set). With
+ * `count`, runs also break where a group's agent count changed.
+ */
+function forExactRuns(exact: Int32Array, fn: (g0: number, o0: number, n: number) => void, count?: { now: Int32Array; old: Int32Array }): void {
+  const G = exact.length;
+  let g = 0;
+  while (g < G) {
+    const o0 = exact[g];
+    if (o0 < 0 || (count && count.now[g] !== count.old[o0])) {
+      g++;
+      continue;
+    }
+    let n = 1;
+    while (g + n < G && exact[g + n] === o0 + n && (!count || count.now[g + n] === count.old[o0 + n])) n++;
+    fn(g, o0, n);
+    g += n;
+  }
+}
+
+/** What one regeneration did (for scripts and tests). */
+export interface RegenStats {
+  groups: number;
+  agents: number;
+  /** Groups kept exactly (shares, observations and paths carried over). */
+  kept: number;
+  /** New groups of a known pair (geometry and paths copied; shares fresh). */
+  newBands: number;
+  /** New pairs (paths searched; shares fresh). */
+  newPairs: number;
+  /** Old groups that vanished. */
+  dropped: number;
+  /** Agents mid-trip when it ran (sent home, counted as stuck). */
+  stuck: number;
+  /** All agents were re-placed with per-agent seeds (the first growth). */
+  replaced: boolean;
+}
+
+export class Commuters implements PassengerHooks {
+  readonly scale: number;
+  /** Commuter agents (0 … A−1); agents A … A+poolCap−1 are the event pool. Living City regeneration changes A and G. */
+  A = 0;
+  G = 0;
+  /** City chaos: event agents available per day. */
+  readonly poolCap: number;
+  private world: World;
+  private readonly seed: number;
+  // Groups (home tract, work tract, band); set by adoptGroups
+  gHome!: Int32Array;
+  gWork!: Int32Array;
+  gBand!: Uint8Array;
+  gStart!: Int32Array;
+  gCount!: Int32Array;
+  gWalk!: Float32Array;
+  gDrive!: Float32Array;
+  gDriveHome!: Float32Array;
+  gGeom!: PairGeometry[];
+  /** Expected no-subway one-way minutes per group (clear day), for the baseline. */
+  private gBaseT!: Float64Array;
+  /** The group keys strictly increase (merge-join on regeneration). */
+  private gSorted = true;
+  shares!: Float32Array; // G × 3
+  obsTime!: Float32Array; // yesterday's average observed transit door-to-door (s), 0 = none
+  obsCrowd!: Float32Array; // minutes
+  private todayTimeSum!: Float32Array;
+  private todayTimeN!: Uint16Array;
+  private todayCrowdSum!: Float32Array;
+  pathAM: (GroupPath | null)[] = [];
+  pathPM: (GroupPath | null)[] = [];
+  // Agents (A + poolCap); set by buildAgents
+  aGroup!: Int32Array;
+  aHx!: Float32Array;
+  aHy!: Float32Array;
+  aWx!: Float32Array;
+  aWy!: Float32Array;
+  aDepart!: Float32Array;
+  aReturn!: Float32Array;
+  aMode!: Uint8Array;
+  aState!: Uint8Array;
+  aLeg!: Uint8Array;
+  aLegN!: Uint8Array;
+  aLegs!: Int32Array; // A × MAX_LEGS × 3
+  aTripStart!: Float64Array;
+  aWaitStart!: Float64Array;
+  aPlat!: Int32Array;
+  aCrowd!: Float32Array;
+  aLeft!: Uint8Array;
+  aPM!: Uint8Array;
+  /** Did this trip actually board a train? Only those count as riders (and pay a fare). */
+  aBoarded!: Uint8Array;
+  /** Earnings band per agent (commuters: their group's; event fans: drawn), for billing. */
+  aBand!: Uint8Array;
   /**
    * Fare policy (v2): which of a commuter's trips start in a peak period (bit 0 the morning trip,
    * bit 1 the trip home, assuming a FARES.amTripEstimate morning trip). No RNG draws.
    */
-  aPeak: Uint8Array;
+  aPeak!: Uint8Array;
   /** Mean share of each group's trips that start in a peak (popcount(aPeak) / 2 over its agents). */
-  gPeakFrac: Float32Array;
+  gPeakFrac!: Float32Array;
+  /**
+   * Living City: agents are placed from per-agent seeds hash32x4(seed, home·3 + band, work, k)
+   * (a grown city), not from v1's sequential stream (the starting city). Switches once, at the
+   * first growth regeneration.
+   */
+  private hashed = false;
   // Event heap
   private hT = new Float64Array(1024);
   private hV = new Int32Array(1024);
@@ -158,7 +384,7 @@ export class Commuters implements PassengerHooks {
   private fareTable = new Float64Array(6);
   private rng: Rng;
   private cb: EngineCb;
-  readonly key: string;
+  key = '';
   baseline = 0;
   private trains: () => Train[] = () => [];
   // Daily stats
@@ -185,8 +411,13 @@ export class Commuters implements PassengerHooks {
   private evEvents: CityEvent[] = [];
   private evDayStart = 0;
   /** Resident band mix per tract (tracts × 3 shares), for drawing event-goers. */
-  private homeBand: Float32Array;
+  private homeBand!: Float32Array;
+  /** Living City: event-goers' origin weights (current residents); null = tracts.json's. */
+  private originWeights: ArrayLike<number> | null = null;
   private wx: FullWeatherMods = CLEAR_MODS;
+  /** Today's weather as set at 3 am (the baseline is recomputed from it after a regeneration). */
+  private wxDay: DayWeather | null = null;
+  private baselineStale = false;
   private closedUntil: Float64Array = new Float64Array(0);
   /** Stations within walking reach of each tract (kept from recomputePaths). */
   private access: { station: number; walk: number }[][] = [];
@@ -194,46 +425,57 @@ export class Commuters implements PassengerHooks {
   /** The no-subway baseline under today's weather (equals baseline on a clear day). */
   baselineToday = 0;
 
-  constructor(world: World, opts: { agentScale: number; seed: number; fares: FarePolicy; modeState?: ModeState }, cb: EngineCb = {}) {
+  constructor(world: World, opts: { agentScale: number; seed: number; fares: FarePolicy; modeState?: ModeState; factors?: OdFactors | null }, cb: EngineCb = {}) {
     this.world = world;
     this.scale = opts.agentScale;
+    this.seed = opts.seed;
     this.fares = opts.fares;
     this.setFares(opts.fares);
     this.cb = cb;
     this.rng = new Rng(opts.seed);
-    const od = world.od;
-    const tr = world.tracts;
-    // ---- groups (stochastic rounding of counts to agents, seeded)
-    const gen = new Rng(opts.seed * 7919 + 13);
-    const gh: number[] = [], gw: number[] = [], gb: number[] = [], gc: number[] = [];
-    for (let i = 0; i < od.pairCount; i++) {
-      for (let b = 0; b < 3; b++) {
-        const c = od.counts[b][i];
-        if (!c) continue;
-        const exact = c / this.scale;
-        let n = Math.floor(exact);
-        if (gen.next() < exact - n) n++;
-        if (n === 0) continue;
-        gh.push(od.home[i]);
-        gw.push(od.work[i]);
-        gb.push(b);
-        gc.push(n);
-      }
-    }
-    const G = gh.length;
-    this.G = G;
-    this.gHome = Int32Array.from(gh);
-    this.gWork = Int32Array.from(gw);
-    this.gBand = Uint8Array.from(gb);
-    this.gCount = Int32Array.from(gc);
-    this.gStart = new Int32Array(G + 1);
-    for (let g = 0; g < G; g++) this.gStart[g + 1] = this.gStart[g] + gc[g];
-    const A = this.gStart[G];
-    this.A = A;
     this.poolCap = Math.ceil(EVENTS.maxPeoplePerDay / this.scale);
-    const cap = A + this.poolCap;
-    this.key = `${world.meta.source}|${world.tracts.length}|${od.pairCount}|${this.scale}|${opts.seed}|${A}|${G}`;
-    // ---- pair geometry and walk/drive times
+    const factors = opts.factors ?? null;
+    // ---- groups (stochastic rounding of counts to agents, seeded), geometry, no-subway shares
+    const tbl = buildGroups(world.od, world.tracts.length, this.scale, opts.seed, factors);
+    this.adoptGroups(tbl, null);
+    this.key = makeKey(world, this.scale, opts.seed, this.A, this.G, factors?.tag);
+    // ---- agents (with room for the event pool after them): v1's stream for the starting city,
+    // per-agent seeds once it has grown.
+    this.hashed = factors !== null;
+    this.buildAgents(tbl, null);
+    // ---- mode shares: restore or start from the no-subway equilibrium
+    const G = this.G;
+    this.obsTime = new Float32Array(G);
+    this.obsCrowd = new Float32Array(G);
+    this.todayTimeSum = new Float32Array(G);
+    this.todayTimeN = new Uint16Array(G);
+    this.todayCrowdSum = new Float32Array(G);
+    if (opts.modeState && opts.modeState.key === this.key && opts.modeState.shares.length === G * 3) {
+      this.shares.set(opts.modeState.shares);
+      this.obsTime.set(opts.modeState.obsTime);
+      this.obsCrowd.set(opts.modeState.obsCrowd);
+    }
+    this.unserved = new Float32Array(world.tracts.length);
+  }
+
+  /**
+   * Take a group table: the group arrays, pair geometry and walk/drive times, the no-subway logit
+   * shares (every group; regeneration then overwrites the carried and fresh ones), the no-subway
+   * logsum (gLsBase) and one-way minutes (gBaseT), the baseline and the resident band mix. With
+   * `carry`, band-independent geometry is copied from an old group of the same pair and
+   * band-dependent values from the exact old group (identical to computing them).
+   */
+  private adoptGroups(tbl: GroupTable, carry: Carry | null): void {
+    const G = tbl.G;
+    const tr = this.world.tracts;
+    this.G = G;
+    this.A = tbl.A;
+    this.gHome = tbl.home;
+    this.gWork = tbl.work;
+    this.gBand = tbl.band;
+    this.gCount = tbl.count;
+    this.gStart = tbl.start;
+    this.gSorted = tbl.sorted;
     const zones = cityBalance();
     const core = new Set(zones.coreRegions);
     const cbd = tr.map((t) => inZone(zones.cbd, t.lon, t.lat, t.borough));
@@ -241,87 +483,71 @@ export class Commuters implements PassengerHooks {
     this.gDrive = new Float32Array(G);
     this.gDriveHome = new Float32Array(G);
     this.gGeom = new Array(G);
-    for (let g = 0; g < G; g++) {
-      const h = tr[this.gHome[g]], w = tr[this.gWork[g]];
-      const d = h.index === w.index ? Math.max(200, h.radius * 0.6) : Math.hypot(h.x - w.x, h.y - w.y);
-      const geom: PairGeometry = {
-        distance: d,
-        homeCore: core.has(h.borough),
-        workCore: core.has(w.borough),
-        workCbd: cbd[w.index],
-        homeCbd: cbd[h.index],
-      };
-      this.gGeom[g] = geom;
-      this.gWalk[g] = walkTime(d);
-      this.gDrive[g] = driveTripTime(geom);
-      this.gDriveHome[g] = driveTripTime({ ...geom, workCbd: geom.homeCbd });
-    }
-    // ---- agents (with room for the event pool after them)
-    this.aGroup = new Int32Array(cap);
-    this.aHx = new Float32Array(cap);
-    this.aHy = new Float32Array(cap);
-    this.aWx = new Float32Array(cap);
-    this.aWy = new Float32Array(cap);
-    this.aDepart = new Float32Array(cap);
-    this.aReturn = new Float32Array(cap);
-    this.aMode = new Uint8Array(cap);
-    this.aState = new Uint8Array(cap);
-    this.aLeg = new Uint8Array(cap);
-    this.aLegN = new Uint8Array(cap);
-    this.aLegs = new Int32Array(cap * MAX_LEGS * 3);
-    this.aTripStart = new Float64Array(cap);
-    this.aWaitStart = new Float64Array(cap);
-    this.aPlat = new Int32Array(cap).fill(-1);
-    this.aCrowd = new Float32Array(cap);
-    this.aLeft = new Uint8Array(cap);
-    this.aPM = new Uint8Array(cap);
-    this.aBoarded = new Uint8Array(cap);
-    this.aBand = new Uint8Array(cap);
-    this.aPeak = new Uint8Array(cap);
-    this.gPeakFrac = new Float32Array(G);
-    for (let g = 0; g < G; g++) {
-      const h = tr[this.gHome[g]], w = tr[this.gWork[g]];
-      for (let a = this.gStart[g]; a < this.gStart[g + 1]; a++) {
-        this.aGroup[a] = g;
-        const [hx, hy] = pointInDisc(gen, h.x, h.y, h.radius);
-        const [wx, wy] = pointInDisc(gen, w.x, w.y, w.radius);
-        this.aHx[a] = hx;
-        this.aHy[a] = hy;
-        this.aWx[a] = wx;
-        this.aWy[a] = wy;
-        const dep = COMMUTERS.departMean + gen.normal() * COMMUTERS.departSd;
-        this.aDepart[a] = Math.max(COMMUTERS.departMin, Math.min(COMMUTERS.departMax, dep));
-        this.aReturn[a] = COMMUTERS.workDuration + (gen.next() * 2 - 1) * COMMUTERS.returnJitter;
-        // Fare periods of the two trips (from the stored values; no extra draws).
-        this.aBand[a] = this.gBand[g];
-        const pk = (isPeakTod(this.aDepart[a]) ? 1 : 0) | (isPeakTod(this.aDepart[a] + FARES.amTripEstimate + this.aReturn[a]) ? 2 : 0);
-        this.aPeak[a] = pk;
-        this.gPeakFrac[g] += ((pk & 1) + (pk >> 1)) / 2;
-      }
-      this.gPeakFrac[g] /= Math.max(1, this.gCount[g]);
-    }
-    // ---- mode shares: restore or start from the no-subway equilibrium
+    this.gBaseT = new Float64Array(G);
     this.shares = new Float32Array(G * 3);
-    this.obsTime = new Float32Array(G);
-    this.obsCrowd = new Float32Array(G);
-    this.todayTimeSum = new Float32Array(G);
-    this.todayTimeN = new Uint16Array(G);
-    this.todayCrowdSum = new Float32Array(G);
-    let base = 0;
-    let n = 0;
+    const lsBase = new Float32Array(G);
+    const old = carry?.old ?? null;
+    const walk = this.gWalk, drive = this.gDrive, driveHome = this.gDriveHome, geoms = this.gGeom, baseT = this.gBaseT;
+    // Kept groups (runs of exact matches): everything copied in bulk.
+    const done = new Uint8Array(G);
+    if (carry && old) {
+      forExactRuns(carry.exact, (g0, o0, len) => {
+        walk.set(old.walk.subarray(o0, o0 + len), g0);
+        drive.set(old.drive.subarray(o0, o0 + len), g0);
+        driveHome.set(old.driveHome.subarray(o0, o0 + len), g0);
+        lsBase.set(old.lsBase.subarray(o0, o0 + len), g0);
+        baseT.set(old.baseT.subarray(o0, o0 + len), g0);
+        for (let k = 0; k < len; k++) geoms[g0 + k] = old.geom[o0 + k];
+        done.fill(1, g0, g0 + len);
+      });
+    }
     for (let g = 0; g < G; g++) {
-      const c = generalisedCosts(this.gGeom[g], this.gBand[g], null);
+      if (done[g]) continue;
+      const pr = carry ? carry.pair[g] : -1;
+      if (old && pr >= 0) {
+        // A new band of a known pair: the geometry does not depend on the band.
+        geoms[g] = old.geom[pr];
+        walk[g] = old.walk[pr];
+        drive[g] = old.drive[pr];
+        driveHome[g] = old.driveHome[pr];
+      } else {
+        const h = tr[this.gHome[g]], w = tr[this.gWork[g]];
+        const d = h.index === w.index ? Math.max(200, h.radius * 0.6) : Math.hypot(h.x - w.x, h.y - w.y);
+        const geom: PairGeometry = {
+          distance: d,
+          homeCore: core.has(h.borough),
+          workCore: core.has(w.borough),
+          workCbd: cbd[w.index],
+          homeCbd: cbd[h.index],
+        };
+        geoms[g] = geom;
+        walk[g] = walkTime(d);
+        drive[g] = driveTripTime(geom);
+        driveHome[g] = driveTripTime({ ...geom, workCbd: geom.homeCbd });
+      }
+      const c = generalisedCosts(geoms[g], this.gBand[g], null);
+      lsBase[g] = logsum(c);
       const p = logitShares(c);
       this.shares[g * 3] = p[0];
       this.shares[g * 3 + 1] = p[1];
       this.shares[g * 3 + 2] = p[2];
-      const t = (p[0] * (isFinite(this.gWalk[g]) ? this.gWalk[g] : 0) + p[1] * this.gDrive[g]) / 60;
-      base += t * this.gCount[g];
-      n += this.gCount[g];
+      baseT[g] = (p[0] * (isFinite(walk[g]) ? walk[g] : 0) + p[1] * drive[g]) / 60;
+    }
+    let base = 0;
+    let n = 0;
+    const count = this.gCount;
+    for (let g = 0; g < G; g++) {
+      base += baseT[g] * count[g];
+      n += count[g];
     }
     this.baseline = n ? base / n : 0;
-    this.baselineToday = this.baseline;
+    this.gLsBase = lsBase;
+    this.baselineCache.clear();
     this.baselineCache.set('clear', this.baseline);
+    // Today's weather baseline describes the old groups: recomputed when a report needs it (the
+    // next 3 am sets the weather again first, so a month close at midnight never pays for it).
+    this.baselineStale = this.wx !== CLEAR_MODS;
+    this.baselineToday = this.baseline;
     // Resident band mix per tract, for event-goers.
     this.homeBand = new Float32Array(tr.length * 3);
     for (let g = 0; g < G; g++) this.homeBand[this.gHome[g] * 3 + this.gBand[g]] += this.gCount[g];
@@ -330,12 +556,139 @@ export class Commuters implements PassengerHooks {
       const sum = this.homeBand[o] + this.homeBand[o + 1] + this.homeBand[o + 2];
       for (let b = 0; b < 3; b++) this.homeBand[o + b] = sum > 0 ? this.homeBand[o + b] / sum : 1 / 3;
     }
-    if (opts.modeState && opts.modeState.key === this.key && opts.modeState.shares.length === G * 3) {
-      this.shares.set(opts.modeState.shares);
-      this.obsTime.set(opts.modeState.obsTime);
-      this.obsCrowd.set(opts.modeState.obsCrowd);
+  }
+
+  /**
+   * Allocate the agent arrays (A commuters plus the event pool) and place every commuter: from
+   * the rounding stream `tbl.gen` in v1's order for the starting city, else agent k of group
+   * (h, w, b) from Rng(hash32x4(seed, h·3 + b, w, k)), a pure function of its identity. With
+   * `carry` (a regeneration of an already-hashed city), each kept group's first agents are copied
+   * from its old slice, which equals placing them again.
+   */
+  private buildAgents(tbl: GroupTable, carry: Carry | null): void {
+    const A = this.A, G = this.G;
+    const cap = A + this.poolCap;
+    const tr = this.world.tracts;
+    const aGroup = (this.aGroup = new Int32Array(cap));
+    const aHx = (this.aHx = new Float32Array(cap));
+    const aHy = (this.aHy = new Float32Array(cap));
+    const aWx = (this.aWx = new Float32Array(cap));
+    const aWy = (this.aWy = new Float32Array(cap));
+    const aDepart = (this.aDepart = new Float32Array(cap));
+    const aReturn = (this.aReturn = new Float32Array(cap));
+    // Trip state (written before it is read on every trip): reused, cleared, while it is large
+    // enough, so a month close does not allocate ≈ 30 MB of it again; new arrays get room for a
+    // few months of growth. Only [0, A + poolCap) is ever used.
+    if (this.aState && this.aState.length >= cap) {
+      this.aMode.fill(0);
+      this.aState.fill(S_HOME);
+      this.aLeg.fill(0);
+      this.aLegN.fill(0);
+      this.aLegs.fill(0);
+      this.aTripStart.fill(0);
+      this.aWaitStart.fill(0);
+      this.aPlat.fill(-1);
+      this.aCrowd.fill(0);
+      this.aLeft.fill(0);
+      this.aPM.fill(0);
+      this.aBoarded.fill(0);
+    } else {
+      const room = cap + Math.ceil(A * 0.02);
+      this.aMode = new Uint8Array(room);
+      this.aState = new Uint8Array(room);
+      this.aLeg = new Uint8Array(room);
+      this.aLegN = new Uint8Array(room);
+      this.aLegs = new Int32Array(room * MAX_LEGS * 3);
+      this.aTripStart = new Float64Array(room);
+      this.aWaitStart = new Float64Array(room);
+      this.aPlat = new Int32Array(room).fill(-1);
+      this.aCrowd = new Float32Array(room);
+      this.aLeft = new Uint8Array(room);
+      this.aPM = new Uint8Array(room);
+      this.aBoarded = new Uint8Array(room);
     }
-    this.unserved = new Float32Array(tr.length);
+    const aBand = (this.aBand = new Uint8Array(cap));
+    const aPeak = (this.aPeak = new Uint8Array(cap));
+    const peakFrac = (this.gPeakFrac = new Float32Array(G));
+    const gHome = this.gHome, gWork = this.gWork, gBand = this.gBand, gStart = this.gStart, gCount = this.gCount;
+    const hashed = this.hashed;
+    const seed = this.seed;
+    const gen = hashed ? new Rng(1) : tbl.gen;
+    const old = carry && carry.old.hashed ? carry.old : null;
+    const exact = carry ? carry.exact : null;
+    const { departMean, departSd, departMin, departMax, workDuration, returnJitter } = COMMUTERS;
+    const amTrip = FARES.amTripEstimate;
+    // Kept groups whose count did not change (nearly all): their agents are copied in bulk.
+    const done = new Uint8Array(G);
+    if (old && exact) {
+      forExactRuns(
+        exact,
+        (g0, o0, len) => {
+          const s0 = gStart[g0], os = old.start[o0], oe = old.start[o0 + len];
+          aHx.set(old.aHx.subarray(os, oe), s0);
+          aHy.set(old.aHy.subarray(os, oe), s0);
+          aWx.set(old.aWx.subarray(os, oe), s0);
+          aWy.set(old.aWy.subarray(os, oe), s0);
+          aDepart.set(old.aDepart.subarray(os, oe), s0);
+          aReturn.set(old.aReturn.subarray(os, oe), s0);
+          aBand.set(old.aBand.subarray(os, oe), s0);
+          aPeak.set(old.aPeak.subarray(os, oe), s0);
+          peakFrac.set(old.peakFrac.subarray(o0, o0 + len), g0);
+          for (let g = g0; g < g0 + len; g++) {
+            done[g] = 1;
+            for (let a = gStart[g]; a < gStart[g + 1]; a++) aGroup[a] = g;
+          }
+        },
+        { now: gCount, old: old.count },
+      );
+    }
+    for (let g = 0; g < G; g++) {
+      if (done[g]) continue;
+      const hi = gHome[g], wi = gWork[g], b = gBand[g];
+      const h = tr[hi], w = tr[wi];
+      const s = gStart[g], n = gCount[g];
+      let kept = 0;
+      const o = old && exact ? exact[g] : -1;
+      if (old && o >= 0) {
+        // Most groups hold one or two agents: a plain loop beats subarray views here.
+        kept = Math.min(n, old.count[o]);
+        const d = old.start[o] - s;
+        for (let a = s; a < s + kept; a++) {
+          aHx[a] = old.aHx[a + d];
+          aHy[a] = old.aHy[a + d];
+          aWx[a] = old.aWx[a + d];
+          aWy[a] = old.aWy[a + d];
+          aDepart[a] = old.aDepart[a + d];
+          aReturn[a] = old.aReturn[a + d];
+        }
+      }
+      let peak = 0;
+      for (let k = 0; k < n; k++) {
+        const a = s + k;
+        aGroup[a] = g;
+        aBand[a] = b;
+        if (k >= kept) {
+          if (hashed) gen.reseed(hash32x4(seed, hi * 3 + b, wi, k));
+          // pointInDisc for the home, then the work place (the same draws and arithmetic, inlined).
+          const ah = gen.next() * Math.PI * 2;
+          const dh = Math.sqrt(gen.next()) * h.radius;
+          aHx[a] = h.x + Math.cos(ah) * dh;
+          aHy[a] = h.y + Math.sin(ah) * dh;
+          const aw = gen.next() * Math.PI * 2;
+          const dw = Math.sqrt(gen.next()) * w.radius;
+          aWx[a] = w.x + Math.cos(aw) * dw;
+          aWy[a] = w.y + Math.sin(aw) * dw;
+          const dep = departMean + gen.normal() * departSd;
+          aDepart[a] = Math.max(departMin, Math.min(departMax, dep));
+          aReturn[a] = workDuration + (gen.next() * 2 - 1) * returnJitter;
+        }
+        // Fare periods of the two trips (from the stored values; no extra draws).
+        const pk = (isPeakTod(aDepart[a]) ? 1 : 0) | (isPeakTod(aDepart[a] + amTrip + aReturn[a]) ? 2 : 0);
+        aPeak[a] = pk;
+        peak += ((pk & 1) + (pk >> 1)) / 2;
+      }
+      peakFrac[g] = peak / Math.max(1, n);
+    }
   }
 
   /** Fare policy: billing uses it from the next boarding, mode choice from the next 3 am. */
@@ -362,6 +715,116 @@ export class Commuters implements PassengerHooks {
 
   modeState(): ModeState {
     return { key: this.key, shares: this.shares.slice(), obsTime: this.obsTime.slice(), obsCrowd: this.obsCrowd.slice() };
+  }
+
+  // ------------------------------------------------------------------ Living City regeneration
+  /**
+   * Regenerate the groups and agents from the grown OD (docs/v2/living-city.md §3.4), normally
+   * at the month-end midnight. Trips are reset first (agent indices change; anyone still out is
+   * counted as stuck, as at 3 am), and the event pool's agents go (today's event tallies stay for
+   * the wrap-ups). Groups are matched to the old ones by (home, work, band):
+   * - kept groups carry their shares, observations, paths, geometry and no-subway costs over;
+   * - a new band of a known pair copies the pair's geometry and paths;
+   * - a new pair is searched (recomputePaths(only)).
+   * New groups start at their logit target with the timetable's transit time (clear weather).
+   * Agents: the first regeneration re-places every agent with per-agent seeds (a one-time
+   * change from v1's sequential stream); later ones copy kept groups' agents exactly. Either way
+   * the result equals `new Commuters(world, { factors })` group for group and agent for agent.
+   * Mid-day (tests, scripts) the rest of the day is scheduled again (startDay).
+   */
+  regenerate(factors: OdFactors, t: number): RegenStats {
+    const stuck = this.resetTrips();
+    this.day.stuck += stuck;
+    // The pool's agents are indexed past A, which changes: they go now (as at 3 am). Today's
+    // events and tallies stay, for wrap-ups still due.
+    this.evUsed = 0;
+    this.evGroups = [];
+    const T = this.world.tracts.length;
+    const old: OldGroups = {
+      G: this.G,
+      keys: groupKeys(this.gHome, this.gWork, this.gBand, this.G, T),
+      sorted: this.gSorted,
+      count: this.gCount,
+      start: this.gStart,
+      geom: this.gGeom,
+      walk: this.gWalk,
+      drive: this.gDrive,
+      driveHome: this.gDriveHome,
+      lsBase: this.lsBase(),
+      baseT: this.gBaseT,
+      shares: this.shares,
+      obsTime: this.obsTime,
+      obsCrowd: this.obsCrowd,
+      pathAM: this.pathAM,
+      pathPM: this.pathPM,
+      hashed: this.hashed,
+      aHx: this.aHx,
+      aHy: this.aHy,
+      aWx: this.aWx,
+      aWy: this.aWy,
+      aDepart: this.aDepart,
+      aReturn: this.aReturn,
+      aBand: this.aBand,
+      aPeak: this.aPeak,
+      peakFrac: this.gPeakFrac,
+    };
+    const tbl = buildGroups(this.world.od, T, this.scale, this.seed, factors, this.G);
+    const m = matchGroups(old.keys, groupKeys(tbl.home, tbl.work, tbl.band, tbl.G, T), old.sorted && tbl.sorted);
+    const carry: Carry = { old, exact: m.exact, pair: m.pair };
+    this.adoptGroups(tbl, carry);
+    const replaced = !old.hashed;
+    this.hashed = true;
+    this.buildAgents(tbl, carry);
+    const G = this.G;
+    // Per-group state: carried over or fresh.
+    const shares = this.shares; // adoptGroups filled the no-subway shares of the groups it computed
+    this.obsTime = new Float32Array(G);
+    this.obsCrowd = new Float32Array(G);
+    this.todayTimeSum = new Float32Array(G);
+    this.todayTimeN = new Uint16Array(G);
+    this.todayCrowdSum = new Float32Array(G);
+    this.pathAM = new Array(G).fill(null);
+    this.pathPM = new Array(G).fill(null);
+    const fresh: number[] = [];
+    const need: number[] = [];
+    let kept = 0, newBands = 0;
+    forExactRuns(m.exact, (g0, o0, len) => {
+      shares.set(old.shares.subarray(o0 * 3, (o0 + len) * 3), g0 * 3);
+      this.obsTime.set(old.obsTime.subarray(o0, o0 + len), g0);
+      this.obsCrowd.set(old.obsCrowd.subarray(o0, o0 + len), g0);
+      for (let k = 0; k < len; k++) {
+        this.pathAM[g0 + k] = old.pathAM[o0 + k] ?? null;
+        this.pathPM[g0 + k] = old.pathPM[o0 + k] ?? null;
+      }
+      kept += len;
+    });
+    for (let g = 0; g < G; g++) {
+      if (m.exact[g] >= 0) continue;
+      fresh.push(g);
+      const p = m.pair[g];
+      if (p >= 0) {
+        this.pathAM[g] = old.pathAM[p] ?? null;
+        this.pathPM[g] = old.pathPM[p] ?? null;
+        newBands++;
+      } else need.push(g);
+    }
+    this.key = makeKey(this.world, this.scale, this.seed, this.A, G, factors.tag);
+    // New pairs get their paths; everyone's unserved demand is recounted.
+    this.recomputePaths(need);
+    // People who move next to a station know about it: new groups start at their logit target.
+    for (const g of fresh) {
+      const p = logitShares(generalisedCosts(this.gGeom[g], this.gBand[g], this.transitInput(g)));
+      shares[g * 3] = p[0];
+      shares[g * 3 + 1] = p[1];
+      shares[g * 3 + 2] = p[2];
+    }
+    this.startDay(t);
+    return { groups: G, agents: this.A, kept, newBands, newPairs: need.length, dropped: old.G - kept, stuck, replaced };
+  }
+
+  /** Living City: event-goers' origin weights per tract (current residents); null for tracts.json's. */
+  setOriginWeights(w: ArrayLike<number> | null): void {
+    this.originWeights = w;
   }
 
   // ------------------------------------------------------------------ network & pathfinding
@@ -423,35 +886,48 @@ export class Commuters implements PassengerHooks {
     return -1;
   }
 
-  /** For each origin tract, one Dijkstra to every destination (AM home→work, PM work→home). */
-  recomputePaths(): void {
+  /**
+   * For each origin tract, one Dijkstra to every destination (AM home→work, PM work→home).
+   * With `only` (Living City regeneration: groups of new pairs), the existing paths are kept and
+   * only those groups are searched, from the access lists of the last full search (the network
+   * has not changed); the timed-trip goal and the observations stay as they are. Unserved demand
+   * is recomputed for every group either way.
+   */
+  recomputePaths(only?: ArrayLike<number>): void {
     const G = this.G;
+    const subset = only !== undefined;
     const oldAM = this.pathAM;
-    this.pathAM = new Array(G).fill(null);
-    this.pathPM = new Array(G).fill(null);
+    if (!subset) {
+      this.pathAM = new Array(G).fill(null);
+      this.pathPM = new Array(G).fill(null);
+      this.goalTrip = null;
+      this.access = [];
+    }
     this.unserved.fill(0);
-    this.goalTrip = null;
-    this.access = [];
     const graph = this.graph;
     const net = this.net;
-    if (graph && net) {
-      this.cb.busy?.('Updating routes');
+    if (graph && net && (!subset || (only.length > 0 && this.access.length === this.world.tracts.length))) {
+      if (!subset) this.cb.busy?.('Updating routes');
       const t0 = Date.now();
       const tracts = this.world.tracts;
       // Stations within walking distance of each tract.
-      const access: { station: number; walk: number }[][] = tracts.map((tr) => {
-        const reach = COMMUTERS.maxAccessWalk + COMMUTERS.accessRadiusTractShare * tr.radius;
-        const out: { station: number; walk: number }[] = [];
-        net.stations.forEach((s, i) => {
-          const d = Math.hypot(s.x - tr.x, s.y - tr.y);
-          if (d <= reach) out.push({ station: i, walk: (d * COMMUTERS.walkDetour) / COMMUTERS.walkSpeed });
-        });
-        return out;
-      });
+      const access: { station: number; walk: number }[][] = subset
+        ? this.access
+        : tracts.map((tr) => {
+            const reach = COMMUTERS.maxAccessWalk + COMMUTERS.accessRadiusTractShare * tr.radius;
+            const out: { station: number; walk: number }[] = [];
+            net.stations.forEach((s, i) => {
+              const d = Math.hypot(s.x - tr.x, s.y - tr.y);
+              if (d <= reach) out.push({ station: i, walk: (d * COMMUTERS.walkDetour) / COMMUTERS.walkSpeed });
+            });
+            return out;
+          });
       this.access = access;
       const byHome = new Map<number, number[]>();
       const byWork = new Map<number, number[]>();
-      for (let g = 0; g < G; g++) {
+      const n = subset ? only.length : G;
+      for (let i = 0; i < n; i++) {
+        const g = subset ? only[i] : i;
         const h = this.gHome[g], w = this.gWork[g];
         if (!access[h].length || !access[w].length) continue;
         (byHome.get(h) ?? byHome.set(h, []).get(h)!).push(g);
@@ -484,26 +960,30 @@ export class Commuters implements PassengerHooks {
         });
         return out;
       };
-      const fromAcc = pointAccess(GOALS.tripFrom), toAcc = pointAccess(GOALS.tripTo);
-      if (fromAcc.length && toAcc.length) {
-        graph.run(fromAcc);
-        const p = this.bestPath(graph, toAcc);
-        this.goalTrip = p ? p.time / 60 : null;
+      if (!subset) {
+        const fromAcc = pointAccess(GOALS.tripFrom), toAcc = pointAccess(GOALS.tripTo);
+        if (fromAcc.length && toAcc.length) {
+          graph.run(fromAcc);
+          const p = this.bestPath(graph, toAcc);
+          this.goalTrip = p ? p.time / 60 : null;
+        }
       }
       graph.setPeriod(3); // PM peak
       for (const [w, groups] of byWork) solve(w, groups, (g) => this.gHome[g], this.pathPM);
       graph.setPeriod(1);
       const ms = Date.now() - t0;
       this.lastPathMs = ms;
-      this.cb.busy?.(null);
+      if (!subset) this.cb.busy?.(null);
     }
     // Observed times describe the old network; drop them where the trip changed.
-    for (let g = 0; g < G; g++) {
-      const o = oldAM[g], n = this.pathAM[g];
-      // (Keep restored observations on the first network after loading a save.)
-      if (!n || (o && Math.abs(o.time - n.time) > 0.05 * o.time)) {
-        this.obsTime[g] = 0;
-        this.obsCrowd[g] = 0;
+    if (!subset) {
+      for (let g = 0; g < G; g++) {
+        const o = oldAM[g], n = this.pathAM[g];
+        // (Keep restored observations on the first network after loading a save.)
+        if (!n || (o && Math.abs(o.time - n.time) > 0.05 * o.time)) {
+          this.obsTime[g] = 0;
+          this.obsCrowd[g] = 0;
+        }
       }
     }
     // Unserved demand: commuters by home tract with no reasonable transit option.
@@ -558,14 +1038,7 @@ export class Commuters implements PassengerHooks {
   dailyModeChoice(t: number): void {
     // New shares.
     for (let g = 0; g < this.G; g++) {
-      const am = this.pathAM[g], pm = this.pathPM[g];
-      let transit = null;
-      if (am && pm) {
-        const sched = (am.time + pm.time) / 2;
-        // Observed times include waits and crowding delays; blend toward schedule if stale.
-        const time = this.obsTime[g] > 0 ? this.obsTime[g] : sched;
-        transit = { time, transfers: (am.transfers + pm.transfers) / 2, crowdMinutes: this.obsCrowd[g], fare: this.groupFare(g) };
-      }
+      const transit = this.transitInput(g);
       const c = generalisedCosts(this.gGeom[g], this.gBand[g], transit, this.wx);
       const target = logitShares(c);
       const o = g * 3;
@@ -584,29 +1057,81 @@ export class Commuters implements PassengerHooks {
     this.drawModesAndSchedule(t - TIME.modeChoiceAt, t);
   }
 
+  /**
+   * The transit alternative as a group's mode choice sees it (null: no AM or PM path): yesterday's
+   * observed door-to-door time (the timetable if nobody from the group rode), transfers, crowding
+   * and the group's expected fare (band and peak share, fare policy v2).
+   */
+  private transitInput(g: number, out?: TransitCostInput): TransitCostInput | null {
+    const am = this.pathAM[g], pm = this.pathPM[g];
+    if (!am || !pm) return null;
+    const sched = (am.time + pm.time) / 2;
+    // Observed times include waits and crowding delays; blend toward schedule if stale.
+    const time = this.obsTime[g] > 0 ? this.obsTime[g] : sched;
+    const transfers = (am.transfers + pm.transfers) / 2, crowdMinutes = this.obsCrowd[g], fare = this.groupFare(g);
+    if (!out) return { time, transfers, crowdMinutes, fare };
+    // (Filled in place by loops over every group that only read it: no allocation per group.)
+    out.time = time;
+    out.transfers = transfers;
+    out.crowdMinutes = crowdMinutes;
+    out.fare = fare;
+    return out;
+  }
+
+  /**
+   * Living City: no-network logsum of each group (walk and drive on a clear day, minutes), set with
+   * the groups. Whoever replaces the groups (regeneration) must set it again or null it (then it is
+   * recomputed on the next use).
+   */
+  private gLsBase: Float32Array | null = null;
+
+  private lsBase(): Float32Array {
+    if (this.gLsBase && this.gLsBase.length === this.G) return this.gLsBase;
+    const ls = new Float32Array(this.G);
+    for (let g = 0; g < this.G; g++) ls[g] = logsum(generalisedCosts(this.gGeom[g], this.gBand[g], null));
+    return (this.gLsBase = ls);
+  }
+
+  /**
+   * Living City commute benefit (docs/v2/living-city.md §3.2): per tract, the mean generalised
+   * minutes per commute that the network saves the agents living there (home) and working there
+   * (work) against no network, weighted by agents. The logit logsum difference of the mode choice
+   * the sim runs: transit at exactly the cost mode choice uses (observed time, transfers, crowding,
+   * the group's band and peak fare); walk and drive on a clear day, so weather, incidents and
+   * closures act only through observed times. Read-only. Groups without a path contribute 0.
+   */
+  commuteBenefit(): { home: Float64Array; work: Float64Array; mean: number } {
+    const T = this.world.tracts.length;
+    const ls = this.lsBase();
+    const hs = new Float64Array(T), hn = new Float64Array(T);
+    const ws = new Float64Array(T), wn = new Float64Array(T);
+    let sum = 0, n = 0;
+    const scratch: TransitCostInput = { time: 0, transfers: 0, crowdMinutes: 0, fare: 0 };
+    for (let g = 0; g < this.G; g++) {
+      const c = this.gCount[g];
+      const t = this.transitInput(g, scratch);
+      const b = t ? transitBenefit(ls[g], transitCost(t, this.gBand[g])) : 0;
+      const h = this.gHome[g], w = this.gWork[g];
+      hs[h] += c * b;
+      hn[h] += c;
+      ws[w] += c * b;
+      wn[w] += c;
+      sum += c * b;
+      n += c;
+    }
+    for (let i = 0; i < T; i++) {
+      hs[i] = hn[i] > 0 ? hs[i] / hn[i] : 0;
+      ws[i] = wn[i] > 0 ? ws[i] / wn[i] : 0;
+    }
+    return { home: hs, work: ws, mean: n ? sum / n : 0 };
+  }
+
   /** Everyone draws a mode from their pair's shares and their trips are scheduled. */
   private drawModesAndSchedule(dayStart: number, now: number): void {
     // Anyone still out from yesterday is sent home (counted as stuck); yesterday's event-goers
     // are removed (the pool empties).
-    let stuck = 0;
-    for (let a = 0; a < this.A + this.evUsed; a++) {
-      const s = this.aState[a];
-      if (s === S_WALK || s === S_WAIT || s === S_RIDE || s === S_EGRESS) stuck++;
-      this.aState[a] = S_HOME;
-      this.aPlat[a] = -1;
-    }
-    this.day.stuck += stuck;
+    this.day.stuck += this.resetTrips();
     this.resetEventPool();
-    for (const tr of this.trains()) {
-      tr.buckets = tr.buckets.map(() => []);
-      tr.load = 0;
-    }
-    for (let p = 0; p < this.queues.length; p++) {
-      this.queues[p] = [];
-      this.qHead[p] = 0;
-      this.qLive[p] = 0;
-    }
-    this.hN = 0;
     const d = this.day;
     // Fares that vary by time of day tilt each agent's transit odds by its own trips' fare against
     // the group's expected fare (no extra RNG draws; with one fare all day the draw is exactly v1's).
@@ -661,6 +1186,33 @@ export class Commuters implements PassengerHooks {
         }
       }
     }
+  }
+
+  /**
+   * Nobody is travelling any more: every commuter and event-goer is at home with no platform,
+   * train buckets and loads are emptied, the platform queues and the event heap are cleared.
+   * Returns how many were mid-trip (stuck). Shared by the 3 am plan and regeneration, since
+   * either can change agent indices or plans.
+   */
+  private resetTrips(): number {
+    let stuck = 0;
+    for (let a = 0; a < this.A + this.evUsed; a++) {
+      const s = this.aState[a];
+      if (s === S_WALK || s === S_WAIT || s === S_RIDE || s === S_EGRESS) stuck++;
+      this.aState[a] = S_HOME;
+      this.aPlat[a] = -1;
+    }
+    for (const tr of this.trains()) {
+      tr.buckets = tr.buckets.map(() => []);
+      tr.load = 0;
+    }
+    for (let p = 0; p < this.queues.length; p++) {
+      this.queues[p] = [];
+      this.qHead[p] = 0;
+      this.qLive[p] = 0;
+    }
+    this.hN = 0;
+    return stuck;
   }
 
   // ------------------------------------------------------------------ events
@@ -933,6 +1485,7 @@ export class Commuters implements PassengerHooks {
   }
 
   dayReport(day: number): DayReport {
+    if (this.baselineStale && this.wxDay) this.setWeather(this.wxDay);
     const d = this.day;
     const net = this.net;
     const totalAgents = this.A;
@@ -1092,10 +1645,15 @@ export class Commuters implements PassengerHooks {
     let n = 0;
     const share = [0, 0, 0];
     let timeSum = 0, timeN = 0;
+    // Living City: the network's commute benefit for the people living here (as commuteBenefit).
+    const ls = this.lsBase();
+    let benefitSum = 0;
     for (let g = 0; g < this.G; g++) {
       if (this.gHome[g] !== tract) continue;
       const c = this.gCount[g];
       n += c;
+      const ti = this.transitInput(g);
+      if (ti) benefitSum += c * transitBenefit(ls[g], transitCost(ti, this.gBand[g]));
       for (let m = 0; m < 3; m++) share[m] += this.shares[g * 3 + m] * c;
       // Expected one-way commute: walk/drive known, transit observed or scheduled.
       const tw = isFinite(this.gWalk[g]) ? this.gWalk[g] : 0;
@@ -1108,6 +1666,8 @@ export class Commuters implements PassengerHooks {
       share: n ? share.map((s) => s / n) : [0, 0, 0],
       avgCommute: timeN ? timeSum / timeN / 60 : 0,
       unserved: this.unserved[tract],
+      /** Minutes per commute the network saves residents (agent-weighted, as Living City measures it). */
+      benefit: n ? benefitSum / n : 0,
     };
   }
 
@@ -1196,6 +1756,8 @@ export class Commuters implements PassengerHooks {
    * 0.1 severity bucket, since it loops over every group).
    */
   setWeather(w: DayWeather): void {
+    this.wxDay = { ...w };
+    this.baselineStale = false;
     this.wx = weatherMods(w);
     if (this.wx === CLEAR_MODS) {
       this.baselineToday = this.baseline;
@@ -1348,7 +1910,7 @@ export class Commuters implements PassengerHooks {
         }
         graph.run(vAcc);
       }
-      const cdf = originCdf(tracts, vx, vy);
+      const cdf = originCdf(tracts, vx, vy, EVENTS.originDecay, this.originWeights);
       // Fare periods of a fan's two trips: arriving around the start, leaving at the end.
       const evPeakTrips = (isPeakTod(ev.start + kind.arrive[0]) ? 1 : 0) + (isPeakTod(ev.end) ? 1 : 0);
       const n = stochasticRound(rng, ev.attendance / scale);

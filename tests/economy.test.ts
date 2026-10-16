@@ -90,3 +90,34 @@ describe('route fleet', () => {
     expect(copy.spareCars.heavy).toBe(0);
   });
 });
+
+describe('16. value capture in the ledger (Living City)', () => {
+  it('settleDay books it as its own line, into cash and the month report; sandbox records it without cash', () => {
+    const end = monthEnd(0);
+    for (const sandbox of [false, true]) {
+      const f = new Finance(sandbox);
+      for (let d = 0; d < end; d++) f.settleDay(day(d, 1e6));
+      const cash0 = f.cash;
+      f.settleDay({ ...day(end, 1e6), valueCapture: 5e6 });
+      const h = f.history[f.history.length - 1];
+      expect(h.valueCapture).toBe(5e6);
+      expect(f.history.slice(0, -1).every((x) => x.valueCapture === undefined)).toBe(true);
+      const m = f.months[f.months.length - 1];
+      expect(m.valueCapture).toBe(5e6);
+      expect(m.revenue).toBe(1e6 * (end + 1));
+      // Profit = fares + value capture − costs − interest − fees.
+      expect(m.profit).toBeCloseTo(m.revenue + 5e6 - m.operatingCosts - m.interest - m.fees, 6);
+      if (sandbox) expect(f.cash).toBe(cash0);
+      else expect(f.cash - cash0).toBeCloseTo(1e6 + 5e6 - h.operating - h.staffing - h.maintenance - h.bondInterest - h.bondPrincipal, 6);
+    }
+  });
+
+  it('without value capture the ledgers and month reports are exactly as before Living City', () => {
+    const end = monthEnd(0);
+    const f = new Finance(false);
+    for (let d = 0; d <= end; d++) f.settleDay(day(d, 1e6));
+    expect(f.history.every((h) => !('valueCapture' in h))).toBe(true);
+    expect('valueCapture' in f.months[0]).toBe(false);
+    expect(f.months[0].profit).toBe(f.months[0].revenue - f.months[0].operatingCosts - f.months[0].interest - f.months[0].fees);
+  });
+});

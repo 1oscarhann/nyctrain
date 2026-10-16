@@ -25,7 +25,8 @@ From the title screen: pick the city (New York / London; remembered), then **New
 **Load game**, **Settings** (units, agent scale) and **Continue** (the autosave). Saves remember
 their city, so loading a London save from the New York title screen switches over. A new game
 asks for the city chaos level (Off / Calm / Normal / Wild, remembered; Normal by default) and
-offers an 8-step tutorial.
+offers an 8-step tutorial. The city grows around good transit once a month ([Living City](#living-city);
+Steady by default).
 
 ### Data
 
@@ -110,8 +111,8 @@ src/
   construction/   track graph with arc fillets, levels and ramps, validation and costs, tools
   routes/         route pathfinding on track, compilation for the sim, fleet sizing and car sales, operations control settings, route tool, event service estimates
   trains/         kinematics (run profiles), interpolated train layer
-  sim/            worker, engine, train sim (moving block, merge locks, holding), regularity, commuters, mode choice, transit graph, city chaos (incidents, event trips)
-  economy/        finance: daily settlement, monthly reports, bonds, bankruptcy; fares, credit rating and bond market, year in review
+  sim/            worker, engine, train sim (moving block, merge locks, holding), regularity, commuters, mode choice, transit graph, city chaos (incidents, event trips), city growth (growth.ts)
+  economy/        finance: daily settlement, monthly reports, bonds, bankruptcy, value capture; fares, credit rating and bond market, year in review
   ui/             app shell, panels, charts, tutorial, menus, city chaos (alert feed, news ticker, Service alerts)
   save/           save format, migrations, IndexedDB store, export and import
 scripts/          data pipeline, headless sim, balance tuning, performance check
@@ -131,15 +132,16 @@ thread interpolates train positions between snapshots. Edits are compiled and se
 skip or speed change, so the night and the 3 am mode choice always run on the network on screen. Agents are never saved. A save stores
 the network, routes (with their operations control settings), finances (bonds with their coupons,
 the bond market and the rating), the fare policy, goals, the day's mode shares and observations,
-and the city chaos level (today's and the one from the next 3 am), seed, today's incident-plan
-basis and planned event service (save format v4; older saves migrate). The commuters are rebuilt
-from the data when the save is loaded.
+the city chaos level (today's and the one from the next 3 am), seed, today's incident-plan
+basis and planned event service, and the city's growth (pace, per-tract multipliers and balancing
+factors, the land-value premium and a thinned history; save format v5; older saves migrate). The
+commuters are rebuilt from the data, scaled by the saved growth, when the save is loaded.
 
 ## Testing each part
 
 ```bash
-npm test                 # all 148 tests (unit + headless, both cities)
-npm run test:unit        # 132: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+npm test                 # all 196 tests (unit + headless, both cities)
+npm run test:unit        # 173: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
                          # chaos (calendar, weather, incidents, train-sim hooks and the watchdog's scope, event
                          # trips, event service, save v3 with today's level), chaos UI (alert text, feed and
                          # ticker order, announcements, cancelled service, wrap-up toasts, London wording and £),
@@ -149,28 +151,39 @@ npm run test:unit        # 132: geometry, costs, ramps, water, pathfinding, logi
                          # rate walk, coupons, refinance, prepay, monthly review, year in review, save v4 with
                          # old months' debt rebuilt, the rating and clockwork goals, London's scorecard), fares
                          # (by band and period, mode choice, London) and the panels' pure helpers (route drafts
-                         # kept across a rebuild, yesterday's regularity after a load)
-npm run test:headless    # 16: 3 days on the test network (with regularity and fares by band and period),
+                         # kept across a rebuild, yesterday's regularity after a load); Living City: the growth
+                         # model (logsum, growth, bounds, Furness on both cities' data, value capture, history),
+                         # agent regeneration equal to a from-scratch build in both cities, the starting city
+                         # exactly as before Living City, carry-over, value capture in the ledger, the credit
+                         # scorecard and the year in review, its goals, save v5
+npm run test:headless    # 23: 3 days on the test network (with regularity and fares by band and period),
                          # holding against no holding, holding next to Wild chaos and event service, chaos end
                          # to end (closures, event agents, determinism, snow, breakdowns, Off is inert, mid-day
-                         # loads after a level change, an edit or an event, a London venue event) and the
-                         # browser's message order (an edit followed at once by a skip)
+                         # loads after a level change, an edit or an event, a London venue event), the
+                         # browser's message order (an edit followed at once by a skip), and Living City (the
+                         # commute benefit, a month close in New York and London, a save mid-growth, value
+                         # capture through the finances, pace Off, an event day right after a month close)
 npm run sim -- days=3    # headless run of the test network, with a daily summary (and regularity, fares, market)
 npm run sim -- days=3 chaos=normal           # the same with city chaos: weather, incidents and events per day
 npm run sim -- days=3 ops=off                # operations control, fare policy and bond market all off: as before v2
+npm run sim -- days=3 pace=off               # Living City off (pace=off|steady|boom; the default Steady first grows after day 18)
 npm run balance -- scenario=core days=12     # ~40-station core: ridership, daily money, regularity, credit rating
 npm run balance -- scenario=sprawl days=8    # low-density sprawl: should lose money
 npm run balance -- city=london scenario=core days=12   # the same for London (43 stations)
 npm run balance -- scenario=core days=12 chaos=normal  # chaos=off|calm|normal|wild, seed=N, money=1
 npm run balance -- scenario=core days=12 control=tp    # control=default|legacy|tp|off, ops=off,
                                                        # farePeak= fareOff= low=1|0.5|0, dump=file.json
-npm run perf             # 300 stations / 25 routes / ~430 trains: times one peak game-hour
+npm run balance -- scenario=core months=12             # Living City: 12 growth months of monthDays=5 days each
+                                                       # (pace=off|steady|boom); days=262 runs a calendar year
+npm run perf -- city=london                            # London's grid of the same size; month=0 skips the month closes
+npm run perf             # 300 stations / 25 routes / ~430 trains: times one peak game-hour and two month closes
 npm run perf -- chaos=wild weather=snow outdoor=1      # worst case: Wild, full snow, every track outdoor
 npm run perf -- ops=off  # without operations control (by default every route holds, with timepoints)
 ```
 
 `dump=file.json` (sim and balance) writes the run's `DayReport`s, the finance state and hashes of
-the mode shares, for comparing two versions field by field.
+the mode shares, for comparing two versions field by field. With `pace=off` every dump is
+byte-identical to the code before Living City, including runs that cross a month end.
 
 To check each milestone by hand in `npm run dev`:
 
@@ -314,6 +327,22 @@ Single runs vary by ±40 ms here, so the same hour was also timed in one process
 and new engines alternately in 30-step chunks: the new code costs about +3.5% with operations
 control on and +4.5% with it off (the regularity statistics run either way). The clean grid runs
 like clockwork (headway CV 0.04), so nothing is held there with chaos Off.
+
+**Living City.** The peak hour never crosses a month, so it is unchanged: 40,320 boardings and
+1,090 waiting as before, 220–266 ms against 211–265 ms for the code before Living City in
+interleaved runs, and within ±1% in one process (old and new engines stepped alternately; which
+engine loads first matters more than the code). The script then runs on through two growth month
+closes (the midnights after days 1 and 3) and times each, with a 600 ms budget:
+
+| Month close (perf grid, scale 10) | New York (285k agents, 300 stations) | London (292k agents, 300 stations) |
+|---|---|---|
+| The first (every agent is re-placed once) | 500–616 ms, median 502 | 360–391 ms |
+| A typical month | 290–375 ms | 153–340 ms, typically ≈ 220 |
+
+Of a typical New York close, the commute benefit takes ≈ 50 ms, the growth step ≈ 55 ms (Furness
+over 976k pairs) and regeneration ≈ 170–260 ms (rounding the OD ≈ 70, groups and agents copied in
+runs, paths for the ≈ 160 new pairs ≈ 25). The first close also places all 285k agents again from
+their own seeds (≈ 150 ms). Nothing else in a step changed.
 
 ## City chaos
 
@@ -604,6 +633,90 @@ a month-end review counts for the Investment grade goal (a new game's AAA is a p
   shocks, service regularity and the goals of the year. Every figure, and the date span, covers the
   closed months; the riders chart follows the window's width. Months closed before v4 get their
   month-end debt rebuilt from the bonds when the save migrates (unknown debt reads "—").
+
+## Living City
+
+Once a month the city responds to the network (design: `docs/v2/living-city.md`, whose top
+sections have the implementation notes for the model and the sim). At the midnight after the
+month's last weekday, the same moment the finances close the month, the worker:
+
+1. **Measures each tract's commute benefit:** the minutes per commute the network saves the
+   people who live there and who work there, against no network. It is the logsum difference of
+   the mode choice the sim already runs: transit at exactly the cost mode choice uses (yesterday's
+   observed door-to-door time, transfers, crowding and the group's fare by band and period), walk
+   and drive on a clear day. Crowding, left-behinds, lateness, incidents and the fare all reduce it.
+2. **Grows residents and jobs** toward well-served tracts (attractiveness b / (b + 20 min)): the
+   city's natural growth (New York 0.8%, London 1.1% a year) plus a boost for good transit, part
+   of it drawn from elsewhere in the city. Monthly caps (residents +1.2% / −0.4%, jobs +1.0% /
+   −0.3%), long-run bounds (×0.7 … ×2 per tract) and a city ceiling (×1.5) keep it in check.
+3. **Rebalances the OD matrix** with Furness factors, OD′ = OD · fHome · fWork, so every tract's
+   row and column sums match its grown residents and jobs (within 0.5%).
+4. **Regenerates the commuters** from OD′ with common random numbers: one rounding draw per OD
+   cell in file order, so each pair's count only moves when its factor crosses a threshold.
+   Unchanged groups keep their shares, observations and paths; new bands of a known pair copy its
+   paths; only new pairs are searched. New groups start at their logit target. Ridership carries
+   over without a jump.
+5. **Captures land value.** Every part of a tract within 800 m of a served station is in a Transit
+   Improvement District, which pays the authority a share of the extra property tax from new
+   development and from an accessibility premium that capitalises over about 10 months (at most
+   12%). It is booked as its own line in the day's ledger (and the month report, the profit, the
+   year in review and the credit scorecard's interest coverage, but not its farebox recovery: the
+   Hudson Yards bonds for the 7 line were backed by district tax increment).
+
+| | New York | London |
+|---|---|---|
+| Value per commuter | $390k per resident, $115k per job (DOF FY2025 roll: homes $1.11T, class 4 $330B, over 2.85M commuters each) | £680k per resident, £140k per job (≈ £2T of homes; ≈ £20B of rateable value at ≈ 5% yields, over 2.93M commuters each) |
+| Effective tax on market value | homes 1.6%, workplaces 3.9% (the ≈ $34B levy by class shares) | homes 0.25% (council tax ≈ £5B a year), workplaces 2.5% (business rates ≈ 51p per £ of rateable value). The UK has no ad valorem property tax; the Crossrail business rate supplement and the Nine Elms enterprise zone (Northern line extension) are the precedents, so most of London's value capture comes from workplaces |
+| Share pledged to the authority | 12% | 14% |
+| Goal "Land value pays" | $10M of value capture in one month | £6M |
+
+The pace (`Game.growthPace`, saved) is **Off** (the city before Living City, bit for bit),
+**Steady** (new games and migrated saves) or **Boom** (×3). It applies from the next month close.
+Goals: *Boomtown* (a neighbourhood of at least 1,000 people grows 25% since the start year) and
+*Land value pays*. (The growth overlay, the tract and station panels' growth sections, the month
+report's City section, the toasts and the menu switch are the next step; `App` already exposes
+the month's `GrowthMonth`, a cached `GrowthView` and `setGrowthPace`.)
+
+**Placement and determinism.** The starting city's agents are placed exactly as before (one
+seeded stream). At the first growth regeneration every agent is placed again once from its own
+seed, hash(seed, home·3 + band, work, k), so from then on a kept agent is copied unchanged and a
+reload of a grown city rebuilds the same agents bit for bit (tested in both cities). Growth uses
+no random numbers, stores Float32 state canonicalised with `Math.fround`, and closes a month once
+(a save from just before midnight re-runs it on load, idempotently). The midnight autosave takes
+the mode shares and the growth state in one reply, so they always describe the same groups. A
+save whose growth no longer fits the city's data starts the city over, with a "City growth was
+reset" toast. With chaos on, event-goers come from the grown city's residents; fans still out at
+a month-end midnight are sent home with everyone else (as at 3 am), and the next day's events run
+on the new agents.
+
+**Identity.** With `pace=off` the `dump=` output (every `DayReport`, `finance.toData()`, hashes of
+the shares and observations) is byte-identical to the code before Living City in both cities,
+for `headless-sim days=3` and for `balance` core and sprawl runs of 25 days that cross the January
+month end, with chaos Off and Normal. On Steady, everything before the first month close is
+byte-identical too (`balance days=12`, `headless-sim days=3`, `perf`); on day 18 the report gains
+its `growth` section and the ledger its value capture.
+
+### Balance (headless, agent scale 10, a new game's operations control and fares, chaos Off)
+
+`balance -- months=12` (12 growth months of 5 days; value capture per day is the month's payment
+over an average month's 21.75 weekdays) and a calendar year (`days=262`, 12 real month closes)
+agree within 3%:
+
+| Steady | Month 1 | Month 6 | **Month 12** | Riders | City at month 12 |
+|---|---|---|---|---|---|
+| New York core | $0.04M/day | $0.21M/day | **$0.35M/day** ($7.7M in December) | 1.35M (day 11) → 1.42M, still rising | ×1.013; best tract +4.4% |
+| New York sprawl | $0.0003M/day | $0.002M/day | **$0.003M/day** | 17k | ×1.008 |
+| London core | £0.02M/day | £0.12M/day | **£0.21M/day** (£4.5M in December) | 764k (day 11) → 828k, still rising | ×1.016; best zone +5.1% |
+| London sprawl | £0.0002M/day | £0.0008M/day | **£0.002M/day** | 18k | ×1.011 |
+
+London's core earns 59% of New York's value capture in pounds, in step with its riders (58%) and
+fares (value capture is ≈ 9% of fares in both cities). With month 12's value capture the New York core goes from
+−$0.08M/day after bond interest to about **+$0.27M/day**; London's core improves from −£2.0M to
+−£1.8M/day (it is the harder city, as before); both sprawl networks keep losing ($0.80M and
+£0.59M a day). **Boom** at month 12: New York $0.72M/day (1.51M riders, city ×1.04, best tract
++13%), London £0.42M/day (915k riders, +15%); the New York sprawl stays under $0.01M/day. The
+calendar-year runs had 0 deadlocks on all 262 days in both cities. *Land value pays* comes at
+about month 17–19 on Steady (extrapolated) and month 6–7 on Boom.
 
 ## Known issues
 

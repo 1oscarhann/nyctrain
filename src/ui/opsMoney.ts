@@ -378,7 +378,8 @@ export function yearReviewText(r: YearReview, opts: { sandbox: boolean; partial:
   }
   const m = r.money;
   const money = [
-    `Fares ${fmtMoney(m.fares)} · Operating ${fmtMoney(-m.operating)} · Interest ${fmtMoney(-m.interest)} · Fees ${fmtMoney(-m.fees)}`,
+    // Living City's value capture is its own line (shown once the city has paid any).
+    `Fares ${fmtMoney(m.fares)}${m.valueCapture > 0 ? ` · Value capture ${fmtMoney(m.valueCapture)}` : ''} · Operating ${fmtMoney(-m.operating)} · Interest ${fmtMoney(-m.interest)} · Fees ${fmtMoney(-m.fees)}`,
     `Capital ${fmtMoney(-m.capital)} · Profit ${signed(m.profit)} · Debt ${m.debtStart === null ? '—' : fmtMoney(m.debtStart)} → ${m.debtEnd === null ? '—' : fmtMoney(m.debtEnd)} · Cash ${fmtMoney(m.cashStart)} → ${fmtMoney(m.cashEnd)}`,
   ];
   let credit: string;

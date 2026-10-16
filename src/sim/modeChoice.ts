@@ -77,16 +77,41 @@ export function generalisedCosts(g: PairGeometry, band: number, transit: Transit
   const tw = walkTime(g.distance, wx);
   const walk = isFinite(tw) ? tw / 60 + COMMUTERS.modeConstant.walk + (wx?.walkPenalty ?? 0) : Infinity;
   const drive = driveTripTime(g, wx) / 60 + moneyToMinutes(driveMoney(g), band) + COMMUTERS.modeConstant.drive;
-  let tr = Infinity;
-  if (transit && isFinite(transit.time)) {
-    tr =
-      transit.time / 60 +
-      (transit.transfers * COMMUTERS.transferPenalty) / 60 +
-      transit.crowdMinutes +
-      moneyToMinutes(transit.fare, band) +
-      COMMUTERS.modeConstant.transit;
-  }
+  const tr = transit && isFinite(transit.time) ? transitCost(transit, band) : Infinity;
   return [walk, drive, tr];
+}
+
+/**
+ * Generalised cost of the transit alternative in minutes: door-to-door time, transfer penalties,
+ * crowding, the fare at the band's value of time and the mode constant (weather never enters it).
+ */
+export function transitCost(t: TransitCostInput, band: number): number {
+  return t.time / 60 + (t.transfers * COMMUTERS.transferPenalty) / 60 + t.crowdMinutes + moneyToMinutes(t.fare, band) + COMMUTERS.modeConstant.transit;
+}
+
+/**
+ * Logit logsum (expected minimum cost, minutes): −(1/θ)·ln Σ exp(−θ·C), computed as
+ * min − ln Σ exp(−θ(C − min)) / θ. Infinity when every alternative is unavailable.
+ */
+export function logsum(costs: readonly number[], theta = COMMUTERS.logitScale): number {
+  let min = Infinity;
+  for (const c of costs) if (c < min) min = c;
+  if (!isFinite(min)) return Infinity;
+  let sum = 0;
+  for (const c of costs) if (isFinite(c)) sum += Math.exp(-theta * (c - min));
+  return min - Math.log(sum) / theta;
+}
+
+/**
+ * Living City commute benefit (consumer surplus of the network, minutes per commute): the logsum
+ * without transit minus the logsum with it, (1/θ)·ln(1 + exp(θ·(lsNoTransit − transitCostMin))).
+ * Always ≥ 0; 0 when transit is unavailable; ≈ lsNoTransit − transitCostMin when transit dominates.
+ */
+export function transitBenefit(lsNoTransit: number, transitCostMin: number, theta = COMMUTERS.logitScale): number {
+  if (!isFinite(transitCostMin)) return 0;
+  if (!isFinite(lsNoTransit)) return Infinity;
+  const x = theta * (lsNoTransit - transitCostMin);
+  return x > 30 ? x / theta : Math.log1p(Math.exp(x)) / theta;
 }
 
 /** Multinomial logit: P_m = exp(−θ·C_m) / Σ exp(−θ·C_k). */

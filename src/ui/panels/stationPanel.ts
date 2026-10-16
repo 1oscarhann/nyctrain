@@ -11,6 +11,8 @@ import type { App } from '../app';
 import { barChart } from '../charts';
 import { bullet, h } from '../dom';
 import { kv, section, shareBar, shell, statCard, type Panel } from './common';
+import { stationValueCaptureText, stationValueCaptureTip } from '../livingCity';
+import { attachTip } from '../widgets';
 
 interface StationDetail {
   hourlyToday: number[];
@@ -77,12 +79,33 @@ export function stationPanel(app: App, id: number): Panel {
   const chartWrap = h('div', { class: 'chart' });
   if (s.status !== 'built') chartWrap.append(h('div', { class: 'hw-muted', style: 'font-size:12.5px' }, 'Ridership appears once the station opens.'));
   const flowsWrap = h('div');
+  // Living City: the value capture paid through this station (its nearest district tracts).
+  const vcCell = h('span', { class: 'hw-muted' }, '…');
+  attachTip(vcCell, app.tooltip, 'Value capture nearby', undefined, stationValueCaptureTip());
+  const renderVc = () => {
+    const v = app.growthView;
+    if (!v) return;
+    const served = app.servedList().some((p) => p.id === id);
+    if (!served) {
+      vcCell.className = 'hw-muted';
+      vcCell.textContent = s.status === 'built' ? 'None: no service stops here' : 'None until it opens with service';
+    } else if (game.growthPace === 'off') {
+      vcCell.className = 'hw-muted';
+      vcCell.textContent = 'None: city growth is off';
+    } else {
+      vcCell.className = '';
+      vcCell.textContent = stationValueCaptureText(v.stationLevy[id] ?? 0, v.stationTracts?.[id] ?? 0);
+    }
+  };
   body.append(statusLine ?? '', closedBanner, routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, section('Station'), kv([
     ['Level', cap(LEVEL_NAMES[level])],
     ['Class', `${cap(cls)} metro`],
     ['Platform', `${s.cars} cars`],
     [s.status === 'blueprint' ? 'Estimated cost' : 'Cost', fmtMoney(s.cost || 0)],
+    ['Value capture nearby', vcCell],
   ]));
+  renderVc();
+  if (!app.growthView) app.loadGrowthView().then(() => vcCell.isConnected && renderVc());
   const actions = h(
     'div',
     { style: 'display:flex;gap:6px;margin-top:12px;flex-wrap:wrap' },
@@ -156,7 +179,10 @@ export function stationPanel(app: App, id: number): Panel {
       render();
       if (++tick % 20 === 0) fetch();
     },
-    dayEnd: fetch,
+    dayEnd: () => {
+      fetch();
+      app.loadGrowthView().then(() => vcCell.isConnected && renderVc());
+    },
     destroy: () => {
       chart?.destroy();
       app.setStationFlows(null, [], []);

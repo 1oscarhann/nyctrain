@@ -77,7 +77,7 @@ export function loadChart(el: HTMLElement, load: number[], capacity: number[], c
 }
 
 /** Monthly revenue vs operating costs (two lines, legend + hover readout). */
-export function financeChart(el: HTMLElement, labels: string[], revenue: number[], costs: number[], width = 330, height = 170): uPlot {
+export function financeChart(el: HTMLElement, labels: string[], revenue: number[], costs: number[], width = 330, height = 170, revenueLabel = 'Revenue'): uPlot {
   const xs = labels.map((_, i) => i);
   const fmt = (v: number | null) => (v == null ? '—' : currency() + compact(v));
   return new uPlot(
@@ -91,7 +91,7 @@ export function financeChart(el: HTMLElement, labels: string[], revenue: number[
       axes: [axis({ splits: () => xs.filter((i) => i % Math.max(1, Math.ceil(xs.length / 8)) === 0), values: (_u, vals) => vals.map((v) => labels[v]?.slice(0, 3) ?? ''), size: 22 }), axis({ values: (_u, vals) => vals.map((v) => currency() + compact(v)), size: 46 })],
       series: [
         { label: 'Month', value: (_u, v) => (v == null ? '—' : labels[v] ?? '') },
-        { label: 'Revenue', stroke: CHART_TEAL, width: 2, points: { show: labels.length < 3, size: 8, fill: CHART_TEAL }, value: (_u, v) => fmt(v) },
+        { label: revenueLabel, stroke: CHART_TEAL, width: 2, points: { show: labels.length < 3, size: 8, fill: CHART_TEAL }, value: (_u, v) => fmt(v) },
         { label: 'Operating costs', stroke: CHART_ORANGE, width: 2, points: { show: labels.length < 3, size: 8, fill: CHART_ORANGE }, value: (_u, v) => fmt(v) },
       ],
     },
@@ -101,6 +101,45 @@ export function financeChart(el: HTMLElement, labels: string[], revenue: number[
 }
 
 const GUIDE = '#C9D1D9';
+
+/**
+ * Living City (tract panel): residents (teal) and jobs (orange) as an index of the start (= 100),
+ * one point per stored month plus the start, with a dashed guide at 100.
+ */
+export function indexChart(el: HTMLElement, labels: string[], res: (number | null)[], jobs: (number | null)[], width = 330, height = 150): uPlot {
+  const xs = labels.map((_, i) => i);
+  const vals = [...res, ...jobs].filter((v): v is number => v != null && Number.isFinite(v));
+  const lo = Math.min(100, ...vals);
+  const hi = Math.max(100, ...vals);
+  // At least ±2 points around 100, so a quiet tract doesn't look like a cliff.
+  const pad = Math.max(0.5, (hi - lo) * 0.12);
+  const yLo = Math.min(98, lo - pad);
+  const yHi = Math.max(102, hi + pad);
+  const few = labels.length < 4;
+  const fmt = (v: number | null) => (v == null ? '—' : v.toFixed(1));
+  return new uPlot(
+    {
+      width,
+      height,
+      padding: [10, 8, 0, 0],
+      legend: { show: true, live: true },
+      cursor: { points: { size: 7 }, drag: { x: false, y: false } },
+      scales: { x: { time: false, range: () => [-0.3, Math.max(1, xs.length - 1) + 0.3] }, y: { range: () => [yLo, yHi] } },
+      axes: [
+        axis({ splits: () => xs.filter((i) => i % Math.max(1, Math.ceil(xs.length / 5)) === 0), values: (_u, vals2) => vals2.map((v) => labels[v] ?? ''), size: 22 }),
+        axis({ values: (_u, vals2) => vals2.map((v) => (Math.abs(v - Math.round(v)) < 1e-6 ? String(Math.round(v)) : v.toFixed(1))), size: 36 }),
+      ],
+      series: [
+        { label: 'Month', value: (_u, v) => (v == null ? '—' : labels[v] ?? '') },
+        { label: 'Residents', stroke: CHART_TEAL, width: 2, points: { show: few, size: 7, fill: CHART_TEAL }, value: (_u, v) => fmt(v) },
+        { label: 'Jobs', stroke: CHART_ORANGE, width: 2, points: { show: few, size: 7, fill: CHART_ORANGE }, value: (_u, v) => fmt(v) },
+        { label: 'Start', stroke: GUIDE, width: 1, dash: [4, 3], points: { show: false }, value: () => '100' },
+      ],
+    },
+    [xs, res, jobs, xs.map(() => 100)],
+    el,
+  );
+}
 
 /**
  * Bond market history (§2.4 Borrowing): the market's base rate (teal), the authority's new-bond

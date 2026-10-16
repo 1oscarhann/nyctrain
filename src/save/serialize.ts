@@ -1,16 +1,73 @@
 /** Game state ⇄ save file. */
-import { CHAOS, type ChaosLevel } from '../balance';
+import { CHAOS, GROWTH, type ChaosLevel, type GrowthPace } from '../balance';
 import { city } from '../cities';
 import type { ChaosSettings, Game } from '../core/game';
 import type { GoalState } from '../core/goals';
 import { Finance } from '../economy/finance';
 import { normalizeFares } from '../economy/fares';
-import type { DayExposure, DayReport, ModeState, ServiceOverride } from '../sim/protocol';
-import { b64ToF32, f32ToB64, SAVE_VERSION, type SaveFile, type SaveSettings } from './format';
+import type { DayExposure, DayReport, GrowthData, ModeState, ServiceOverride } from '../sim/protocol';
+import { b64ToF32, b64ToU16, bytesToB64, f32ToB64, SAVE_VERSION, type SavedGrowth, type SaveFile, type SaveSettings } from './format';
+
+/** Living City state for a save (typed arrays as base64). */
+export function encodeGrowth(d: GrowthData): SavedGrowth {
+  return {
+    version: 1,
+    appliedThroughDay: d.appliedThroughDay,
+    months: d.months,
+    sbar: [d.sbar[0], d.sbar[1]],
+    mRes: f32ToB64(d.mRes),
+    mJobs: f32ToB64(d.mJobs),
+    fHome: f32ToB64(d.fHome),
+    fWork: f32ToB64(d.fWork),
+    premium: f32ToB64(d.premium),
+    history: d.history.map((h) => ({ day: h.day, q: bytesToB64(h.q) })),
+    city: d.city.map((c) => [c.day, c.residents, c.jobs, c.valueCapture]),
+  };
+}
+
+/**
+ * Growth state from a save. Never throws: a malformed field decodes to an empty array, which the
+ * worker's length check against the city's tracts (Growth.fromData) then rejects, starting the
+ * city over with the "City growth was reset" toast.
+ */
+export function decodeGrowth(s: SavedGrowth): GrowthData {
+  const f32 = (x: unknown) => {
+    try {
+      return typeof x === 'string' ? b64ToF32(x) : new Float32Array(0);
+    } catch {
+      return new Float32Array(0);
+    }
+  };
+  const u16 = (x: unknown) => {
+    try {
+      return typeof x === 'string' ? b64ToU16(x) : new Uint16Array(0);
+    } catch {
+      return new Uint16Array(0);
+    }
+  };
+  const num = (x: unknown, d: number) => (typeof x === 'number' && Number.isFinite(x) ? x : d);
+  return {
+    version: 1,
+    appliedThroughDay: num(s.appliedThroughDay, -1),
+    months: num(s.months, 0),
+    sbar: [num(s.sbar?.[0], 0), num(s.sbar?.[1], 0)],
+    mRes: f32(s.mRes),
+    mJobs: f32(s.mJobs),
+    fHome: f32(s.fHome),
+    fWork: f32(s.fWork),
+    premium: f32(s.premium),
+    history: (Array.isArray(s.history) ? s.history : []).map((h) => ({ day: num(h?.day, 0), q: u16(h?.q) })),
+    city: (Array.isArray(s.city) ? s.city : []).filter(Array.isArray).map((c) => ({ day: num(c[0], 0), residents: num(c[1], 0), jobs: num(c[2], 0), valueCapture: num(c[3], 0) })),
+  };
+}
+
+export function isGrowthPace(x: unknown): x is GrowthPace {
+  return GROWTH.paces.includes(x as GrowthPace);
+}
 
 export function buildSave(
   game: Game,
-  extra: { name: string; goals: GoalState; lastReport: DayReport | null; tutorialDone: boolean; settings: SaveSettings; modeState: ModeState | null },
+  extra: { name: string; goals: GoalState; lastReport: DayReport | null; tutorialDone: boolean; settings: SaveSettings; modeState: ModeState | null; growth?: GrowthData | null },
 ): SaveFile {
   const ms = extra.modeState;
   return {
@@ -46,17 +103,20 @@ export function buildSave(
         nextServiceId: game.chaos.nextServiceId,
         ...(game.chaos.dayExposure ? { dayExposure: JSON.parse(JSON.stringify(game.chaos.dayExposure)) as DayExposure } : {}),
       },
+      growthPace: game.growthPace,
     },
     settings: { ...extra.settings },
     modeState: ms ? { key: ms.key, shares: f32ToB64(ms.shares), obsTime: f32ToB64(ms.obsTime), obsCrowd: f32ToB64(ms.obsCrowd) } : null,
+    growth: extra.growth ? encodeGrowth(extra.growth) : null,
   };
 }
 
 /** Load a save into a fresh Game. */
-export function applySave(game: Game, save: SaveFile): { goals: GoalState; lastReport: DayReport | null; modeState: ModeState | undefined; tutorialDone: boolean } {
+export function applySave(game: Game, save: SaveFile): { goals: GoalState; lastReport: DayReport | null; modeState: ModeState | undefined; growth: GrowthData | null; tutorialDone: boolean } {
   const g = save.game;
   game.time = g.time;
   game.sandbox = g.sandbox;
+  game.growthPace = isGrowthPace(g.growthPace) ? g.growthPace : 'steady';
   game.fares = normalizeFares(g.fares);
   game.network.load(g.network);
   game.routes.load(g.routes);
@@ -67,6 +127,7 @@ export function applySave(game: Game, save: SaveFile): { goals: GoalState; lastR
     goals: { ...g.goals },
     lastReport: (g.lastReport as DayReport | null) ?? null,
     modeState: ms ? { key: ms.key, shares: b64ToF32(ms.shares), obsTime: b64ToF32(ms.obsTime), obsCrowd: b64ToF32(ms.obsCrowd) } : undefined,
+    growth: save.growth && typeof save.growth === 'object' ? decodeGrowth(save.growth) : null,
     tutorialDone: g.tutorialDone,
   };
 }

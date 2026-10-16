@@ -8,13 +8,50 @@ import type { App } from './app';
 import { CHART_TEAL, barChart } from './charts';
 import { h } from './dom';
 import { monthRatingText, ratingTone, yearReviewText } from './opsMoney';
+import type { GrowthMonth, GrowthView } from '../sim/protocol';
+import { boomtownLine, cityRows, fmtSignedCount, fmtSignedPct, MIGRATED_HINT, sandboxMonthBody } from './livingCity';
 import { modal } from './widgets';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-export function showMonthReport(app: App, m: MonthReport): void {
+/** The one-time "Living City" hint for a save from before it (the first report after loading). */
+function livingHint(app: App): HTMLElement | null {
+  if (!app.livingHintPending) return null;
+  app.livingHintPending = false;
+  return h('div', { class: 'warn', style: 'margin:10px 0 0' }, MIGRATED_HINT);
+}
+
+/**
+ * The month report's City section (Living City, when a growth month closed with this report):
+ * residents, jobs, commuters and the district, the month's boomtowns, and Show growth map.
+ */
+function citySection(app: App, gm: GrowthMonth, close: () => void): HTMLElement {
+  const grid = h('div', { class: 'kv', style: 'font-size:14px' });
+  for (const [k, v, c] of cityRows(gm)) grid.append(h('div', { class: 'k' }, k), h('div', { class: `v ${c}` }, v));
+  const list = h('div', { class: 'list', style: 'margin-top:4px' });
+  for (const b of gm.boomtowns) {
+    list.append(
+      h(
+        'div',
+        { class: 'list-item', style: 'padding:4px 6px', onclick: () => { close(); app.showTract(b.tract); } },
+        h('span', { class: 'grow' }, app.tractName(b.tract)),
+        h('span', { class: 'num hw-muted', style: 'font-size:12.5px' }, boomtownLine(b)),
+      ),
+    );
+  }
+  return h(
+    'div',
+    { class: 'month-city' },
+    h('div', { class: 'section' }, 'City'),
+    grid,
+    gm.boomtowns.length ? h('div', { class: 'section' }, 'Boomtowns') : null,
+    gm.boomtowns.length ? list : h('div', { class: 'hw-muted', style: 'font-size:12.5px;margin-top:6px' }, 'No neighbourhood grew this month.'),
+  );
+}
+
+export function showMonthReport(app: App, m: MonthReport, growth: GrowthMonth | null = null): void {
   if (app.game.sandbox) {
-    app.toast(`${m.label} report`, `${fmtCount(m.riders / Math.max(1, m.days))} riders a day`, 'green');
+    app.toast(`${m.label} report`, sandboxMonthBody(m.riders / Math.max(1, m.days), growth), 'green');
     return;
   }
   const kvs: [string, string, string][] = [
@@ -22,6 +59,8 @@ export function showMonthReport(app: App, m: MonthReport): void {
     ['Operating costs', fmtMoney(-m.operatingCosts), 'hw-red'],
     ['Bond payments', fmtMoney(-m.bondPayments), m.bondPayments ? 'hw-red' : ''],
   ];
+  // Living City: its own line (a month with a growth close; Off books nothing).
+  if (m.valueCapture !== undefined) kvs.splice(1, 0, ['Value capture', fmtMoney(m.valueCapture), m.valueCapture > 0 ? 'hw-green' : '']);
   if (m.fees) kvs.push(['Financing fees', fmtMoney(-m.fees), 'hw-red']);
   if (m.prepaid) kvs.push(['Bond prepayments', fmtMoney(-m.prepaid), 'hw-red']);
   kvs.push(
@@ -48,9 +87,32 @@ export function showMonthReport(app: App, m: MonthReport): void {
     h('h2', null, `${m.label} report`),
     h('div', { class: 'hw-muted', style: 'margin-bottom:12px' }, `${m.days} weekdays · ${fmtCount(m.riders / Math.max(1, m.days))} riders a day on average`),
     grid,
-    h('div', { class: 'actions' }, h('button', { class: 'hw-btn', onclick: () => { close(); app.game.select({ kind: 'finance' }); } }, 'Open finances'), h('button', { class: 'hw-btn primary', onclick: () => close() }, 'Continue')),
+    growth ? citySection(app, growth, () => close()) : null,
+    livingHint(app),
+    h(
+      'div',
+      { class: 'actions' },
+      growth ? h('button', { class: 'hw-btn', onclick: () => { close(); app.setOverlay('growth'); } }, 'Show growth map') : null,
+      h('button', { class: 'hw-btn', onclick: () => { close(); app.game.select({ kind: 'finance' }); } }, 'Open finances'),
+      h('button', { class: 'hw-btn primary', onclick: () => close() }, 'Continue'),
+    ),
   );
   close = modal(app.root, content);
+}
+
+/**
+ * The year in review's City line, from the growth view's month rows: residents and jobs over the
+ * year and the value capture paid (null when the city did not grow that year).
+ */
+export function yearCityLine(v: GrowthView | null, year: number, startYear: number, totals: { residents: number; jobs: number }): string | null {
+  if (!v || !v.city.length) return null;
+  const rows = v.city.filter((c) => yearOf(c.day) === year);
+  if (!rows.length) return null;
+  const before = v.city.filter((c) => yearOf(c.day) < year).at(-1);
+  const r0 = before?.residents ?? (year <= startYear ? totals.residents : rows[0].residents);
+  const j0 = before?.jobs ?? (year <= startYear ? totals.jobs : rows[0].jobs);
+  const last = rows[rows.length - 1];
+  return `Residents ${fmtCount(last.residents)} (${fmtSignedCount(last.residents - r0)}, ${fmtSignedPct(r0 > 0 ? last.residents / r0 - 1 : 0, 2)}) · jobs ${fmtCount(last.jobs)} (${fmtSignedCount(last.jobs - j0)}) · ${rows.length} growth month${rows.length > 1 ? 's' : ''}`;
 }
 
 /**
@@ -58,7 +120,7 @@ export function showMonthReport(app: App, m: MonthReport): void {
  * service regularity and goals. Shown on the first weekday of January instead of the December
  * report (whose line is the last bar), and from the Finances panel for any year with data.
  */
-export function showYearReview(app: App, year: number): void {
+export function showYearReview(app: App, year: number, growth: GrowthMonth | null = null): void {
   const g = app.game;
   const rev = buildYearReview(g.finance, app.goals, year);
   // This year's months so far (the review of a finished year is shown from 1 January on).
@@ -84,6 +146,19 @@ export function showYearReview(app: App, year: number): void {
     row('Bond market', t.market);
   }
   row('Service', t.service);
+  // Living City: the city over the year (filled in when the growth view arrives).
+  const cityCell = h('div', { class: 'num' }, h('span', { class: 'hw-muted' }, '…'));
+  if (app.game.growthPace !== 'off' || app.growthView?.months || growth) {
+    row('City', cityCell);
+    const totals = app.world.tracts.reduce((a, tr) => ({ residents: a.residents + tr.residents, jobs: a.jobs + tr.jobs }), { residents: 0, jobs: 0 });
+    app.loadGrowthView().then((v) => {
+      const line = yearCityLine(v, year, yearOf(0), totals);
+      cityCell.replaceChildren(
+        line ?? h('span', { class: 'hw-muted' }, app.game.growthPace === 'off' ? 'City growth is off' : `The city did not grow in ${year}`),
+        line ? h('button', { class: 'hw-btn small', style: 'margin-left:8px', onclick: () => { close(); app.setOverlay('growth'); } }, 'Show growth map') : '',
+      );
+    });
+  }
   row('Goals', t.goals.length ? h('div', null, ...t.goals.map((x) => h('div', { class: 'hw-green' }, x))) : h('span', { class: 'hw-muted' }, `None completed in ${year}`));
   const last = g.finance.months.filter((m) => m.key.startsWith(`${year}-`)).at(-1);
   const content = h(
@@ -92,7 +167,8 @@ export function showYearReview(app: App, year: number): void {
     h('div', { class: 'yr-head' }, h('h2', null, t.title), h('span', { class: 'hw-muted num' }, t.sub)),
     cards,
     grid,
-    last && !g.sandbox ? h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:10px' }, `${last.label}: fares ${fmtMoney(last.revenue)} · operating profit ${fmtMoney(last.profit, { sign: true })} · cash ${fmtMoney(last.cashEnd)}`) : '',
+    last && !g.sandbox ? h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:10px' }, `${last.label}: fares ${fmtMoney(last.revenue)}${last.valueCapture ? ` · value capture ${fmtMoney(last.valueCapture)}` : ''} · operating profit ${fmtMoney(last.profit, { sign: true })} · cash ${fmtMoney(last.cashEnd)}`) : '',
+    livingHint(app),
     h(
       'div',
       { class: 'actions' },

@@ -2,17 +2,22 @@
  * Balance tuning: build scenario networks in code, run them to near-equilibrium and report
  * ridership and daily money.  npm run balance [-- city=nyc|london scenario=core|sprawl|test days=8 scale=10
  * chaos=off|calm|normal|wild seed=2030 money=1 ops=off control=default|legacy|tp|off farePeak= fareOff= low=1|0.5|0
- * dump=file.json]
+ * pace=off|steady|boom months=N monthDays=5 dump=file.json]
  * (scenario=test is New York only; chaos defaults to off; with chaos on, or money=1, each day also
  * shows its operating result. Operations control and fares default to a new game's: control=legacy
  * is a migrated route (no holding or recovery), tp adds suggested timepoints, and ops=off turns
  * every v2 mechanic off, which reproduces the code before operations control exactly. farePeak /
  * fareOff / low set the fare policy; peak= is still the peak headway in minutes.)
+ * Living City: pace= sets the growth pace (default Steady, as a new game; pace=off is the code
+ * before Living City). A growth month closes at each calendar month end (from day 18, 31 Jan
+ * 2030). months=N instead runs N growth months of monthDays=K days each (default 5: shares
+ * re-equilibrate between closes), a tuning loop that ignores the calendar; it prints one line per
+ * growth month (riders, value capture, city ×, top boomtown, agents) and the month-12 summary.
  */
 import { loadLandFromDisk, loadWorldFromDisk } from './nodeData';
 import { buildTestNetwork, createHeadlessGame, drawLine, makeRoute, runDays, stationNear } from '../src/sim/headless';
 import type { Game } from '../src/core/game';
-import { BONDS, CHAOS, COMMUTERS, ECONOMY, type ChaosLevel, type TrackLevel } from '../src/balance';
+import { BONDS, CHAOS, COMMUTERS, ECONOMY, GROWTH, type ChaosLevel, type GrowthPace, type TrackLevel } from '../src/balance';
 import { weatherLabel } from '../src/core/cityCalendar';
 import { annuityMonthly, annuityPayment } from '../src/economy/finance';
 import { creditScore, spreadOf } from '../src/economy/credit';
@@ -22,6 +27,9 @@ import type { RouteControl } from '../src/routes/types';
 import { dumpRun } from './dump';
 import { edgeReport } from '../src/construction/validate';
 import { fmtMoney } from '../src/core/units';
+import { TIME } from '../src/balance';
+import { weekdaysInMonth } from '../src/core/calendar';
+import type { DayReport } from '../src/sim/protocol';
 import { applyCity, isCityId } from '../src/cities';
 
 type LL = [number, number];
@@ -313,12 +321,16 @@ const chaos = (args.chaos ?? 'off') as ChaosLevel;
 if (!CHAOS.levels.includes(chaos)) throw new Error(`Unknown chaos level ${chaos}`);
 const chaosSeed = Number(args.seed ?? CHAOS.defaultSeed);
 const opsOff = args.ops === 'off';
+const pace = (args.pace ?? GROWTH.defaultPace) as GrowthPace;
+if (!GROWTH.paces.includes(pace)) throw new Error(`Unknown pace ${pace} (off|steady|boom)`);
+const months = args.months !== undefined ? Number(args.months) : 0;
+const monthDays = Number(args.monthDays ?? 5);
 const controlArg = (args.control ?? (opsOff ? 'off' : 'default')) as string;
 const controls: Record<string, () => RouteControl> = { default: defaultControl, tp: defaultControl, legacy: legacyControl, off: offControl };
 if (!controls[controlArg]) throw new Error(`Unknown control ${controlArg} (default|legacy|tp|off)`);
 
 // Built in sandbox so the scenario never runs out of money; the ledger still records every cost.
-const game = createHeadlessGame(loadWorldFromDisk(), loadLandFromDisk(), { sandbox: true, chaos, chaosSeed, ops: opsOff ? 'off' : 'default' });
+const game = createHeadlessGame(loadWorldFromDisk(), loadLandFromDisk(), { sandbox: true, chaos, chaosSeed, ops: opsOff ? 'off' : 'default', growthPace: pace });
 game.routes.newControl = controls[controlArg];
 if (args.farePeak !== undefined || args.fareOff !== undefined || args.low !== undefined) {
   const peak = args.farePeak !== undefined ? Number(args.farePeak) : game.fares.peak;
@@ -370,7 +382,27 @@ const stationCost = [...game.network.stations.values()].reduce((s, st) => s + st
 // Debt a real player would need: everything above the starting cash, at bond terms.
 const debtNeeded = Math.max(0, built - ECONOMY.startingCash);
 console.log(`${cityId} ${scenario}: ${stationsN} stations, ${game.routes.list().length} routes · capital ${fmtMoney(built)} (track ${fmtMoney(trackCost)}, stations ${fmtMoney(stationCost)}, trains ${fmtMoney(built - trackCost - stationCost)}) · debt needed ${fmtMoney(debtNeeded)}${debtNeeded > ECONOMY.bondMax ? ' (over the bond cap!)' : ''}`);
-const run = runDays(game, days, { agentScale: scale });
+// Living City: one line per growth month (riders that day, value capture, the city, the top boomtown, agents).
+const growthLine = (r: DayReport) => {
+  const gm = r.growth!;
+  const top = gm.boomtowns[0];
+  const city0 = total0;
+  return `  growth ${gm.label} (day ${r.day}): riders ${Math.round(r.riders).toLocaleString()} · value capture ${fmtMoney(gm.valueCapture)} (${fmtMoney(gm.valueCapture / monthWeekdays(r.day))}/day) · ${gm.districtTracts} district tracts` +
+    ` · city ×${((gm.residents) / city0).toFixed(4)} · top ${top ? `tract ${top.tract} +${(top.rate * 100).toFixed(2)}%/mo (+${(top.sinceStart * 100).toFixed(1)}% since ${TIME.startDate.year})` : '—'} · benefit ${gm.benefitMean.toFixed(1)} min · agents ${gm.agents.toLocaleString()}`;
+};
+// Value capture per day: a month's payment over its weekdays (with months=, an average month's, 261 / 12).
+const monthWeekdays = (day: number) => (months > 0 ? ECONOMY.daysPerYear / 12 : weekdaysInMonth(day));
+const total0 = game.world.tracts.reduce((a, t) => a + t.residents, 0);
+const growthReports: DayReport[] = [];
+const run = runDays(game, months > 0 ? months * monthDays : days, {
+  agentScale: scale,
+  ...(months > 0 ? { monthEvery: monthDays } : {}),
+  onDay: (r) => {
+    if (!r.growth) return;
+    growthReports.push(r);
+    console.log(growthLine(r));
+  },
+});
 const last = run.reports[run.reports.length - 1];
 const f = game.finance.history[game.finance.history.length - 1];
 const debtService = (annuityPayment(debtNeeded, ECONOMY.bondRate, ECONOMY.bondYears) * 12) / ECONOMY.daysPerYear;
@@ -390,10 +422,14 @@ const moneyLine = (day: number) => {
 // Operations control: the day's headway regularity (not printed with ops=off, so the output matches the code before it).
 const regLine = (r: (typeof run.reports)[number]) =>
   opsOff || !r.regularity ? '' : ` · CV ${r.regularity.cv.toFixed(2)} bunched ${(r.regularity.bunched * 100).toFixed(1)}% ewt ${r.regularity.ewt.toFixed(0)}s holds ${r.regularity.holds}`;
-for (const r of run.reports) console.log(`  day ${r.day}: riders ${Math.round(r.riders).toLocaleString()} · share ${(r.transitShare * 100).toFixed(1)}% · commute ${r.avgCommute.toFixed(1)} (base ${r.baselineCommute.toFixed(1)}) · late ${r.avgLateness.toFixed(0)}s · left ${Math.round(r.leftBehind).toLocaleString()} · gaveup ${Math.round(r.gaveUp).toLocaleString()} · dl ${r.deadlocks}${regLine(r)}${chaosLine(r)}${moneyLine(r.day)}`);
+for (const r of months > 0 ? [] : run.reports) console.log(`  day ${r.day}: riders ${Math.round(r.riders).toLocaleString()} · share ${(r.transitShare * 100).toFixed(1)}% · commute ${r.avgCommute.toFixed(1)} (base ${r.baselineCommute.toFixed(1)}) · late ${r.avgLateness.toFixed(0)}s · left ${Math.round(r.leftBehind).toLocaleString()} · gaveup ${Math.round(r.gaveUp).toLocaleString()} · dl ${r.deadlocks}${regLine(r)}${chaosLine(r)}${moneyLine(r.day)}`);
 const opCost = f.operating + f.staffing + f.maintenance;
 console.log(`last day: revenue ${fmtMoney(f.revenue)} · operating ${fmtMoney(f.operating)} (${Math.round(f.carKm).toLocaleString()} car-km) · staffing ${fmtMoney(f.staffing)} · maintenance ${fmtMoney(f.maintenance)}`);
 console.log(`  operating result ${fmtMoney(f.revenue - opCost, { sign: true })}/day · after bond interest ${fmtMoney(f.revenue - opCost - interest, { sign: true })}/day · after full debt service ${fmtMoney(f.revenue - opCost - debtService, { sign: true })}/day`);
+// Living City: the last growth month's value capture per day, on top of the last day's result.
+const lastGm = growthReports[growthReports.length - 1];
+const vcPerDay = lastGm ? lastGm.growth!.valueCapture / monthWeekdays(lastGm.day) : 0;
+if (lastGm) console.log(`  with value capture (${lastGm.growth!.label}: ${fmtMoney(vcPerDay)}/day): operating ${fmtMoney(f.revenue + vcPerDay - opCost, { sign: true })}/day · after bond interest ${fmtMoney(f.revenue + vcPerDay - opCost - interest, { sign: true })}/day`);
 console.log(`  route riders ${JSON.stringify(last.routeRiders)} · goal trip ${last.goalTrip?.toFixed(0) ?? '—'} · ${run.ms} ms`);
 if (!opsOff) {
   // Fares by band and period on the last day, and the credit rating a player with this network
@@ -410,6 +446,8 @@ if (!opsOff) {
   const op = tail.reduce((s, h) => s + h.operating + h.staffing + h.maintenance, 0) / tail.length;
   const inputs = (newRate: number) => ({
     revenuePerDay: rev,
+    // Living City: value capture counts in interest coverage (the last growth month's, per day).
+    valueCapturePerDay: vcPerDay,
     opCostPerDay: op,
     serviceDays: 60,
     debt: debtNeeded,
@@ -424,6 +462,17 @@ if (!opsOff) {
   console.log(`  credit: ${res.metrics.map((m) => `${m.label} ${m.display}`).join(' · ')} → score ${res.score.toFixed(1)} → ${res.rating} (new bonds ${((BONDS.start + spreadOf(res.rating)) * 100).toFixed(2)}%)`);
 }
 if (args.dump) dumpRun(args.dump, run.reports, game, run.engine);
+if (growthReports.length) {
+  // Living City summary: value capture per day of each growth month, the riders' trend, the city.
+  const vcDay = (r: DayReport) => r.growth!.valueCapture / monthWeekdays(r.day);
+  const g = run.engine.growth!;
+  const m12 = growthReports[Math.min(11, growthReports.length - 1)];
+  const first = run.reports[0];
+  console.log(
+    `living city (${pace}): ${growthReports.length} growth months · month ${Math.min(12, growthReports.length)} value capture ${fmtMoney(vcDay(m12))}/day · riders day ${first.day} ${Math.round(first.riders).toLocaleString()} → day ${last.day} ${Math.round(last.riders).toLocaleString()}` +
+      ` · city ×${(g.city[g.city.length - 1].residents / g.total0).toFixed(4)} · agents ${run.engine.commuters!.A.toLocaleString()} · last regeneration ${JSON.stringify(run.engine.lastRegen)}`,
+  );
+}
 
 // ---- demand diagnostics: coverage vs choice
 {

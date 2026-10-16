@@ -26,6 +26,8 @@ export interface YearReview {
   share: number;
   money: {
     fares: number;
+    /** Living City value capture (its own line; the profit includes it). */
+    valueCapture: number;
     operating: number;
     interest: number;
     fees: number;
@@ -103,6 +105,7 @@ export function buildYearReview(f: Pick<FinanceData, 'months' | 'history' | 'mar
     share: kpiMean((k) => k.transitShare),
     money: {
       fares: sum((m) => m.revenue),
+      valueCapture: sum((m) => m.valueCapture ?? 0),
       operating: sum((m) => m.operatingCosts),
       interest: sum((m) => m.interest ?? 0),
       fees: sum((m) => m.fees ?? 0),

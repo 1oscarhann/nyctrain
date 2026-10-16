@@ -2,11 +2,15 @@
 import { city } from '../../cities';
 import { TRAINS } from '../../balance';
 import { edgeTooltip } from '../../construction/describe';
+import { fmtDate, isNewMonth, monthLabel } from '../../core/calendar';
 import { fmtClock, fmtCount, fmtDensity, fmtSpeed } from '../../core/units';
+import { formalTractName, TRACT_NAME_RADIUS } from '../../map/placeNames';
 import type { App } from '../app';
+import { indexChart } from '../charts';
 import { bullet, h } from '../dom';
+import { fmtSignedPct, startMonth, tractGrowthSentence, tractValueCaptureLine } from '../livingCity';
 import { kv, section, shareBar, shell, SHARE_COLORS, statCard, type Panel } from './common';
-import { SNAP_HELD } from '../../sim/protocol';
+import { SNAP_HELD, type TractGrowth } from '../../sim/protocol';
 
 export function trainPanel(app: App, id: number): Panel {
   const sh = shell('Train', '—', () => app.game.select(null));
@@ -82,20 +86,32 @@ interface TractDetail {
 
 export function tractPanel(app: App, index: number): Panel {
   const t = app.world.tracts[index];
-  // London MSOAs carry names ("Camden 028"); NYC tracts are numbered within the borough.
-  const title = t.name ?? `${t.borough} tract ${String(Number(t.id.slice(5)) / 100).replace(/\.0+$/, '')}`;
-  const sh = shell(`${t.name ? 'Neighbourhood area' : 'Census tract'} ${t.id} · ${t.borough}`, title, () => app.game.select(null));
+  // London MSOAs carry names ("Camden 028"); NYC tracts are numbered within the borough. A map
+  // place label seen this session names the tract when there is one (Living City, §2.4).
+  const formal = formalTractName(t);
+  const place = app.places.nearest(t.x, t.y, TRACT_NAME_RADIUS);
+  const kind = t.name ? 'Neighbourhood area' : 'Census tract';
+  const sh = shell(place ? `${formal} · ${kind} ${t.id}` : `${kind} ${t.id} · ${t.borough}`, place ?? formal, () => app.game.select(null));
   const body = sh.body;
   const stats = h('div', { class: 'stat-grid' });
   const shares = h('div');
-  body.append(stats, section('How residents commute'), shares);
-  const render = (d: TractDetail | null) => {
+  const growthWrap = h('div');
+  body.append(stats, section('How residents commute'), shares, section(`Growth since ${startMonth()}`), growthWrap);
+  let d: TractDetail | null = null;
+  let tg: TractGrowth | null = null;
+  let loaded = false;
+  let chart: { destroy(): void } | null = null;
+  const renderStats = () => {
     stats.replaceChildren(
-      statCard('Residents', fmtCount(t.residents)),
-      statCard('Jobs', fmtCount(t.jobs)),
+      // Residents and jobs as they are now (the start until the growth query answers).
+      statCard('Residents', fmtCount(tg ? tg.residents : t.residents)),
+      statCard('Jobs', fmtCount(tg ? tg.jobs : t.jobs)),
       statCard('Avg commute', d ? `${d.avgCommute.toFixed(1)} min` : '—'),
       statCard('No good transit', d ? fmtCount(d.unserved) : '—', d && d.unserved > 0 ? 'amber' : undefined),
     );
+  };
+  const render = () => {
+    renderStats();
     shares.replaceChildren(
       d
         ? shareBar([
@@ -107,11 +123,73 @@ export function tractPanel(app: App, index: number): Panel {
       h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:8px' }, `Density ${fmtDensity(t.density)} (residents + jobs). Residents and jobs count commuters who live and work in ${city().name}.`),
     );
   };
-  render(null);
-  const fetch = () => app.sim.query<TractDetail>({ kind: 'tract', tract: index }).then(render);
+  const tone = (u: number) => (u > 0.0005 ? 'green' : u < -0.0005 ? 'red' : undefined);
+  const renderGrowth = () => {
+    chart?.destroy();
+    chart = null;
+    growthWrap.replaceChildren();
+    if (!tg) {
+      growthWrap.append(h('div', { class: 'hw-muted' }, loaded ? 'No growth data for this area.' : 'Loading…'));
+      return;
+    }
+    const g = tg;
+    const dRes = g.residents0 > 0 ? g.residents / g.residents0 - 1 : 0;
+    const dJobs = g.jobs0 > 0 ? g.jobs / g.jobs0 - 1 : 0;
+    growthWrap.append(
+      h(
+        'div',
+        { class: 'stat-grid' },
+        statCard('Residents', g.residents0 > 0 ? fmtSignedPct(dRes) : '—', tone(dRes)),
+        statCard('Jobs', g.jobs0 > 0 ? fmtSignedPct(dJobs) : '—', tone(dJobs)),
+        statCard('Transit benefit', `${Math.round(g.residents0 >= g.jobs0 ? g.benefitHome : g.benefitWork)} min`),
+        statCard('Land value', fmtSignedPct(g.premium), g.premium > 0.0005 ? 'green' : undefined),
+      ),
+    );
+    if (g.history.length) {
+      // Index chart: the start = 100, then each stored month close.
+      const labels = [startMonth(), ...g.history.map((p) => monthLabel(p.day))];
+      const idx = (v: number, v0: number) => (v0 > 0 ? (v / v0) * 100 : null);
+      const res = [g.residents0 > 0 ? 100 : null, ...g.history.map((p) => idx(p.residents, g.residents0))];
+      const jobs = [g.jobs0 > 0 ? 100 : null, ...g.history.map((p) => idx(p.jobs, g.jobs0))];
+      const wrap = h('div', { class: 'chart', style: 'margin-top:8px' });
+      growthWrap.append(h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:8px' }, `Index, ${startMonth()} = 100`), wrap);
+      chart = indexChart(wrap, labels, res, jobs);
+    } else {
+      // The next month close: midnight after the month's last weekday.
+      let last = app.game.day;
+      while (!isNewMonth(last + 1)) last++;
+      growthWrap.append(h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:8px' }, app.game.growthPace === 'off' ? 'City growth is off: the city stays as it is.' : `The city grows at each month end. The next one closes after ${fmtDate(last)}.`));
+    }
+    const near = g.nearestStation !== null ? app.game.network.stations.get(g.nearestStation) : undefined;
+    growthWrap.append(
+      h('div', { style: 'font-size:12.5px;line-height:1.45;margin-top:8px' }, tractGrowthSentence(g, app.game.growthPace)),
+      h('div', { class: g.inDistrict ? 'fin-line' : 'hw-muted', style: 'font-size:12.5px;margin-top:6px' }, tractValueCaptureLine(g, app.game.growthPace), near && g.inDistrict ? h('span', { class: 'hw-muted' }, ` · via ${near.name}`) : ''),
+    );
+  };
+  render();
+  renderGrowth();
+  const fetch = () => {
+    app.sim.query<TractDetail>({ kind: 'tract', tract: index }).then((x) => {
+      d = x;
+      render();
+    });
+    app.sim.query<TractGrowth | null>({ kind: 'tractGrowth', tract: index }).then((x) => {
+      tg = x;
+      loaded = true;
+      renderStats();
+      renderGrowth();
+    });
+  };
   fetch();
   app.setTractHighlight(index);
-  return { el: sh.el, dayEnd: fetch, destroy: () => app.setTractHighlight(null) };
+  return {
+    el: sh.el,
+    dayEnd: fetch,
+    destroy: () => {
+      chart?.destroy();
+      app.setTractHighlight(null);
+    },
+  };
 }
 
 export function edgePanel(app: App, id: number): Panel {

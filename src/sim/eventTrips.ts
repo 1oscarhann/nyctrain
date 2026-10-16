@@ -8,13 +8,16 @@ import type { Tract } from '../data/world';
 import type { GroupPath } from './commuters';
 import { generalisedCosts, moneyToMinutes, type PairGeometry, type WeatherMods } from './modeChoice';
 
-/** Cumulative origin weights: residents · exp(−distance / originDecay) per tract. */
-export function originCdf(tracts: readonly Tract[], vx: number, vy: number, decay = EVENTS.originDecay): Float64Array {
+/**
+ * Cumulative origin weights: residents · exp(−distance / originDecay) per tract. `residents`
+ * (Living City: the grown city's current residents per tract) replaces tracts.json's when given.
+ */
+export function originCdf(tracts: readonly Tract[], vx: number, vy: number, decay = EVENTS.originDecay, residents: ArrayLike<number> | null = null): Float64Array {
   const cdf = new Float64Array(tracts.length);
   let acc = 0;
   tracts.forEach((t, i) => {
     const d = Math.hypot(t.x - vx, t.y - vy);
-    acc += t.residents * (isFinite(decay) ? Math.exp(-d / decay) : 1);
+    acc += (residents ? residents[i] : t.residents) * (isFinite(decay) ? Math.exp(-d / decay) : 1);
     cdf[i] = acc;
   });
   return cdf;

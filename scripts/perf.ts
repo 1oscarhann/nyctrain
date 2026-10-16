@@ -1,6 +1,6 @@
 /**
  * Performance check for the spec's target (300 stations, 25 routes, ~400 trains):
- *   npm run perf [-- scale=10 ns=17 ew=8 stations=12 chaos=off|calm|normal|wild weather=clear|rain|snow|heat outdoor=1 ops=on|off]
+ *   npm run perf [-- city=nyc|london scale=10 ns=17 ew=8 stations=12 chaos=off|calm|normal|wild weather=clear|rain|snow|heat outdoor=1 ops=on|off month=0]
  * ops= (operations control): by default every route holds at 70% with suggested timepoints and no
  * recovery (so the fleet stays at 431 trains while the holding code runs); ops=off is the code
  * before operations control (no holding, standard turnarounds, one flat fare).
@@ -9,16 +9,26 @@
  * Builds a large synthetic network (a grid of deep-tunnel lines across Brooklyn, Manhattan and
  * Queens), runs the sim to the morning peak and times one game-hour. At the top speed (60×) the
  * worker must simulate one game-hour per real second, so the budget is 1000 ms.
+ * Then (Living City, unless month=0) it runs on through two growth month closes, at the
+ * midnights after day 1 and day 3 (the engine closes a growth month every 2 days here, so the
+ * timed peak hour is the same as without it), and times each: the first re-places every agent
+ * with per-agent seeds, the second is a typical month. The budget is 600 ms.
  */
 import { CHAOS, TIME, type ChaosLevel, type WeatherKind } from '../src/balance';
+import { GROWTH_LABEL } from '../src/sim/protocol';
 import { compileNetwork } from '../src/routes/compile';
 import { suggestTimepoints } from '../src/routes/control';
-import { buildPerfNetwork, createHeadlessGame } from '../src/sim/headless';
+import { buildPerfNetwork, createHeadlessGame, PERF_AREA_LONDON } from '../src/sim/headless';
+import { applyCity, isCityId } from '../src/cities';
 import { Engine } from '../src/sim/engine';
 import { TState } from '../src/sim/trainSim';
 import { loadLandFromDisk, loadWorldFromDisk } from './nodeData';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=')));
+// city=london runs a grid of the same size around Charing Cross (default New York).
+const cityId = args.city ?? 'nyc';
+if (!isCityId(cityId)) throw new Error(`Unknown city ${cityId}`);
+applyCity(cityId);
 const scale = Number(args.scale ?? 10);
 const NS = Number(args.ns ?? 17);
 const EW = Number(args.ew ?? 8);
@@ -28,20 +38,31 @@ const weather = args.weather as WeatherKind | undefined;
 const outdoor = args.outdoor === '1';
 const chaosArgs = chaos !== 'off' || weather !== undefined || outdoor;
 const opsOff = args.ops === 'off';
+const monthClose = args.month !== '0';
 
 const world = loadWorldFromDisk();
 const game = createHeadlessGame(world, loadLandFromDisk(), { sandbox: true, ops: opsOff ? 'off' : 'default' });
 let t0 = Date.now();
-const { routes, fleet } = buildPerfNetwork(game, { ns: NS, ew: EW, perLine: PER_LINE, ...(opsOff ? {} : { control: { hold: true, recoveryPct: 0 } }) });
+const { routes, fleet } = buildPerfNetwork(game, { ns: NS, ew: EW, perLine: PER_LINE, ...(opsOff ? {} : { control: { hold: true, recoveryPct: 0 } }), ...(cityId === 'london' ? { area: PERF_AREA_LONDON } : {}) });
 if (!opsOff) for (const r of routes) game.routes.update(r.id, { control: { ...r.control, timepoints: suggestTimepoints(r, routes) } });
 const net = game.network;
 console.log(`network: ${net.stations.size} stations, ${routes.length} routes, ${fleet} trains, ${net.edges.size} edges · built in ${Date.now() - t0} ms`);
 
 t0 = Date.now();
 let incidents = 0;
-const engine = new Engine(world, { agentScale: scale, seed: 1885, time: game.time, fares: game.fares, chaos: { level: chaos, seed: CHAOS.defaultSeed } }, {
+// Living City: growth month closes are timed from the engine's busy label (on, then off).
+const closes: number[] = [];
+let closeStart = 0;
+const engine = new Engine(world, { agentScale: scale, seed: 1885, time: game.time, fares: game.fares, chaos: { level: chaos, seed: CHAOS.defaultSeed }, ...(monthClose ? { monthEvery: 2 } : {}) }, {
   alert: (a) => {
     if (a.status === 'active') incidents++;
+  },
+  busy: (label) => {
+    if (label === GROWTH_LABEL) closeStart = performance.now();
+    else if (label === null && closeStart) {
+      closes.push(performance.now() - closeStart);
+      closeStart = 0;
+    }
   },
 });
 const compiled = compileNetwork(game).net;
@@ -85,4 +106,17 @@ console.log(
 if (chaosArgs) {
   const w = engine.chaos.todayWeather();
   console.log(`chaos ${chaos} · day 1 weather ${w.weather.kind} (${w.weather.severity.toFixed(2)}) · outdoor ${outdoor ? 'all track' : 'as built'} · ${incidents} incidents started in the timed hour · ${engine.commuters!.eventAgentCount().toLocaleString()} event agents today`);
+}
+
+if (monthClose) {
+  // On through the midnights after day 1 and day 3 (growth month closes) to day 4.
+  t0 = Date.now();
+  const end = 4 * 86400 + 60;
+  while (engine.time < end) engine.step(TIME.simStep);
+  const g = engine.growth!;
+  const st = engine.lastRegen;
+  console.log(
+    `month close: ${closes.map((ms) => `${ms.toFixed(0)} ms`).join(', then ')} (budget 600 ms; the first re-places every agent) · ${g.months} growth months` +
+      ` · ${engine.commuters!.A.toLocaleString()} agents · last regeneration kept ${st?.kept.toLocaleString()} groups, ${st?.newBands} new bands, ${st?.newPairs} new pairs · ran days 1–3 in ${Date.now() - t0} ms`,
+  );
 }

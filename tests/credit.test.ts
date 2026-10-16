@@ -4,7 +4,7 @@
  * v3 → v4 save migration.
  */
 import { describe, expect, it } from 'vitest';
-import { BONDS, CREDIT, ECONOMY } from '../src/balance';
+import { BONDS, CREDIT, ECONOMY, GOALS } from '../src/balance';
 import { isNewMonth, monthKey, monthLabel, weekdaysInMonth } from '../src/core/calendar';
 import { Game } from '../src/core/game';
 import type { Terrain } from '../src/construction/validate';
@@ -424,7 +424,8 @@ describe('save v4 (operations control and the money market)', () => {
   it('migrates a v3 save to v4 defaults, idempotently, and rates it on load', () => {
     const m = migrate(v3Save());
     expect(m.version).toBe(SAVE_VERSION);
-    expect(SAVE_VERSION).toBe(4);
+    // (v5 since Living City: its step runs on the way.)
+    expect(SAVE_VERSION).toBe(5);
     expect(m.migratedFrom).toBe(3);
     expect(m.game.fares).toEqual({ peak: 3.25, offPeak: 3.25, lowIncome: 1 });
     expect('fare' in m.game).toBe(false);
@@ -528,5 +529,56 @@ describe('money and service goals', () => {
     const poor = new Game({} as World, {} as Terrain, { sandbox: false, fare: 3 });
     poor.finance.market.rating = 'AAA';
     expect(checkGoals(poor, emptyGoals(), null, () => 0)).not.toContain('rating-a');
+  });
+});
+
+describe('Living City in the credit scorecard and the year in review', () => {
+  const base = { revenuePerDay: 3e6, opCostPerDay: 2e6, serviceDays: 60, debt: 15e9, annualInterest: 15e9 * 0.03, monthlyDebtService: 6e7, assets: 2e10, cash: 1e9, newRate: 0.03 };
+  it('value capture counts in interest coverage (pledged, recurring: TIF) but not in farebox recovery', () => {
+    const without = creditScore(base);
+    const withVc = creditScore({ ...base, valueCapturePerDay: 0.35e6 });
+    const m = (r: ReturnType<typeof creditScore>, id: string) => r.metrics.find((x) => x.id === id)!.value!;
+    expect(m(withVc, 'farebox')).toBe(m(without, 'farebox'));
+    expect(m(withVc, 'coverage')).toBeGreaterThan(m(without, 'coverage'));
+    expect(m(withVc, 'coverage')).toBeCloseTo(((3e6 + 0.35e6 - 2e6) * 261) / (15e9 * 0.03 + 1e9 * 0.03), 9);
+    expect(withVc.score).toBeGreaterThan(without.score);
+    // Missing and zero are the same as before Living City, bit for bit.
+    expect(creditScore({ ...base, valueCapturePerDay: 0 })).toEqual(without);
+  });
+
+  it('the finance model averages a month’s payment over the window’s service days', () => {
+    const f = new Finance(false);
+    for (let d = 0; d < 20; d++) f.settleDay({ day: d, riders: 1e5, revenue: 1e6, carKm: 100, stationsOpen: 10, ...(d === 18 ? { valueCapture: 4e6 } : {}) });
+    expect(f.creditInputs().valueCapturePerDay).toBeCloseTo(4e6 / 20, 6);
+  });
+
+  it('the year in review has a value-capture line, and its profit includes it', () => {
+    const market = { seed: 1, base: 0.025, rating: 'A' as const, score: 70, history: [] };
+    const months = [
+      { key: '2030-01', label: 'Jan 2030', days: 19, revenue: 50e6, operatingCosts: 30e6, capital: 0, bondPayments: 0, profit: 22e6, riders: 1e6, cashEnd: 5e9, interest: 0, fees: 0, prepaid: 0, debtEnd: 0, valueCapture: 2e6 },
+      { key: '2030-02', label: 'Feb 2030', days: 20, revenue: 50e6, operatingCosts: 30e6, capital: 0, bondPayments: 0, profit: 20e6, riders: 1e6, cashEnd: 5e9, interest: 0, fees: 0, prepaid: 0, debtEnd: 0 },
+    ];
+    const y = buildYearReview({ months, history: [], market }, {}, 2030);
+    expect(y.money.valueCapture).toBe(2e6);
+    expect(y.money.profit).toBe(42e6);
+  });
+});
+
+describe('Living City goals', () => {
+  it('Boomtown from the month’s largest tract growth; Land value pays from one month’s value capture, not in the sandbox', () => {
+    const report = (growth?: Partial<NonNullable<DayReport['growth']>>) =>
+      ({ riders: 1000, transitShare: 0.1, baselineCommute: 50, avgCommute: 49, goalTrip: null, regularity: emptyStats(), routeRegularity: {}, ...(growth ? { growth } : {}) }) as unknown as DayReport;
+    const game = new Game({} as World, {} as Terrain, { sandbox: false, fare: 3 });
+    const goals = emptyGoals();
+    expect('boomtown' in goals && 'value-capture' in goals).toBe(true);
+    expect(checkGoals(game, goals, report(), () => 0)).not.toContain('boomtown');
+    expect(checkGoals(game, goals, report({ maxTractGrowth: 0.2, valueCapture: GOALS.valueCaptureMonth * 0.9 }), () => 0)).toEqual([]);
+    const done = checkGoals(game, goals, report({ maxTractGrowth: GOALS.boomtownGrowth, valueCapture: GOALS.valueCaptureMonth }), () => 0);
+    expect(done).toContain('boomtown');
+    expect(done).toContain('value-capture');
+    const sandbox = new Game({} as World, {} as Terrain, { sandbox: true, fare: 3 });
+    const sg = checkGoals(sandbox, emptyGoals(), report({ maxTractGrowth: 0.3, valueCapture: 1e9 }), () => 0);
+    expect(sg).toContain('boomtown');
+    expect(sg).not.toContain('value-capture');
   });
 });

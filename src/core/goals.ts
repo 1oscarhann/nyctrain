@@ -1,7 +1,7 @@
 /**
  * Goals: no hard win, just milestones with checkmarks and a toast when each completes.
  */
-import { GOALS } from '../balance';
+import { GOALS, TIME } from '../balance';
 import { city, regionCode } from '../cities';
 import type { CityGoal } from '../cities/types';
 import type { DayReport } from '../sim/protocol';
@@ -36,6 +36,9 @@ export function goalDefs(): GoalDef[] {
       title: 'Clockwork service',
       detail: `Under ${fmtPct(GOALS.clockworkBunched, 0)} of headways bunched across ${GOALS.clockworkMinRoutes}+ routes on a day with ${fmtCount(GOALS.clockworkMinRiders)}+ riders.`,
     },
+    // Living City (v2).
+    { id: 'boomtown', title: 'Boomtown', detail: `Grow a neighbourhood ${fmtPct(GOALS.boomtownGrowth, 0)} since ${TIME.startDate.year} (residents and jobs).` },
+    { id: 'value-capture', title: 'Land value pays', detail: `Collect ${fmtMoney(GOALS.valueCaptureMonth)} of value capture in one month.` },
   ];
 }
 
@@ -112,6 +115,9 @@ export function checkGoals(game: Game, state: GoalState, report: DayReport | nul
   const market = game.finance.market;
   const rating = market.history.length > 0 ? market.rating : null;
   mark('rating-a', !game.sandbox && rating !== null && ratingIndex(rating) <= ratingIndex(GOALS.ratingGoal) && game.finance.debt() >= GOALS.ratingGoalMinDebt);
+  // Living City: on the day a growth month closed. Value capture counts outside the sandbox only.
+  mark('boomtown', (report?.growth?.maxTractGrowth ?? 0) >= GOALS.boomtownGrowth);
+  mark('value-capture', !game.sandbox && (report?.growth?.valueCapture ?? 0) >= GOALS.valueCaptureMonth);
   const reg = report?.regularity;
   mark(
     'clockwork',

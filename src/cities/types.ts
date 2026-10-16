@@ -54,6 +54,8 @@ export interface CityConfig {
   transitWord: string;
   /** Who the low-income fare is for (finance panel copy): the lowest earnings band (FARES.lowIncomeBand). */
   lowIncomeBand: string;
+  /** Living City: the tax whose increment value capture shares ("property tax"; London: council tax and business rates). */
+  valueCaptureTax: string;
   goals: CityGoal[];
   tutorial: { jobs: string; track: string };
   /** Extra data attribution shown on the map (licence requirements). */

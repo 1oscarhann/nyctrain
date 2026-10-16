@@ -71,6 +71,30 @@ const STEPS: Record<number, (s: AnySave) => AnySave> = {
     s.version = 4;
     return s;
   },
+  // v4 → v5: Living City. Defaults only (??=), so it is idempotent:
+  // - the game joins Living City on Steady (the menu can turn it off);
+  // - ledgers, month reports and today get zero value capture (the year in review and the credit
+  //   scorecard read it; months closed before v5 had none);
+  // - the two new goals start open;
+  // - growth is null: the starting city, so the v4 mode state's key (and its shares) still match.
+  4: (s) => {
+    const game = (s.game ?? {}) as Loose;
+    game.growthPace ??= 'steady';
+    const fin = (game.finance && typeof game.finance === 'object' ? game.finance : {}) as Loose;
+    for (const h of [...(Array.isArray(fin.history) ? fin.history : []), ...(Array.isArray(fin.months) ? fin.months : []), fin.today].filter((x): x is Loose => !!x && typeof x === 'object')) {
+      h.valueCapture ??= 0;
+    }
+    game.finance = fin;
+    if (game.goals && typeof game.goals === 'object') {
+      const goals = game.goals as Loose;
+      goals.boomtown ??= null;
+      goals['value-capture'] ??= null;
+    }
+    s.growth ??= null;
+    s.game = game;
+    s.version = 5;
+    return s;
+  },
 };
 
 /**

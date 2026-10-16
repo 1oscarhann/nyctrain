@@ -64,6 +64,15 @@ function nearestOnGeometry(px: number, py: number, geom: { type: string; coordin
   return best;
 }
 
+/**
+ * OpenMapTiles `place` classes that name a neighbourhood. London also counts villages and hamlets
+ * (old village names are what its stations and districts are called); New York keeps its v1
+ * classes. Station names and Living City's tract names (PlaceNames) both use these.
+ */
+export function placeClasses(): string[] {
+  return city().naming === 'place' ? ['neighbourhood', 'quarter', 'suburb', 'village', 'hamlet'] : ['neighbourhood', 'quarter', 'suburb'];
+}
+
 /** Streets crossing at less than this angle count as parallel ("W 47th St & W 46th St"). */
 const MIN_CROSSING_SIN = Math.sin((35 * Math.PI) / 180);
 
@@ -84,9 +93,8 @@ export function nameStationAt(map: MLMap | null, x: number, y: number, taken: Se
         if ((streets.get(name)?.d ?? Infinity) > near.d) streets.set(name, near);
       }
       const ranked = [...streets.entries()].sort((a, b) => a[1].d - b[1].d);
-      // Neighbourhood labels on land, nearest first. London also counts villages and hamlets
-      // (old village names are what its stations are called); New York keeps its v1 classes.
-      const classes = style === 'place' ? ['neighbourhood', 'quarter', 'suburb', 'village', 'hamlet'] : ['neighbourhood', 'quarter', 'suburb'];
+      // Neighbourhood labels on land, nearest first.
+      const classes = placeClasses();
       const places: { name: string; d: number }[] = [];
       for (const f of map.querySourceFeatures('openmaptiles', { sourceLayer: 'place' })) {
         const props = f.properties as Record<string, unknown>;

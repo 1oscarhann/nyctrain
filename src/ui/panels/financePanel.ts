@@ -41,6 +41,7 @@ import {
   scoreParts,
 } from '../opsMoney';
 import { attachTip } from '../widgets';
+import { valueCaptureSection } from '../livingCity';
 import { kv, section, shareBar, shell, statCard, type Panel } from './common';
 
 export type FinanceTab = 'overview' | 'fares' | 'borrowing' | 'fleet';
@@ -95,17 +96,20 @@ export function financePanel(app: App): Panel {
     if (y) {
       const opCost = y.operating + y.staffing + y.maintenance;
       const fees = y.fees ?? 0;
+      // Living City: booked on month-close days only (0 on others).
+      const vc = y.valueCapture ?? 0;
       content.append(
         section('Yesterday'),
         kv([
           ['Fares', signed(y.revenue)],
+          ['Value capture', signed(vc)],
           ['Train operations', signed(-y.operating)],
           ['Station staffing', signed(-y.staffing)],
           ['Maintenance', signed(-y.maintenance)],
           ['Bond payments', signed(-(y.bondInterest + y.bondPrincipal))],
           ['Financing fees', signed(-fees)],
           ['Bond prepayments', signed(-(y.prepaid ?? 0))],
-          ['Operating result', signed(y.revenue - opCost - y.bondInterest - fees)],
+          ['Operating result', signed(y.revenue + vc - opCost - y.bondInterest - fees)],
           ['Construction & trains', signed(-(y.construction + y.trains - y.refunds))],
         ]),
       );
@@ -119,18 +123,34 @@ export function financePanel(app: App): Panel {
         section(`This month so far (${days.length} day${days.length > 1 ? 's' : ''})`),
         kv([
           ['Fares', signed(sum((d) => d.revenue))],
+          ...(days.some((d) => d.valueCapture !== undefined) ? [['Value capture', signed(sum((d) => d.valueCapture ?? 0))] as [string, HTMLElement]] : []),
           ['Operating costs', signed(-sum((d) => d.operating + d.staffing + d.maintenance))],
           ['Capital spending', signed(-sum((d) => d.construction + d.trains - d.refunds))],
         ]),
       );
     }
+    // Value capture (Living City): the district, last month's payment and this month's projection.
+    const lastVc = [...f.months].reverse().find((m) => m.valueCapture !== undefined)?.valueCapture ?? null;
+    const vcText = valueCaptureSection(app.growthView, lastVc, game.growthPace);
+    const vcBody = h('div', { class: 'hw-muted', style: 'font-size:12.5px;line-height:1.45' }, vcText.body);
+    const vcLast = h('div', { class: 'fin-line', style: 'margin-top:4px' }, vcText.last);
+    content.append(section('Value capture (Transit Improvement District)'), vcBody, vcLast);
+    if (!app.growthView && game.growthPace !== 'off') {
+      app.loadGrowthView().then((v) => {
+        if (!v || !vcBody.isConnected) return;
+        const t = valueCaptureSection(v, lastVc, game.growthPace);
+        vcBody.textContent = t.body;
+        vcLast.textContent = t.last;
+      });
+    }
     // Monthly chart
     const months = f.months.slice(-12);
+    const withVc = game.growthPace !== 'off' || months.some((m) => (m.valueCapture ?? 0) > 0);
     content.append(section('Monthly revenue vs operating costs'));
     if (months.length) {
       const wrap = h('div', { class: 'chart' });
       content.append(wrap);
-      charts.push(financeChart(wrap, months.map((m) => m.label), months.map((m) => m.revenue), months.map((m) => m.operatingCosts)));
+      charts.push(financeChart(wrap, months.map((m) => m.label), months.map((m) => m.revenue + (m.valueCapture ?? 0)), months.map((m) => m.operatingCosts), undefined, undefined, withVc ? 'Revenue (fares + value capture)' : 'Revenue'));
       const last = months[months.length - 1];
       content.append(h('div', { style: 'font-size:12.5px;margin-top:4px' }, `${last.label}: operating profit `, signed(last.profit)));
     } else content.append(h('div', { class: 'hw-muted' }, 'The first monthly report appears when the month ends.'));
@@ -252,7 +272,7 @@ export function financePanel(app: App): Panel {
     }
     const sp = scoreParts(preview, f.market);
     content.append(card, h('div', { class: 'fin-line', style: 'margin-top:6px' }, sp.head, h('span', { class: `rating-badge ${ratingTone(sp.rating)}` }, sp.rating), sp.tail));
-    content.append(muted('Farebox recovery is fares ÷ operating costs; interest coverage counts one more bond pro forma; leverage is debt ÷ (assets + cash); liquidity is months of costs and debt service in cash.'));
+    content.append(muted('Farebox recovery is fares ÷ operating costs; interest coverage counts value capture and one more bond pro forma; leverage is debt ÷ (assets + cash); liquidity is months of costs and debt service in cash.'));
     // Rate history
     content.append(section('Rate history'));
     const hist = f.market.history.slice(-(BONDS.historyMonths >= 59 ? 59 : BONDS.historyMonths));

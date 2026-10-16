@@ -1,7 +1,348 @@
 # Living City: transit-oriented growth and value capture (v2)
 
-Status: design, ready to implement · Target: one focused session, about 1,300 lines including tests
+Status: model and sim implemented (notes below); UI to do · Target: one focused session, about 1,300 lines including tests
 Depends on: v1 as committed (`a27dbfa`). Touches the sim worker, finance, save format (v2 → v3) and UI.
+
+## Implementation notes (model)
+
+The model half is implemented on top of London, city chaos and operations control (baseline: the
+`pre-living` tag): checklist steps 1–5, plus `Commuters.transitInput` (a pure refactor) and a
+read-only `Commuters.commuteBenefit()` (§3.2) so the numbers could be tuned on real benefits.
+(The sim half followed: see "Implementation notes (sim)" below; the UI is still to do.) **Where the code and this design disagree (line numbers,
+`v2`/`v3` save names, 2030 copy), trust the code and the amendments in the task.**
+
+### What exists
+
+- **`src/balance.ts`**: `GrowthPace`, `GrowthSide`, `GROWTH` (adds `paces`, `cityMax` = 600 city
+  rows, `milestonesInReport` = 3), `VALUE_CAPTURE` (see below for the changed fields),
+  `MAP.growthColumnMetresPerPerson`, `GOALS.boomtownGrowth` / `GOALS.valueCaptureMonth`.
+  `CityBalance` has `growth: Partial<typeof GROWTH>` and `valueCapture: Partial<typeof VALUE_CAPTURE>`
+  (nested `residents`/`jobs` are replaced whole). `applyCity` restores both from the `DEFAULTS`
+  snapshot like `MAP`/`COMMUTERS`/`ECONOMY`/`GOALS`/`CREDIT`.
+- **`src/core/rng.ts`**: `Rng.reseed(seed)`, `hash32x4(a, b, c, d)` (murmur3-32 over four words,
+  unsigned, may be 0: `Rng` maps 0 to 1), `fnv32(bytes, h?)` (FNV-1a, chainable).
+- **`src/sim/modeChoice.ts`**: `transitCost(t, band)` (extracted; `generalisedCosts` calls it,
+  bit-identical), `logsum(costs, θ?)` (skips infinite costs; all infinite → `Infinity`) and
+  `transitBenefit(lsNoTransit, transitCostMin, θ?)` (0 for an infinite transit cost).
+- **`src/sim/protocol.ts`** (types only): `GrowthSnapshot`, `GrowthCityPoint`, `GrowthData`,
+  `SimState`, `Boomtown`, `GrowthMonth`, `GrowthView`, `TractGrowth`; `DayReport.growth?`;
+  `init.growth?` / `init.growthPace?`; the `{ type: 'growthPace' }` message; queries `simState`,
+  `growthView`, `tractGrowth`. **The worker answers none of these yet** (they return `undefined`;
+  `handle` ignores `growthPace`), and `'modeState'` is kept until `app.ts` moves to `simState`.
+- **`src/sim/commuters.ts`**: `private transitInput(g)` is the transit alternative exactly as the
+  3 am mode choice sees it (observed time or timetable, transfers, crowding, `groupFare(g)` = the
+  band's fare weighted by the group's peak share), and `dailyModeChoice` now calls it.
+  `private gLsBase` (no-network logsum per group, clear weather, Float32) is filled in the
+  constructor from the costs it already computes; `lsBase()` recomputes it when it is null or the
+  wrong length, so **regeneration must set it again or null it**. `commuteBenefit(): { home, work,
+  mean }` is the agent-weighted mean benefit per home and per work tract (minutes) and the city
+  mean; read-only (tested by hashing shares and observations). Walk and drive use clear weather, so
+  weather, incidents and closures reach growth only through observed times.
+- **`src/sim/growth.ts`**: `StationPt`, `OdFactors`, `Benefits` (`{ home, work, mean? }`),
+  `ValueCaptureResult`, `DISTRICT_SAMPLES`, `attractiveness(b)`, `servedStations(net)` (stations
+  of routes with a fleet and some non-zero headway), `fitTotal(next, lo, hi, total)` and `Growth`:
+  `new Growth(world, pace)`, `static fromData(world, data, pace)` (sets `dropped = true` and starts
+  over when the arrays do not fit the world: the "City growth was reset" toast), `toData()`,
+  `isIdentity()`, `fingerprint()` (`''` or `g<months>:<hex>`), `factors()` (null for the starting
+  city; otherwise live views of `fHome`/`fWork` plus the tag: do not mutate), `setPace`,
+  `residents(i)`, `jobs(i)`, `currentResidents()` (for `eventTrips.originCdf`, amendment 2),
+  `odSums()`, `step(day, benefits, served)`, `furness(K)`, `valueCapture(served)`, `view(served)`
+  and `tract(i, served, benefits)`. Public state: `R0`, `J0` (the OD row and column sums, which
+  equal `tracts.json`), `total0`, `mRes`, `mJobs`, `fHome`, `fWork`, `premium`, `months`,
+  `appliedThroughDay`, `sbar`, `history`, `city`.
+
+**For the engine.** `monthClose(day)`: `const b = commuters.commuteBenefit(); const rep =
+growth.step(day, b, servedStations(this.net));` — `step` returns null (state unchanged) on pace
+Off and for a day ≤ `appliedThroughDay`, so it is idempotent by itself; then regenerate from
+`growth.factors()` and fill `rep.agents` / `rep.commuters` (they are 0 from `step`). Call it only
+when `isNewMonth(day + 1)`, the same test as `Finance.settleDay`'s month close. `tract` needs live
+benefits: `commuteBenefit()` costs 20–65 ms, so cache it per day for panel queries. `step` sets
+`GrowthMonth.label` with `monthLabel(day)` ("Jan 2030", the month that closed).
+
+### Differences from the design
+
+1. **The relocation drain follows the growth actually realised.** `s̄` is now
+   `Σ cur·s·roomUp(m) / Σ cur`, and the rate is
+   `k·(g + boost·(s·roomUp(m) − relocationShare·s̄·roomDown(m)))`, with `roomUp = (max − m)/(max − 1)`
+   and `roomDown = (m − min)/(1 − min)` clamped to [0, 1]. The design damped the net rate, so tracts
+   sitting at their maximum kept draining the city for ever: in the 600-month Boom bounds test the
+   city ended at ×1.21 instead of its ×1.5 ceiling, with the unserved tracts pinned near the floor.
+   The natural rate `g` is never damped, so test 2 holds exactly. Monotonicity still holds (equal
+   `m`: a higher `s` always grows faster).
+2. **`fitTotal`'s bounds include this month's caps** (`[max(min·base, cur·(1−k·decline)),
+   min(max·base, cur·(1+k·growth))]`, always containing `cur`), the common total is clamped into
+   both sides' feasible range and the water-filling runs until nothing moves (≤ 64 passes; 1–2 in
+   practice). So the per-month caps and the long-run bounds are exact after rebalancing (test 4).
+3. **The district is fractional.** `districtTractShare` is gone: a tract pays for the share of its
+   disc within `districtRadius` (800 m, both cities) of any served station, from 64 Vogel-spiral
+   sample points (union over stations; 1 without sampling when the disc is inside one station's
+   circle). London's MSOAs have a median radius of 603 m against New York's 241 m, so the design's
+   "centre within 800 m + ½ radius" would have counted whole zones out to 1.1 km. Tested: one
+   station's district covers about the 800 m disc (0.5–2× its 2.0 km²) in both cities.
+   `ValueCaptureResult` has `district` (0/1), `share`, `levy` per tract, `nearest` (district
+   tracts only; `tract()` finds the true nearest) and `tracts`; `GrowthView` and `TractGrowth`
+   carry `districtShare` too. Stations are bucketed on a 1 km grid (3 ms with 300 stations).
+4. **Two effective tax rates**, `taxRateHomes` and `taxRateJobs`, replace `taxRate`: the levy is
+   `captureShare/12 · share · max(0, rH·ΔV_homes + rJ·ΔV_jobs)` with `ΔV = V0·(m·(1+premium) − 1)`,
+   floored per tract (declines pay nothing). `districtIncrement` is the share-weighted value
+   increment. London's precedent is business-rate based, and New York's classes differ by 2.4×.
+5. **Names.** `Boomtown.sinceStart` (not `since2030`) — copy should say "since <TIME.startDate
+   year>". `GrowthMonth` adds `pace` and `benefitMean`. `milestones` are sorted biggest threshold
+   first, growth before decline, then the bigger tract.
+6. **History thinning** removes the snapshot whose removal leaves the smallest gap (oldest first),
+   keeping the first and last, so exactly `historyMax` (60) remain; city rows thin the same way at
+   600.
+7. **The hash test** asserts ≤ 3 collisions over the 50k-key sample, not 0: a random 32-bit function
+   collides 0.29 times on average there (birthday bound), and `hash32x4` had 1. Plus uniform high
+   and low bits.
+8. `boomToastMonthlyRate` is 0.003 (design 0.004): Steady's best tract grows 0.35%/month on the New
+   York core and 0.41% on London's.
+
+### Values and why
+
+| | New York | London |
+|---|---|---|
+| `cityGrowthPerYear` | 0.8% (Census 2010→2020 +7.7%) | 1.1% (residents +0.75%/yr 2011→2021, workforce jobs ≈ +1.6%/yr) |
+| `valuePerResident` | $390k: DOF FY2025 tentative roll, class 1 $739B + class 2 $370B over 2.85M resident commuters | £680k: ≈ £2T of homes over 2.93M resident commuters |
+| `valuePerJob` | $115k: class 4 $330B over 2.85M jobs | £140k: ≈ £20B rateable value at ≈ 5% yields over 2.93M jobs |
+| `taxRateHomes` | 1.6%: ≈ $34B levy × (14% class 1 + 39% class 2) on $1.11T | 0.25%: council tax ≈ £5B on ≈ £2T (Band D ≈ £2,000 on a ≈ £520k home is 0.38%; capped bands) |
+| `taxRateJobs` | 3.9%: 38% of the levy (class 4) on $330B | 2.5%: business rates ≈ 51p per £ of rateable value at ≈ 5% yields |
+| `captureShare` | 12% (tuned; design 25% on a 1.2% blanket rate, ≈ half this tax base) | 14%: lands the core at the same ≈ 11% of its fares as New York's; precedents pledge business-rate growth (Crossrail BRS; Nine Elms enterprise zone for the Northern line extension) |
+| `GOALS.valueCaptureMonth` | $10M (core: month ≈ 18) | £6M (≈ 58% of New York's, like its core's riders; core: month ≈ 19) |
+| unchanged | `halfBenefit` 20, sides as §8, `premiumMax` 12%, `premiumLagPerMonth` 0.1, `districtRadius` 800 m, `minTractPeople` 1,000 (every London MSOA has ≥ 1,951) |
+
+The UK has no ad valorem property tax, so London's rates are effective rates on market value:
+council tax for homes and business rates for workplaces. Most of London's value capture therefore
+comes from workplaces, as in its real precedents (tested on a City line).
+
+### Measurements (prototype, as §9.1)
+
+Method: `scratchpad/living/proto/{run,step}.ts` (not committed). The README core and sprawl
+scenarios ran headless for 8 days at scale 10 in both cities (a new game's operations control and
+fares, chaos Off), then `commuteBenefit()` was frozen and `Growth` stepped on the real month-end
+days. Accessibility is held fixed (no crowding feedback), so growth and "transit" (Σ pair transit
+riders · fHome · fWork) are upper bounds. Value capture per day = the month's payment ÷ that
+month's weekdays.
+
+Benefits (minutes per commute): New York core mean 12.4; home benefit in 704 tracts, p10 17.3 ·
+p50 28.6 · p90 44.6 · max 55.3; job p50 2.3 · p90 27.0. London core mean 15.3; home benefit in 240
+MSOAs, p10 38.6 · p50 58.4 · p90 73.4 · max 88.7 (London's no-network alternative is worse:
+drive constant +35 min, longer trips); job p50 2.2 · p90 6.1. Sprawl means 0.06 (New York) and
+0.05 min (London).
+
+| Steady | Month 1 | Month 6 | **Month 12** | Month 24 | Month 60 |
+|---|---|---|---|---|---|
+| NYC core: value capture | $0.04M/day | $0.23M/day | **$0.35M/day** ($7.7M/mo) | $0.53M/day | $1.04M/day |
+| NYC core: city · transit · top tract · lowest tract | | | ×1.013 · +4.5% · +4.4% · 0.996 | ×1.027 · +9.0% · +8.8% | ×1.068 · +22% · +22% · 0.985 |
+| NYC sprawl: value capture | $0.00M | $0.002M | **$0.003M/day** | $0.006M | $0.012M/day |
+| London core: value capture | £0.02M/day | £0.13M/day | **£0.20M/day** (£4.5M/mo) | £0.31M/day | £0.61M/day |
+| London core: city · transit · top tract · lowest tract | | | ×1.016 · +6.3% · +5.1% · 1.002 | ×1.031 · +12.7% · +10.2% | ×1.079 · +32% · +25% · 1.011 |
+| London sprawl: value capture | £0.00M | £0.001M | **£0.001M/day** | £0.003M | £0.006M/day |
+
+The New York core's fares are $3.18M/day in this run and London's £1.85M/day, so month 12's value
+capture is 11% of fares in both. About two thirds of month 12's levy is the land-value premium
+(the district's mean premium is 4.8% in New York, 5.5% in London); by month 60 two thirds is new
+development. **Boom** (×3) at month 12: New York $0.72M/day (city ×1.041, top tract +13%), London
+£0.42M/day (×1.047, +15%). Sprawl on Boom stays under £0.02M/day in London through month 60 and
+under $0.02M/day in New York until month 34.
+Riders are still rising at month 12 in both cities (transit +4.5% and +6.3% here; less with
+crowding). With the README core's +$1.4M/day operating and −$0.28M/day after bond interest, month
+12's $0.35M/day plus induced fares (at most +4.5% of $3.6M) puts New York at about +$0.1 to
++$0.2M/day after interest by the end of year 1, as the design intended.
+
+Furness (2 warm passes a month): max row error over tracts ≥ 100 people 0.012% (New York Steady),
+0.037% (Boom), 0.009% / 0.043% (London) over 60 months on the core benefits; columns exact. Test 7's
+hashed pattern stays under its 0.5% bound in both cities.
+
+Timing (Node, this shared machine): `commuteBenefit` 20–65 ms (New York core and perf grid, London
+core); `Growth.step` 30–85 ms on New York data (Furness over 976k pairs; the first call is slower)
+and 12–60 ms on London's 352k pairs; `valueCapture`/`view` ≈ 3 ms with the perf grid's 300
+stations; `tract()` ≈ 2 ms. So the model's part of a month close is ≈ 0.1–0.15 s in New York at
+perf scale and ≈ 0.05 s in London; regeneration's budget is the rest of the 600 ms.
+
+Identity (this part only adds unused code paths): against a worktree of `pre-living`,
+`headless-sim days=3 dump=` and `balance -- city=nyc|london scenario=core days=12 dump=` (chaos
+Off and Normal) give byte-identical dumps (every DayReport, `finance.toData()`, share and
+observation hashes). `npm run perf`: identical boardings (40,320) and waiting (1,090); peak hour
+237–283 ms against 245–309 ms for the tag, interleaved. `npm test`: 175 passing (148 + 27).
+
+### Notes for the next steps
+
+- **Placement (amendment 3).** `hash32x4(seed, h·3 + b, w, k)` with `Rng.reseed` is ready for the
+  per-agent stream; keep v1's sequential stream while `growth.isIdentity()`.
+- **Value capture and credit (amendment 5)**, a recommendation for the finance pass: count it in
+  *coverage* (net operating income ÷ interest: it is pledged, recurring revenue, the way Hudson
+  Yards' bonds were backed by district PILOTs and tax increment) but not in *farebox recovery*
+  (fares ÷ operating costs, by definition). Test both.
+- `GrowthMonth.valueCapture` is the amount to book on the month-close day's ledger; Off books 0.
+- `Growth.view()`'s `projectedValueCapture` and `tract().levy` are 0 on pace Off.
+
+## Implementation notes (sim)
+
+The sim half is in (checklist 6–10 and 16, and the non-UI parts of 11): agent regeneration, the
+engine, worker, client and headless plumbing, value capture in the finances and the credit
+scorecard, goals, saves v5, the app's plumbing, the scripts and tests 10–18 plus London and chaos
+tests. **Still to do (UI, checklist 11–15, 17):** the growth overlay and `RAMP_DIVERGE`, the G key,
+the tract panel's growth section (`indexChart`), the station panel's value-capture line, the
+finance panel's value-capture row, section and chart, the month report's City section, boomtown
+and milestone toasts, `PlaceNames` (with each city's place classes from `src/map/naming.ts`;
+London adds village and hamlet; then the existing per-city tract panel fallback), the menu's
+City growth switch and the one-time hint for migrated saves. `App` already exposes what they need
+(below).
+
+### What exists
+
+- **`src/sim/commuters.ts`.** Module-level, pure: `buildGroups(od, T, scale, seed, factors,
+  sizeHint?)` → `GroupTable` (CRN rounding: one `Rng(seed·7919 + 13)` draw per non-zero cell in
+  file order, `exact = c·fHome[h]·fWork[w]/scale`; `c/scale` with no factors, so the starting city
+  is v1's table; a sortedness flag; `gen`, the stream after its last draw), `makeKey(world, scale,
+  seed, A, G, tag?)` (v1's key, `|g<months>:<hash>` appended when grown), `groupKeys`,
+  `matchGroups(oldKeys, newKeys, sorted)` (merge-join; exact and same-pair matches; a Map join
+  when either list is unsorted) and `RegenStats`. In the class: `A`, `G` and `key` are plain
+  fields; the constructor takes `factors?: OdFactors | null` and runs `adoptGroups(tbl, null)`
+  (groups, geometry, no-subway shares, `gLsBase`, `gBaseT` (Float64, so the baseline sums exactly
+  as before), the baseline and the resident band mix) and `buildAgents(tbl, null)`. Public
+  `regenerate(factors, t): RegenStats`, `recomputePaths(only?)`, `setOriginWeights(w)`; private
+  `resetTrips()` (shared with the 3 am plan); `tractDetail` adds `benefit`.
+- **`src/sim/engine.ts`.** `EngineOptions.growth / growthPace / monthEvery`; `engine.growth`
+  (`Growth.fromData`), `growthReset` (saved growth did not fit: `cb.event('City growth was
+  reset', …)`, which the app toasts), `lastRegen`; `monthClose(day)`, `simState()`,
+  `growthView()`, `tractGrowth(i)` (benefits cached until the next midnight, network, fare or
+  regeneration), `setGrowthPace(p)`, private `isMonthEnd(day)` (`isNewMonth(day + 1)`, the same
+  test as `Finance.settleDay`, or every `monthEvery` days for tuning).
+- **Protocol, worker, client.** `GROWTH_LABEL` ('The city is growing') for the busy pill. The
+  `modeState` query is gone: the worker answers `simState`, `growthView` (null without a world)
+  and `tractGrowth`, handles `growthPace` and passes `init.growth / growthPace` to the engine.
+  During a skip, a busy label from inside it (a month close, a route update) hands the pill back
+  to the skip's label instead of clearing it, so the client keeps `skipping` until the skip ends.
+  `SimClient.init` takes `growth` and `growthPace` (optional: the worker defaults to Steady);
+  `setGrowthPace(p)`.
+- **`src/sim/headless.ts`.** `runDays`/`startEngine` options `growthPace` (default the game's),
+  `growth`, `monthEvery` and `busy`; `settleDay` gets `valueCapture` on growth days;
+  `createHeadlessGame({ growthPace })`; `nearStations(game, radius)`; `buildPerfNetwork({ area })`
+  with `PERF_AREA_NYC` (the default, unchanged) and `PERF_AREA_LONDON`.
+- **Finance and credit.** `DayLedger.valueCapture?` and `DayInputs.valueCapture?` (set only on a
+  month-close day, so a game with growth Off keeps exactly the ledgers it had); cash adds it (not
+  in the sandbox); `MonthReport.valueCapture?` (present when a growth month closed in it) and
+  `profit = revenue + valueCapture − costs − interest − fees`. **Credit decision:** value capture
+  counts in interest coverage (pledged, recurring revenue: the Hudson Yards bonds for the 7 line
+  were backed by district PILOTs and tax increment), not in farebox recovery (fares ÷ operating
+  costs by definition). `creditInputs()` averages it over the window's service days, like fares
+  (`CreditInputs.valueCapturePerDay`). The year in review has `money.valueCapture` (its profit
+  already includes it).
+- **Game and goals.** `Game.growthPace` (default Steady, `opts.growthPace`); goals `boomtown`
+  (`report.growth.maxTractGrowth ≥ GOALS.boomtownGrowth`) and `value-capture` (one month's value
+  capture ≥ `GOALS.valueCaptureMonth`, not in the sandbox); copy says "since <TIME.startDate year>".
+- **Saves v5.** `SavedGrowth`, `SaveFile.growth`, `game.growthPace`, `bytesToB64` (`f32ToB64`
+  wraps it), `b64ToU16`; migration step 4 (v4 → v5): pace Steady, `valueCapture: 0` on ledgers,
+  months and today, the two goals open, `growth: null` (so a v4 mode state's key still matches);
+  `encodeGrowth`, `decodeGrowth` (never throws: a malformed field decodes to an empty array, which
+  `Growth.fromData` rejects, starting the city over with the toast), `isGrowthPace`;
+  `applySave` returns `growth` and sets the pace. `simState().growth` is null for the starting
+  city, so a game that never grew saves no growth.
+- **`src/ui/app.ts` (plumbing only).** `lastSimState` (mode + growth, from the save and from each
+  midnight's `simState` reply) replaces `lastModeState`; `sim.init` gets the saved growth and the
+  pace; `settleDay` books `r.growth.valueCapture`; `lastGrowth` (the month's `GrowthMonth`),
+  `growthView` with `loadGrowthView()` (cached until the next close), `setGrowthPace(p)` (game,
+  worker, a toast). `src/ui/livingCity.ts`: `GROWTH_PACE_LABEL`, `GROWTH_PACE_HINT`, `sinceStart()`.
+- **Scripts.** `balance`: `pace=`, `months=N monthDays=K` (a growth month every K days; one line per
+  month; value capture per day over an average month's 21.75 weekdays), the last growth month's
+  value capture in the money lines and in the scorecard's coverage, `dump=` as before.
+  `headless-sim`: `pace=` and a growth line on close days. `perf`: two month closes after the
+  peak hour (`monthEvery: 2`, so the timed hour is unchanged), timed from the busy label;
+  `month=0` skips them; `city=london`.
+
+### Regeneration (§3.4) as built
+
+`Engine.closeDay(d)`: `dayReport` (fresh observations) → regularity → `monthClose(d)` if
+`isMonthEnd(d)` → the report (with `growth` only on that day) → `dayEnd`. `monthClose`: pace Off,
+no world or `d ≤ appliedThroughDay` → null; else busy label, `commuteBenefit()`,
+`growth.step(d, b, servedStations(net))`, `commuters.regenerate(growth.factors(), time)`, event
+origin weights = `growth.currentResidents()`, `agents`/`commuters` filled in.
+
+`regenerate`: `resetTrips()` (stragglers counted as stuck into the new day, as at 3 am); the
+event pool's agents go (`evUsed = 0`, `evGroups = []`: their indices sit past A, which changes)
+while today's events and tallies stay, so a wrap-up due after midnight still reports its fans;
+`buildGroups` → `matchGroups` → `adoptGroups(carry)` → `buildAgents(carry)` → per-group state →
+`recomputePaths(new pairs)` → fresh shares → `startDay(t)` (a no-op at midnight; a forced
+mid-day close schedules the rest of the day but does not re-inject events).
+
+- **Placement (amendment 3).** `hashed` is false for the starting city (v1's stream: placement
+  continues `tbl.gen` after the rounding, in v1's order) and true once grown. The first
+  regeneration re-places every agent from `hash32x4(seed, h·3 + b, w, k)`; later ones copy each
+  kept group's first `min(n_old, n_new)` agents and place the rest from their seeds. The
+  constructor with factors (a reload) places all from their seeds. Test 10 checks the incremental
+  result equals `new Commuters(world, { factors })` byte for byte, in both cities, across the
+  switch and a copy step; test 14 checks a reload mid-growth.
+- **Carry-over.** Exact matches copy shares, observations, paths, geometry, `gLsBase` and
+  `gBaseT`; same pair, new band: geometry and paths, fresh shares; new pair: paths searched,
+  fresh shares (`logitShares(generalisedCosts(geom, band, transitInput(g)))`, clear weather,
+  timetable time since `obsTime` is 0). Runs of consecutive exact matches are copied with
+  `TypedArray.set` (shares, observations, geometry, agents of groups whose count did not change):
+  in a typical month all but a few hundred of 252k groups.
+- **`recomputePaths(only)`** keeps the existing paths, searches only `only`'s homes (AM) and
+  works (PM) from the access lists of the last full search, skips the timed-trip goal and the
+  observation reset, and recounts unserved demand for every group. A full search behaves exactly
+  as before.
+- **Arrays.** Placement arrays (`aHx … aReturn`, `aGroup`, `aBand`, `aPeak`) are exactly
+  `A + poolCap` long. Trip state (`aMode, aState, aLeg, aLegN, aLegs, aTripStart, aWaitStart, aPlat,
+  aCrowd, aLeft, aPM, aBoarded`) is allocated with 2% room and cleared in place while it is large
+  enough, which saves ≈ 30 MB of allocation and most of the GC time a month (nothing reads these
+  beyond A + evUsed; no behaviour depends on their length). The weather baseline cache is cleared;
+  a rainy or snowy day's baseline is recomputed only if a report needs it before the next 3 am
+  sets the weather (a forced mid-day close), so a month close never pays for it.
+- **The benefit** reuses `transitInput(g, scratch)` (the exact object mode choice builds, filled in
+  place), so it costs no allocation per group.
+
+### Checks
+
+- **Identity (amendment 3), against a worktree of `pre-living`.** `pace=off`: byte-identical
+  `dump=` files (every `DayReport`, `finance.toData()`, share and observation hashes) for
+  `headless-sim days=3`, and for `balance` 25 days (crossing the 31 Jan month close) of the core
+  with chaos Off and Normal and of the sprawl, in both cities. Steady (the default):
+  byte-identical for `headless-sim days=3` and `balance city=nyc|london scenario=core days=12`;
+  over 25 days the reports are identical through day 17, day 18 differs only by its new `growth`
+  field, and the finances from day 18's `valueCapture`. `perf`: the same 40,320 boardings and
+  1,090 waiting. Finance stays identical because the ledger and month fields are absent unless
+  value capture was booked, and `x + 0` is exact.
+- **Perf (amendment 7).** Peak hour unchanged (220–266 ms vs 211–265 ms interleaved; ±1% in one
+  process with the old and new engines alternating, once the load-order bias is removed). Month
+  close at perf scale: New York first 500–616 ms (median 502; all 285k agents re-placed), then
+  290–375 ms; London first 360–391 ms, then ≈ 150–340 ms (typically 220). A typical New York close:
+  benefit ≈ 50 ms, `Growth.step` ≈ 55 ms, regeneration 170–260 ms (`buildGroups` ≈ 70 ms).
+- **Balance (amendment 8).** No value needed changing: with the real month-close loop
+  (`balance months=12`, and a calendar year `days=262`) the model's values land on the targets.
+  Steady month 12: New York core $0.35M/day (riders 1.35M → 1.42M, still rising), sprawl
+  $0.003M/day; London core £0.21M/day (riders 764k → 828k), sprawl £0.002M/day. Boom: $0.72M/day
+  and £0.42M/day. The New York core's result after bond interest moves from −$0.08M to about
+  +$0.27M/day. Details in the README's Living City section.
+- **Tests** (196 in all: 173 unit, 23 headless): `tests/regen.test.ts` (test 11 against a copy of
+  v1's generation; test 10 in both cities; test 12; the shuffled-OD Map join; event origins),
+  `tests/growth.headless.test.ts` (13–14 in one, 15, pace Off, a London month close: OD sums
+  within 0.5%, value capture in pounds, no deadlocks; chaos: a late concert's fans in flight at
+  the month-end midnight and an event the next day), `tests/save.test.ts` (17, 18, malformed
+  growth), `tests/economy.test.ts` (16, and no field without value capture),
+  `tests/credit.test.ts` (coverage yes, farebox no; the window average; the year in review; the
+  two goals).
+
+### Deviations from the design (sim)
+
+1. Placement switches to per-agent seeds at the first growth, not from v1 (amendment 3), so a
+   game that never grows is the code before Living City bit for bit.
+2. `DayLedger.valueCapture` and `MonthReport.valueCapture` are optional and written only when value
+   capture is booked (migrated saves get 0), for the identity above; readers use `?? 0`.
+3. Value capture counts in the credit scorecard's interest coverage, averaged over the window's
+   service days.
+4. Event fans in flight at a month-end midnight are sent home (counted as stuck), and their event's
+   tallies are kept for the wrap-up; the doc did not cover the pool.
+5. Trip-state arrays keep 2% room and are cleared in place on regeneration (placement arrays stay
+   exact), for the month-close budget.
+6. `simState().growth` is null for the starting city; `growthView()` and `tractGrowth()` return
+   null without a world (or for a bad tract index).
+7. `perf` closes a growth month every 2 days after the timed hour (the doc timed one forced close
+   mid-day, which would also redraw the day's modes); `balance months=` reports value capture per
+   day over an average month's weekdays, not over the 5-day tuning month.
+8. Busy labels inside a skip hand the pill back to the skip (worker).
 
 ## 0. Summary
 

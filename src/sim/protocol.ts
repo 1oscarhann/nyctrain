@@ -2,13 +2,13 @@
  * Messages between the main thread and the simulation worker, and the compiled network format.
  * Everything here is plain data (structured-clone friendly).
  */
-import type { ChaosLevel, CityId, IncidentKind, TrackClass, WeatherKind } from '../balance';
+import type { ChaosLevel, CityId, GrowthPace, IncidentKind, TrackClass, WeatherKind } from '../balance';
 import type { DayWeather } from '../core/cityCalendar';
 import type { FarePolicy } from '../economy/fares';
 import type { Exposure } from './incidents';
 import type { RegularityStats } from './regularity';
 
-export type { ChaosLevel, DayWeather, FarePolicy, IncidentKind, RegularityStats, WeatherKind };
+export type { ChaosLevel, DayWeather, FarePolicy, GrowthPace, IncidentKind, RegularityStats, WeatherKind };
 
 export interface CStation {
   id: number;
@@ -125,6 +125,8 @@ export const TRAIN_STRIDE = 9; // id, route, dir, s, v, load, late, state, nextS
 export const SNAP_HELD = 4;
 /** Busy label while the worker runs a skip; messages posted until the label clears came from the skipped hours. */
 export const SKIP_LABEL = 'Skipping ahead';
+/** Busy label while the worker closes a growth month (Living City: about 0.3 s at the month-end midnight). */
+export const GROWTH_LABEL = 'The city is growing';
 
 export interface LiveStats {
   ridersToday: number;
@@ -155,6 +157,10 @@ export type ToWorker =
       chaos: ChaosInit;
       /** Planned event service. */
       service: ServiceOverride[];
+      /** Living City state the saved groups were generated from (null or missing: the starting city). */
+      growth?: GrowthData | null;
+      /** Living City pace (missing: GROWTH.defaultPace). */
+      growthPace?: GrowthPace;
     }
   | { type: 'network'; net: CompiledNetwork }
   | { type: 'speed'; speed: number }
@@ -165,10 +171,17 @@ export type ToWorker =
   /** Applies from the next 3 am. */
   | { type: 'chaosLevel'; level: ChaosLevel }
   /** The full list of event service overrides (replaces the previous list). */
-  | { type: 'service'; overrides: ServiceOverride[] };
+  | { type: 'service'; overrides: ServiceOverride[] }
+  /** Living City pace; applies from the next month close. */
+  | { type: 'growthPace'; pace: GrowthPace };
 
 export type Query =
-  | { kind: 'modeState' }
+  /** Reply: SimState (mode shares and the growth they belong to, captured together). */
+  | { kind: 'simState' }
+  /** Reply: GrowthView (null without a world). */
+  | { kind: 'growthView' }
+  /** Reply: TractGrowth, with today's commute benefits (null for a bad tract index). */
+  | { kind: 'tractGrowth'; tract: number }
   | { kind: 'station'; station: number }
   | { kind: 'route'; route: number }
   | { kind: 'tract'; tract: number }
@@ -232,6 +245,8 @@ export interface DayReport {
   routeRegularity: Record<number, RegularityStats>;
   /** Service regularity of the whole network (the routes' sums pooled). */
   regularity: RegularityStats;
+  /** Living City: present only on the day a growth month closed. */
+  growth?: GrowthMonth;
 }
 
 export interface FareBreakdown {
@@ -393,4 +408,132 @@ export interface ChaosState {
   /** Today's event outcomes so far. */
   outcomes: EventOutcome[];
   service: ServiceOverride[];
+}
+
+// ---------------------------------------------------------------------------
+// Living City (transit-oriented growth and value capture, docs/v2/living-city.md)
+
+/** One stored tract snapshot: q = round(multiplier × 10000), residents (T values) then jobs (T). */
+export interface GrowthSnapshot {
+  day: number;
+  q: Uint16Array;
+}
+
+/** One row per month close. */
+export interface GrowthCityPoint {
+  day: number;
+  /** City residents and jobs (targets, real people) after the month's growth. */
+  residents: number;
+  jobs: number;
+  /** Value capture paid that month (city currency). */
+  valueCapture: number;
+}
+
+/** Living City state the agent groups were generated from (save v5 `growth`). Structured-clone safe. */
+export interface GrowthData {
+  version: 1;
+  /** Last month-close day applied (−1 = none). */
+  appliedThroughDay: number;
+  /** Month closes applied (0 = the starting city). */
+  months: number;
+  /** Target residents and jobs per tract as multiples of the start. */
+  mRes: Float32Array;
+  mJobs: Float32Array;
+  /** Furness balancing factors: OD'[h][w] = OD[h][w] · fHome[h] · fWork[w]. */
+  fHome: Float32Array;
+  fWork: Float32Array;
+  /** Capitalised land-value premium per tract (0 … VALUE_CAPTURE.premiumMax). */
+  premium: Float32Array;
+  /** Last month's agent-weighted mean attractiveness (residents, jobs), for projected rates. */
+  sbar: [number, number];
+  history: GrowthSnapshot[];
+  city: GrowthCityPoint[];
+}
+
+/** Atomic capture for saving: mode shares and the growth state their groups belong to, in one reply. */
+export interface SimState {
+  mode: ModeState;
+  growth: GrowthData | null;
+}
+
+export interface Boomtown {
+  tract: number;
+  /** Growth of residents + jobs this month (0.004 = +0.4%). */
+  rate: number;
+  /** Residents and jobs added this month (real people). */
+  dRes: number;
+  dJobs: number;
+  /** Residents + jobs against the start (0.05 = +5% since the start year). */
+  sinceStart: number;
+}
+
+/** The month report's City section (DayReport.growth on a month-close day). */
+export interface GrowthMonth {
+  day: number;
+  /** "Jan 2030": the month that closed. */
+  label: string;
+  pace: GrowthPace;
+  /** City targets after growth (real people) and the change this month. */
+  residents: number;
+  jobs: number;
+  dResidents: number;
+  dJobs: number;
+  /** Filled by the engine after regeneration (0 from Growth.step). */
+  agents: number;
+  commuters: number;
+  /** Value capture for the month (city currency), booked on this day's ledger. */
+  valueCapture: number;
+  /** Tracts with any part in the district, and the assessed increment they pay on (city currency). */
+  districtTracts: number;
+  districtIncrement: number;
+  /** Levy by station id (each district tract pays through its nearest served station). */
+  stationLevy: Record<number, number>;
+  /** City mean commute benefit this month (minutes per commute, agent-weighted). */
+  benefitMean: number;
+  boomtowns: Boomtown[];
+  /** Since-start thresholds (GROWTH.milestonesUp / milestonesDown) crossed this month. */
+  milestones: { tract: number; pct: number }[];
+  /** Largest residents + jobs growth since the start among tracts ≥ GROWTH.minTractPeople (goal). */
+  maxTractGrowth: number;
+}
+
+/** The growth overlay and panels' data (on demand). */
+export interface GrowthView {
+  months: number;
+  mRes: Float32Array;
+  mJobs: Float32Array;
+  premium: Float32Array;
+  /** 1 where any part of the tract is in the value-capture district. */
+  district: Uint8Array;
+  /** Share of the tract's area in the district (0 … 1). */
+  districtShare: Float32Array;
+  stationLevy: Record<number, number>;
+  /** District tracts paying through each served station (its nearest), by station id. */
+  stationTracts: Record<number, number>;
+  /** This month's payment at current values (city currency). */
+  projectedValueCapture: number;
+  city: GrowthCityPoint[];
+}
+
+/** One tract's growth (tract panel). */
+export interface TractGrowth {
+  residents0: number;
+  jobs0: number;
+  residents: number;
+  jobs: number;
+  history: { day: number; residents: number; jobs: number }[];
+  /** Minutes per commute saved by the network for people living / working here, and the city mean. */
+  benefitHome: number;
+  benefitWork: number;
+  cityBenefit: number;
+  /** Monthly growth rates if the benefits held (with last month's city means). */
+  projectedRateRes: number;
+  projectedRateJobs: number;
+  premium: number;
+  inDistrict: boolean;
+  districtShare: number;
+  /** Nearest served station id (null: none served). */
+  nearestStation: number | null;
+  /** This tract's monthly value-capture levy at current values (city currency). */
+  levy: number;
 }

@@ -6,7 +6,7 @@
 import { ArcLayer, ScatterplotLayer, TextLayer, PathLayer } from '@deck.gl/layers';
 import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
 import type { Layer } from '@deck.gl/core';
-import { BONDS, CHAOS, COMMUTERS, ECONOMY, TIME, type ChaosLevel, type TrackClass, type TrackLevel } from '../balance';
+import { BONDS, CHAOS, COMMUTERS, ECONOMY, TIME, type ChaosLevel, type GrowthPace, type TrackClass, type TrackLevel } from '../balance';
 import { city, cityBalance } from '../cities';
 import { Game, newChaosSeed, type Selection } from '../core/game';
 import { toLonLat } from '../core/geo';
@@ -32,10 +32,12 @@ import { Elevated3D } from '../map/elevated3d';
 import { Overlays, crowdColor, type FlowLine, type OverlayMode } from '../map/overlays';
 import { ChaosLayers } from '../map/chaosLayers';
 import { nameStationAt } from '../map/naming';
+import { PlaceNames, tractName } from '../map/placeNames';
 import { compileNetwork, type CompileResult } from '../routes/compile';
 import { RouteTool } from '../routes/routeTool';
 import { SimClient } from '../sim/client';
-import type { Alert, CRoute, DayReport, ModeState, ServiceOverride, Snapshot } from '../sim/protocol';
+import { servedStations } from '../sim/growth';
+import type { Alert, CRoute, DayReport, GrowthData, GrowthMonth, GrowthView, ModeState, ServiceOverride, SimState, Snapshot } from '../sim/protocol';
 import { TrainLayer, samplePath } from '../trains/trainLayer';
 import { buildSave, applySave } from '../save/serialize';
 import type { SaveFile, SaveSettings } from '../save/format';
@@ -61,6 +63,7 @@ import { openMenu } from './menu';
 import { Tutorial } from './tutorial';
 import { showGameOver, showMonthReport, showYearReview } from './reports';
 import { fareToastBody, fmtMoneyFine, fmtRate, holdingToast, prepayOptions, refinanceText, saleText } from './opsMoney';
+import { districtWord, growthToasts, GROWTH_PACE_HINT, GROWTH_PACE_LABEL } from './livingCity';
 
 export interface AppOptions {
   sandbox: boolean;
@@ -128,7 +131,19 @@ export class App implements AppContext {
   private stationFlows: { id: number | null; arcs: FlowLine[] } = { id: null, arcs: [] };
   private tractHL: number | null = null;
   private crowdSegs: CrowdSeg[] = [];
-  private lastModeState: ModeState | null = null;
+  /** Mode shares and the growth state their groups belong to, from the worker's last simState reply (saves). */
+  private lastSimState: { mode: ModeState | null; growth: GrowthData | null } | null = null;
+  /** Living City: the last month close's report (the month report's City section, toasts), and the growth overlay's data (lazy, see loadGrowthView). */
+  lastGrowth: GrowthMonth | null = null;
+  growthView: GrowthView | null = null;
+  private growthViewPending: Promise<GrowthView | null> | null = null;
+  /** Bumped whenever the cached growth view is dropped, so a reply to an older query isn't cached. */
+  private growthViewGen = 0;
+  /** Map place labels seen this session (tract names, §2.4). */
+  readonly places: PlaceNames;
+  /** A save from before Living City: the first month report shows a one-time hint. */
+  livingHintPending = false;
+  private servedCache: { version: number; list: { id: number; name: string; x: number; y: number }[] } | null = null;
   private stopAnim: (() => void) | null = null;
   private renderPending = false;
   private panelTimer = 0;
@@ -162,12 +177,14 @@ export class App implements AppContext {
     this.goals = emptyGoals();
     this.tutorialDone = !opts.tutorial;
     let modeState: ModeState | undefined;
+    let growth: GrowthData | null = null;
     if (opts.save) {
       const r = applySave(this.game, opts.save);
       this.goals = { ...emptyGoals(), ...r.goals };
       this.report = r.lastReport;
       modeState = r.modeState;
-      this.lastModeState = r.modeState ?? null;
+      growth = r.growth;
+      this.lastSimState = { mode: r.modeState ?? null, growth: r.growth };
       this.tutorialDone = r.tutorialDone || !opts.tutorial;
     } else {
       // A new game draws its own seed: city chaos (calendar, weather, incidents) and the bond
@@ -190,6 +207,8 @@ export class App implements AppContext {
     this.stations = new StationLayers(this.game);
     this.elevated = new Elevated3D(view.map);
     this.overlays = new Overlays(world.tracts, fmtDensity);
+    this.overlays.districtWord = districtWord;
+    this.places = new PlaceNames(view.map, (x, y) => !this.terrain.isWater(x, y));
 
     // ---- tools
     this.tools = new ToolManager(view);
@@ -215,7 +234,7 @@ export class App implements AppContext {
     };
 
     // ---- deck.gl layers, bottom to top
-    view.addLayers('overlays', () => this.overlays.layers());
+    view.addLayers('overlays', () => this.overlays.layers(view.is3D));
     view.addLayers('crowding', () => this.crowdLayers());
     view.addLayers('elevated', () => this.elevated.layers(this.network, view.is3D, view.map.getZoom()));
     view.addLayers('venues', () => this.chaosLayers.venueLayers());
@@ -270,6 +289,8 @@ export class App implements AppContext {
       modeState,
       chaos: this.game.chaosInit(),
       service: this.game.chaos.service,
+      growth,
+      growthPace: this.game.growthPace,
     });
     this.recompile();
     this.render();
@@ -296,10 +317,16 @@ export class App implements AppContext {
     if (opts.save?.migratedFrom !== undefined && opts.save.migratedFrom < 4) {
       setTimeout(() => this.toasts.show('New: operations control, fares and the bond market', 'Holding, timepoints and recovery are in each route panel (off for your existing routes). Fares, borrowing and car sales are in Finances (M).', 'green', 9000, () => this.openFinance('overview')), 1800);
     }
+    // A save from before Living City: the city starts growing (Steady) from the next month end.
+    if (opts.save?.migratedFrom !== undefined && opts.save.migratedFrom < 5) {
+      this.livingHintPending = true;
+      setTimeout(() => this.toasts.show('New: the city grows around good transit', 'Each month end, well-served neighbourhoods grow and a value-capture district pays the authority. G shows the growth map; Menu → City growth sets the pace.', 'green', 9000, () => this.setOverlay('growth')), 2100);
+    }
   }
 
   destroy(): void {
     this.destroyed = true;
+    this.places.destroy();
     this.save('autosave');
     this.sim.terminate();
     window.removeEventListener('keydown', this.onKey);
@@ -427,6 +454,10 @@ export class App implements AppContext {
       this.stationCap.set(id, Math.min(this.stationCap.get(id) ?? Infinity, r.capComfort));
     }
     this.sim.setNetwork(c.net);
+    // The value-capture district follows the served stations: the growth view is redrawn.
+    this.dropGrowthView();
+    const m = this.overlays.mode;
+    if (m === 'growth' || m === 'residents' || m === 'jobs') this.loadOverlayData(m);
     if (c.net.routes.length > (prev?.net.routes.length ?? 0)) this.checkGoals(null);
   }
 
@@ -481,8 +512,9 @@ export class App implements AppContext {
     // The worker is already past midnight; move the mirrored clock too, so the autosave below
     // can't hold a time from before the day it has settled.
     g.setTime(Math.max(g.time, (r.day + 1) * SECONDS_PER_DAY));
-    g.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen, kpi: dayKpi(r) });
+    g.finance.settleDay({ day: r.day, riders: r.riders, revenue: r.fareRevenue, carKm: r.carKm, stationsOpen: r.stationsOpen, kpi: dayKpi(r), ...(r.growth ? { valueCapture: r.growth.valueCapture } : {}) });
     this.report = r;
+    if (r.growth) this.onGrowth(r.growth);
     // Rating changes and bond market shocks from this settle's month-end review.
     for (const ev of g.finance.events) this.toasts.show(ev.title, ev.body, ev.tone, 7000, () => this.openFinance('borrowing'));
     g.events.emit('money', undefined);
@@ -493,8 +525,8 @@ export class App implements AppContext {
     if (this.overlays.mode !== 'none') this.loadOverlayData(this.overlays.mode);
     if (isNewMonth(r.day + 1) && g.finance.months.length) {
       // The first weekday of January brings the year in review instead of December's report.
-      if (monthKey(r.day + 1).endsWith('-01')) showYearReview(this, yearOf(r.day));
-      else showMonthReport(this, g.finance.months[g.finance.months.length - 1]);
+      if (monthKey(r.day + 1).endsWith('-01')) showYearReview(this, yearOf(r.day), r.growth ?? null);
+      else showMonthReport(this, g.finance.months[g.finance.months.length - 1], r.growth ?? null);
     }
     if (g.finance.bankrupt && !this.gameOver) {
       this.gameOver = true;
@@ -506,11 +538,84 @@ export class App implements AppContext {
     this.feed.endDay(r.chaos, g.time);
     // Event service that has ended is dropped before the autosave.
     g.pruneService(g.time);
-    // Autosave at midnight with fresh mode shares.
-    this.sim.query<ModeState>({ kind: 'modeState' }).then((ms) => {
-      this.lastModeState = ms;
+    // Autosave at midnight with fresh mode shares and the growth their groups belong to (one
+    // reply, so the two always match; after a month close both describe the new groups).
+    this.sim.query<SimState>({ kind: 'simState' }).then((st) => {
+      this.lastSimState = st;
       this.save('autosave');
     });
+  }
+
+  // ------------------------------------------------------------------ Living City (plumbing; the UI reads these)
+  /**
+   * A growth month closed (DayReport.growth): keep its report for the month report and toasts, and
+   * drop the cached overlay data. (The value capture is already on the ledger, the goals are
+   * checked with the report.)
+   */
+  private onGrowth(gm: GrowthMonth): void {
+    this.lastGrowth = gm;
+    this.dropGrowthView();
+    // Up to three toasts: the month's top boomtown, then milestones (§2.1). A click shows the tract.
+    for (const t of growthToasts(gm, (i) => this.tractName(i))) {
+      this.toasts.show(t.title, t.body, t.tone, 8000, () => this.showTract(t.tract));
+    }
+  }
+
+  /** Forget the cached growth view (a month closed, the network or the pace changed). */
+  private dropGrowthView(): void {
+    this.growthView = null;
+    this.growthViewPending = null;
+    this.growthViewGen++;
+  }
+
+  /** The growth overlay's and panels' data: queried once and cached until the next month close or network change. */
+  loadGrowthView(): Promise<GrowthView | null> {
+    if (this.growthView) return Promise.resolve(this.growthView);
+    const gen = this.growthViewGen;
+    this.growthViewPending ??= this.sim.query<GrowthView | null>({ kind: 'growthView' }).then((v) => {
+      if (gen === this.growthViewGen) {
+        this.growthView = v;
+        this.growthViewPending = null;
+      }
+      return v;
+    });
+    return this.growthViewPending;
+  }
+
+  /** Living City pace (menu → City growth): saved with the game, applied by the worker at the next month close. */
+  setGrowthPace(p: GrowthPace): void {
+    this.game.growthPace = p;
+    this.sim.setGrowthPace(p);
+    this.dropGrowthView();
+    this.toast(`City growth: ${GROWTH_PACE_LABEL[p]}`, `${GROWTH_PACE_HINT[p]}. From the next month end.`, 'amber');
+    const m = this.overlays.mode;
+    if (m === 'growth' || m === 'residents' || m === 'jobs') this.loadOverlayData(m);
+    if (this.panel) this.refreshPanel();
+  }
+
+  /** Served stations (of the compiled network on screen) with their names, cached per compile. */
+  servedList(): { id: number; name: string; x: number; y: number }[] {
+    const c = this.compiled;
+    if (!c) return [];
+    if (this.servedCache?.version !== c.net.version) {
+      const byId = new Map(c.net.stations.map((st) => [st.id, st]));
+      this.servedCache = { version: c.net.version, list: servedStations(c.net).map((p) => ({ id: p.id, name: byId.get(p.id)?.name ?? '', x: p.x, y: p.y })) };
+    }
+    return this.servedCache.list;
+  }
+
+  /** A tract's name for toasts, reports and hover (§2.4): a map label, "around <station>", or its formal name. */
+  tractName(i: number): string {
+    const t = this.world.tracts[i];
+    return t ? tractName(t, this.places, this.servedList()) : `Tract ${i}`;
+  }
+
+  /** Open a tract's panel and fly there. */
+  showTract(i: number): void {
+    const t = this.world.tracts[i];
+    if (!t) return;
+    this.game.select({ kind: 'tract', index: i });
+    this.flyTo(t.x, t.y);
   }
 
   private checkGoals(report: DayReport | null): void {
@@ -636,7 +741,15 @@ export class App implements AppContext {
   }
 
   private loadOverlayData(mode: OverlayMode): void {
-    if (mode === 'unserved') {
+    if (mode === 'growth' || mode === 'residents' || mode === 'jobs') {
+      // Residents and jobs as they are now, and growth since the start (and the district's rings).
+      this.loadGrowthView().then((v) => {
+        if (this.destroyed) return;
+        this.overlays.setData({ growth: v, served: this.servedList().map((p) => toLonLat(p.x, p.y)) });
+        this.legend.set(this.overlays.legend());
+        this.view.invalidate();
+      });
+    } else if (mode === 'unserved') {
       this.sim.query<Float32Array>({ kind: 'unserved' }).then((u) => {
         this.overlays.setData({ unserved: u });
         this.view.invalidate();
@@ -1068,7 +1181,7 @@ export class App implements AppContext {
 
   // ------------------------------------------------------------------ saving
   buildSave(name = 'Autosave'): SaveFile {
-    return buildSave(this.game, { name, goals: this.goals, lastReport: this.report, tutorialDone: this.tutorialDone, settings: this.settings, modeState: this.lastModeState });
+    return buildSave(this.game, { name, goals: this.goals, lastReport: this.report, tutorialDone: this.tutorialDone, settings: this.settings, modeState: this.lastSimState?.mode ?? null, growth: this.lastSimState?.growth ?? null });
   }
 
   async save(slot: SlotId, name?: string): Promise<boolean> {
@@ -1084,7 +1197,7 @@ export class App implements AppContext {
 
   async saveWithFreshModeState(slot: SlotId, name?: string): Promise<boolean> {
     try {
-      this.lastModeState = await this.sim.query<ModeState>({ kind: 'modeState' });
+      this.lastSimState = await this.sim.query<SimState>({ kind: 'simState' });
     } catch {
       /* keep the cached one */
     }
@@ -1177,6 +1290,11 @@ export class App implements AppContext {
       case 'm':
       case 'M':
         this.toggleFinance();
+        break;
+      case 'g':
+      case 'G':
+        // City growth overlay (G again goes back to none).
+        this.setOverlay(this.overlays.mode === 'growth' ? 'none' : 'growth');
         break;
       case 'h':
       case 'H': {

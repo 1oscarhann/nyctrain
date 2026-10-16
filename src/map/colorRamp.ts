@@ -44,3 +44,9 @@ export function logT(v: number, lo: number, hi: number): number {
 export function hexToRgb(h: string): [number, number, number] {
   return hex(h);
 }
+
+/**
+ * Living City growth (diverging): decline runs magenta → dusk violet, a transparent neutral sits
+ * in the middle, and growth runs deep teal → ice. Clear of the green/amber/red signal hues.
+ */
+export const RAMP_DIVERGE = makeRamp(['#C04FB8', '#5E3B7E', '#20262D', '#1C7A8C', '#BFF4FA'], [0.85, 0.55, 0.0, 0.6, 0.9]);
