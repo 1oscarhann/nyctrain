@@ -143,7 +143,7 @@ export class App implements AppContext {
   readonly places: PlaceNames;
   /** A save from before Living City: the first month report shows a one-time hint. */
   livingHintPending = false;
-  private servedCache: { version: number; list: { id: number; name: string; x: number; y: number }[] } | null = null;
+  private servedCache: { version: number; list: { id: number; name: string; x: number; y: number; region: number }[]; lonLat: [number, number][] } | null = null;
   private stopAnim: (() => void) | null = null;
   private renderPending = false;
   private panelTimer = 0;
@@ -208,7 +208,8 @@ export class App implements AppContext {
     this.elevated = new Elevated3D(view.map);
     this.overlays = new Overlays(world.tracts, fmtDensity);
     this.overlays.districtWord = districtWord;
-    this.places = new PlaceNames(view.map, (x, y) => !this.terrain.isWater(x, y));
+    this.overlays.growthOff = () => this.game.growthPace === 'off';
+    this.places = new PlaceNames(view.map, (x, y) => !this.terrain.isWater(x, y), (x, y) => this.terrain.borough(x, y));
 
     // ---- tools
     this.tools = new ToolManager(view);
@@ -595,19 +596,25 @@ export class App implements AppContext {
 
   /** Served stations (of the compiled network on screen) with their names, cached per compile. */
   servedList(): { id: number; name: string; x: number; y: number }[] {
+    return this.served()?.list ?? [];
+  }
+
+  private served(): { list: { id: number; name: string; x: number; y: number; region: number }[]; lonLat: [number, number][] } | null {
     const c = this.compiled;
-    if (!c) return [];
+    if (!c) return null;
     if (this.servedCache?.version !== c.net.version) {
       const byId = new Map(c.net.stations.map((st) => [st.id, st]));
-      this.servedCache = { version: c.net.version, list: servedStations(c.net).map((p) => ({ id: p.id, name: byId.get(p.id)?.name ?? '', x: p.x, y: p.y })) };
+      const list = servedStations(c.net).map((p) => ({ id: p.id, name: byId.get(p.id)?.name ?? '', x: p.x, y: p.y, region: this.terrain.borough(p.x, p.y) }));
+      this.servedCache = { version: c.net.version, list, lonLat: list.map((p) => toLonLat(p.x, p.y)) };
     }
-    return this.servedCache.list;
+    return this.servedCache;
   }
 
   /** A tract's name for toasts, reports and hover (§2.4): a map label, "around <station>", or its formal name. */
   tractName(i: number): string {
     const t = this.world.tracts[i];
-    return t ? tractName(t, this.places, this.servedList()) : `Tract ${i}`;
+    // Labels and stations in the tract's own borough only (not across a river).
+    return t ? tractName(t, this.places, this.servedList(), this.terrain.borough(t.x, t.y)) : `Tract ${i}`;
   }
 
   /** Open a tract's panel and fly there. */
@@ -745,7 +752,8 @@ export class App implements AppContext {
       // Residents and jobs as they are now, and growth since the start (and the district's rings).
       this.loadGrowthView().then((v) => {
         if (this.destroyed) return;
-        this.overlays.setData({ growth: v, served: this.servedList().map((p) => toLonLat(p.x, p.y)) });
+        // The same objects until a month closes or the network changes: the overlay rebuilds only then.
+        this.overlays.setData({ growth: v, served: this.served()?.lonLat ?? [] });
         this.legend.set(this.overlays.legend());
         this.view.invalidate();
       });

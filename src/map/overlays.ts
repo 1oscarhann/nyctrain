@@ -12,6 +12,7 @@ import { monthLabel } from '../core/calendar';
 import type { Tract } from '../data/world';
 import type { GrowthView } from '../sim/protocol';
 import { RAMP_COOL, RAMP_DIVERGE, RAMP_VIOLET, RAMP_WARM, logT, type RGBA } from './colorRamp';
+import { columnRadiusClass, GROWTH_MIN_DRAWN, GROWTH_RAMP_SPAN, growthLegendEnds, growthSpan, growthT, tractGrowthSince, tractPeopleAdded } from './growthMath';
 import { Emitter } from '../core/emitter';
 
 export type OverlayMode = 'none' | 'residents' | 'jobs' | 'growth' | 'unserved' | 'crowding' | 'flows';
@@ -29,33 +30,7 @@ export const OVERLAY_LABELS: Record<OverlayMode, string> = {
   flows: 'Commuter flows',
 };
 
-/** Growth below this (|Δ| of residents + jobs since the start) is not drawn. */
-export const GROWTH_MIN_DRAWN = 0.002;
-/** The ramp's ends: ±20% since the start. */
-export const GROWTH_RAMP_SPAN = 0.2;
-
-/**
- * Ramp position of a tract's growth since the start (u = 0.05 is +5%): 0.5 is no change, 1 is
- * +20% or more, 0 is −20% or less, with a gamma that lifts small changes off the neutral centre.
- */
-export function growthT(u: number): number {
-  if (!Number.isFinite(u) || u === 0) return 0.5;
-  return 0.5 + 0.5 * Math.sign(u) * Math.min(1, Math.abs(u) / GROWTH_RAMP_SPAN) ** 0.6;
-}
-
-/** Residents + jobs growth of tract i since the start (0 without growth data or for an empty tract). */
-export function tractGrowthSince(t: Tract, v: GrowthView | null | undefined): number {
-  if (!v) return 0;
-  const base = t.residents + t.jobs;
-  if (!(base > 0)) return 0;
-  return (t.residents * (v.mRes[t.index] ?? 1) + t.jobs * (v.mJobs[t.index] ?? 1)) / base - 1;
-}
-
-/** Residents and jobs added since the start (real people; negative for a decline). */
-export function tractPeopleAdded(t: Tract, v: GrowthView | null | undefined): number {
-  if (!v) return 0;
-  return t.residents * ((v.mRes[t.index] ?? 1) - 1) + t.jobs * ((v.mJobs[t.index] ?? 1) - 1);
-}
+export { GROWTH_MIN_DRAWN, GROWTH_RAMP_SPAN, growthT, tractGrowthSince, tractPeopleAdded } from './growthMath';
 
 export interface OverlayLegend {
   title: string;
@@ -96,11 +71,23 @@ interface Column {
   height: number;
 }
 
+/** The 3D columns of one radius class (one ColumnLayer each). */
+interface ColumnGroup {
+  r: number;
+  data: Column[];
+}
+
+/** New development columns: the top of the growth ramp. */
+const COLUMN_TOP = RAMP_DIVERGE(1);
+const COLUMN_COLOR: RGBA = [COLUMN_TOP[0], COLUMN_TOP[1], COLUMN_TOP[2], 220];
+
 export class Overlays {
   mode: OverlayMode = 'none';
   readonly events = new Emitter<{ change: OverlayMode }>();
   private discs: Disc[] = [];
-  private columns: Column[] = [];
+  private columns: ColumnGroup[] = [];
+  /** The growth ramp's current end (±span), from the biggest change drawn. */
+  private span = GROWTH_RAMP_SPAN;
   private data: OverlayData = {};
   private version = 0;
   /** Crowding is drawn by the network renderer; it just needs to know the mode. */
@@ -114,8 +101,11 @@ export class Overlays {
   }
 
   setData(data: OverlayData): void {
+    // Rebuild only when something new arrived (the growth view is cached, and handed over again at
+    // every day end).
+    const changed = (Object.keys(data) as (keyof OverlayData)[]).some((k) => data[k] !== this.data[k]);
     this.data = { ...this.data, ...data };
-    if (this.mode !== 'none' && this.mode !== 'crowding') this.rebuild();
+    if (changed && this.mode !== 'none' && this.mode !== 'crowding') this.rebuild();
   }
 
   /** The growth data the overlays draw from (null until loaded). */
@@ -131,16 +121,20 @@ export class Overlays {
         return { title: 'Jobs', ramp: RAMP_WARM, lo: this.densityScale(1000), hi: this.densityScale(200000) };
       case 'growth': {
         const v = this.data.growth;
-        const ring = this.districtWord();
+        const rings = `Rings: value-capture district (${this.districtWord()} of a served station).`;
+        const [lo, hi] = growthLegendEnds(this.span);
+        const off = this.growthOff();
         return {
           title: `Growth since ${monthLabel(0)}`,
           ramp: RAMP_DIVERGE,
-          lo: '−20%',
-          hi: '+20%+',
+          lo,
+          hi,
           note:
             v && v.months === 0
-              ? `No month has closed yet: the city grows around good transit at each month end. Rings: value-capture district (${ring} of a served station).`
-              : `Residents + jobs. Rings: value-capture district (${ring} of a served station). Tilt (V) to see new development.`,
+              ? off
+                ? `City growth is off (Menu → City growth). ${rings}`
+                : `No month has closed yet: the city grows around good transit at each month end. ${rings}`
+              : `Residents + jobs${off ? ' (city growth is off: no more change)' : ''}. ${rings} Tilt (V) to see new development.`,
         };
       }
       case 'unserved':
@@ -174,12 +168,13 @@ export class Overlays {
 
   /** "½ mi" or "800 m": the district radius in the player's units (set by the app). */
   districtWord: () => string = () => `${VALUE_CAPTURE.districtRadius} m`;
+  /** City growth is off (set by the app; the legend says so). */
+  growthOff: () => boolean = () => false;
 
   private rebuild(): void {
     this.version++;
     const tracts = this.tracts;
     const discs: Disc[] = [];
-    const columns: Column[] = [];
     const gv = this.data.growth ?? null;
     if (this.mode === 'residents' || this.mode === 'jobs') {
       const jobs = this.mode === 'jobs';
@@ -191,17 +186,31 @@ export class Overlays {
         discs.push({ pos: [t.lon, t.lat], r: t.radius * 1.12, t: logT(v, 1000, jobs ? 200000 : 60000), tract: t });
       }
     } else if (this.mode === 'growth' && gv) {
+      const drawn: { t: Tract; u: number }[] = [];
+      const byR = new Map<number, Column[]>();
+      let maxAbs = 0;
       for (const t of tracts) {
         const u = tractGrowthSince(t, gv);
-        if (Math.abs(u) >= GROWTH_MIN_DRAWN) discs.push({ pos: [t.lon, t.lat], r: t.radius * 1.12, t: growthT(u), tract: t });
+        if (Math.abs(u) >= GROWTH_MIN_DRAWN) {
+          drawn.push({ t, u });
+          maxAbs = Math.max(maxAbs, Math.abs(u));
+        }
         // New development (3D): a hexagonal column per growing tract, its height the people added.
         const added = tractPeopleAdded(t, gv);
-        if (added > 50) columns.push({ pos: [t.lon, t.lat], r: Math.min(250, 0.6 * t.radius), height: added * MAP.growthColumnMetresPerPerson });
+        if (added > 50) {
+          const r = columnRadiusClass(Math.min(250, 0.6 * t.radius));
+          let arr = byR.get(r);
+          if (!arr) byR.set(r, (arr = []));
+          arr.push({ pos: [t.lon, t.lat], r, height: added * MAP.growthColumnMetresPerPerson });
+        }
       }
+      // The ramp widens with the biggest change (±2% … ±20%), so the first months show.
+      this.span = growthSpan(maxAbs);
+      for (const { t, u } of drawn) discs.push({ pos: [t.lon, t.lat], r: t.radius * 1.12, t: growthT(u, this.span), tract: t });
       // Declines under growth, so the bright growing tracts sit on top where discs overlap.
       discs.sort((a, b) => Math.abs(a.t - 0.5) - Math.abs(b.t - 0.5));
       this.discs = discs;
-      this.columns = columns;
+      this.columns = [...byR.entries()].sort((a, b) => a[0] - b[0]).map(([r, data]) => ({ r, data }));
       return;
     } else if (this.mode === 'unserved' && this.data.unserved) {
       const u = this.data.unserved;
@@ -213,7 +222,7 @@ export class Overlays {
     }
     discs.sort((a, b) => a.t - b.t);
     this.discs = discs;
-    this.columns = columns;
+    this.columns = [];
   }
 
   /** Deck layers for the current mode; `is3D` adds the growth overlay's new-development columns. */
@@ -256,16 +265,8 @@ export class Overlays {
         );
       }
       if (is3D && this.columns.length) {
-        // ColumnLayer has one radius per layer, so columns go in 25 m radius classes.
-        const top = RAMP_DIVERGE(1);
-        const byR = new Map<number, Column[]>();
-        for (const c of this.columns) {
-          const r = Math.max(25, Math.round(c.r / 25) * 25);
-          let arr = byR.get(r);
-          if (!arr) byR.set(r, (arr = []));
-          arr.push(c);
-        }
-        for (const [r, data] of [...byR.entries()].sort((a, b) => a[0] - b[0])) {
+        // ColumnLayer has one radius per layer: the columns come in 25 m radius classes (grouped in rebuild).
+        for (const { r, data } of this.columns) {
           out.push(
             new ColumnLayer<Column>({
               id: `overlay-growth-columns-${r}`,
@@ -275,7 +276,7 @@ export class Overlays {
               getPosition: (d) => d.pos,
               getElevation: (d) => d.height,
               extruded: true,
-              getFillColor: [top[0], top[1], top[2], 220],
+              getFillColor: COLUMN_COLOR,
               material: { ambient: 0.55, diffuse: 0.6, shininess: 16, specularColor: [60, 70, 80] },
               pickable: false,
               updateTriggers: { getElevation: this.version },

@@ -2,13 +2,13 @@
 import { city } from '../../cities';
 import { TRAINS } from '../../balance';
 import { edgeTooltip } from '../../construction/describe';
-import { fmtDate, isNewMonth, monthLabel } from '../../core/calendar';
+import { fmtDate, isNewMonth } from '../../core/calendar';
 import { fmtClock, fmtCount, fmtDensity, fmtSpeed } from '../../core/units';
-import { formalTractName, TRACT_NAME_RADIUS } from '../../map/placeNames';
+import { formalTractName } from '../../map/placeNames';
 import type { App } from '../app';
 import { indexChart } from '../charts';
 import { bullet, h } from '../dom';
-import { fmtSignedPct, startMonth, tractGrowthSentence, tractValueCaptureLine } from '../livingCity';
+import { fmtSignedPct, indexSeries, startDateText, startMonth, tractGrowthSentence, tractPanelTitle, tractValueCaptureLine } from '../livingCity';
 import { kv, section, shareBar, shell, SHARE_COLORS, statCard, type Panel } from './common';
 import { SNAP_HELD, type TractGrowth } from '../../sim/protocol';
 
@@ -86,12 +86,11 @@ interface TractDetail {
 
 export function tractPanel(app: App, index: number): Panel {
   const t = app.world.tracts[index];
-  // London MSOAs carry names ("Camden 028"); NYC tracts are numbered within the borough. A map
-  // place label seen this session names the tract when there is one (Living City, §2.4).
-  const formal = formalTractName(t);
-  const place = app.places.nearest(t.x, t.y, TRACT_NAME_RADIUS);
-  const kind = t.name ? 'Neighbourhood area' : 'Census tract';
-  const sh = shell(place ? `${formal} · ${kind} ${t.id}` : `${kind} ${t.id} · ${t.borough}`, place ?? formal, () => app.game.select(null));
+  // London MSOAs carry names ("Camden 028"); NYC tracts are numbered within the borough. The
+  // name the toasts and the month report use (a map label or "around <station>", §2.4) is the
+  // title when there is one, with the formal name below it.
+  const head = tractPanelTitle(app.tractName(index), formalTractName(t), t.name ? 'Neighbourhood area' : 'Census tract', t.id, t.borough);
+  const sh = shell(head.sub, head.title, () => app.game.select(null));
   const body = sh.body;
   const stats = h('div', { class: 'stat-grid' });
   const shares = h('div');
@@ -146,14 +145,11 @@ export function tractPanel(app: App, index: number): Panel {
       ),
     );
     if (g.history.length) {
-      // Index chart: the start = 100, then each stored month close.
-      const labels = [startMonth(), ...g.history.map((p) => monthLabel(p.day))];
-      const idx = (v: number, v0: number) => (v0 > 0 ? (v / v0) * 100 : null);
-      const res = [g.residents0 > 0 ? 100 : null, ...g.history.map((p) => idx(p.residents, g.residents0))];
-      const jobs = [g.jobs0 > 0 ? 100 : null, ...g.history.map((p) => idx(p.jobs, g.jobs0))];
+      // Index chart: the start (= 100), then each stored month close.
+      const sr = indexSeries(g);
       const wrap = h('div', { class: 'chart', style: 'margin-top:8px' });
-      growthWrap.append(h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:8px' }, `Index, ${startMonth()} = 100`), wrap);
-      chart = indexChart(wrap, labels, res, jobs);
+      growthWrap.append(h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:8px' }, `Index: ${startDateText()} = 100, then each month end`), wrap);
+      chart = indexChart(wrap, sr.labels, sr.res, sr.jobs);
     } else {
       // The next month close: midnight after the month's last weekday.
       let last = app.game.day;
@@ -163,7 +159,7 @@ export function tractPanel(app: App, index: number): Panel {
     const near = g.nearestStation !== null ? app.game.network.stations.get(g.nearestStation) : undefined;
     growthWrap.append(
       h('div', { style: 'font-size:12.5px;line-height:1.45;margin-top:8px' }, tractGrowthSentence(g, app.game.growthPace)),
-      h('div', { class: g.inDistrict ? 'fin-line' : 'hw-muted', style: 'font-size:12.5px;margin-top:6px' }, tractValueCaptureLine(g, app.game.growthPace), near && g.inDistrict ? h('span', { class: 'hw-muted' }, ` · via ${near.name}`) : ''),
+      h('div', { class: g.inDistrict ? 'fin-line' : 'hw-muted', style: 'font-size:12.5px;margin-top:6px' }, tractValueCaptureLine(g, app.game.growthPace), near && g.inDistrict && app.game.growthPace !== 'off' ? h('span', { class: 'hw-muted' }, ` · via ${near.name}`) : ''),
     );
   };
   render();

@@ -1,6 +1,6 @@
 # Living City: transit-oriented growth and value capture (v2)
 
-Status: model and sim implemented (notes below); UI to do · Target: one focused session, about 1,300 lines including tests
+Status: implemented (model, sim and UI; notes below) · Target: one focused session, about 1,300 lines including tests
 Depends on: v1 as committed (`a27dbfa`). Touches the sim worker, finance, save format (v2 → v3) and UI.
 
 ## Implementation notes (model)
@@ -8,7 +8,7 @@ Depends on: v1 as committed (`a27dbfa`). Touches the sim worker, finance, save f
 The model half is implemented on top of London, city chaos and operations control (baseline: the
 `pre-living` tag): checklist steps 1–5, plus `Commuters.transitInput` (a pure refactor) and a
 read-only `Commuters.commuteBenefit()` (§3.2) so the numbers could be tuned on real benefits.
-(The sim half followed: see "Implementation notes (sim)" below; the UI is still to do.) **Where the code and this design disagree (line numbers,
+(The sim half followed: see "Implementation notes (sim)" below, then "Implementation notes (UI)".) **Where the code and this design disagree (line numbers,
 `v2`/`v3` save names, 2030 copy), trust the code and the amendments in the task.**
 
 ### What exists
@@ -182,7 +182,7 @@ observation hashes). `npm run perf`: identical boardings (40,320) and waiting (1
 The sim half is in (checklist 6–10 and 16, and the non-UI parts of 11): agent regeneration, the
 engine, worker, client and headless plumbing, value capture in the finances and the credit
 scorecard, goals, saves v5, the app's plumbing, the scripts and tests 10–18 plus London and chaos
-tests. **Still to do (UI, checklist 11–15, 17):** the growth overlay and `RAMP_DIVERGE`, the G key,
+tests. **Then done by the UI pass (checklist 11–15, 17; see "Implementation notes (UI)"):** the growth overlay and `RAMP_DIVERGE`, the G key,
 the tract panel's growth section (`indexChart`), the station panel's value-capture line, the
 finance panel's value-capture row, section and chart, the month report's City section, boomtown
 and milestone toasts, `PlaceNames` (with each city's place classes from `src/map/naming.ts`;
@@ -343,6 +343,93 @@ mid-day close schedules the rest of the day but does not re-inject events).
    mid-day, which would also redraw the day's modes); `balance months=` reports value capture per
    day over an average month's weekdays, not over the 5-day tuning month.
 8. Busy labels inside a skip hand the pill back to the skip (worker).
+
+## Implementation notes (UI)
+
+Checklist steps 11–15 and 17 and the README are done, for both cities (currency through
+`fmtMoney`, "since <start year>" from `TIME.startDate`, London's place classes and MSOA names,
+distances in the player's units).
+
+**Where it lives.**
+- `src/ui/livingCity.ts`: every string and number the Living City UI shows, with no DOM: pace
+  labels and hints, `sinceStart()`, signed percentages and counts (U+2212), `districtWord()` (½ mi
+  or 800 m), the boomtown and milestone toasts and `growthToasts` (which ones), the month
+  report's `cityRows`, `boomtownLine`, `distinctNames`, `sandboxMonthBody`, `yearCityLine`, the
+  tract panel's `tractPanelTitle`, `indexSeries`, `tractGrowthSentence` and
+  `tractValueCaptureLine`, the station panel's text and tooltip, the finance section and the
+  goals' progress. `tests/livingCityUi.test.ts` covers it in both cities, with the two below.
+- `src/map/growthMath.ts` (pure): `tractGrowthSince`, `tractPeopleAdded`, `growthT(u, span)`,
+  `growthSpan`, `growthLegendEnds`, `columnRadiusClass` (`overlays.ts` re-exports `growthT`).
+  `src/map/placeNames.ts`: `PlaceIndex` (pure, a 1 km grid), `PlaceNames` (harvests the map's
+  `place` features on `idle`, debounced), `formalTractName`, `tractName`. `src/map/naming.ts`:
+  `placeClasses()`, shared with station naming.
+- `src/map/overlays.ts`: the `growth` mode (discs on `RAMP_DIVERGE`, the district rings
+  `overlay-district`, tilted the `overlay-growth-columns-<r>` ColumnLayers), Residents and Jobs
+  from the current multipliers, and the legend.
+- `src/ui/app.ts`: `onGrowth` (toasts), `loadGrowthView` (cached until a month close, a network
+  change or a pace change), `setGrowthPace`, `servedList` (cached per compile, with positions and
+  boroughs), `tractName`, `showTract`, the G key, the migrated-save toast and `livingHintPending`.
+  Panels: `inspectPanels.ts` (tract), `stationPanel.ts`, `financePanel.ts`, `goalsPanel.ts`;
+  `reports.ts` (the month report's City section, the year in review's City row); `menu.ts`;
+  `toolbar.ts`; `selectTool.ts` (hover); `charts.ts` (`indexChart`; `financeChart` takes the
+  revenue label).
+
+**Differences from the design.**
+1. **The ramp's span follows the city.** A fixed ±20% made the first months invisible: Steady's
+   best tract grows about 0.4% a month, which sat at 0.55 on the ramp (alpha ≈ 0.1) after month 1.
+   The ends are the smallest of ±2%, ±5%, ±10% and ±20% that covers the biggest change drawn, and
+   the legend shows them ("−2%" … "+2%+"). The gamma (0.6) and the 0.2% floor are as designed.
+2. **Value capture is a money row** of the month report (after Fares, as in the ledger). The City
+   section has Residents (with the month's change and %), Jobs, Commuters now (with the agents)
+   and a *Value-capture district* row (tracts or areas, and the increment they pay on).
+3. **Names.** Labels and stations in another borough than the tract are skipped (borough codes
+   from the land mask; unknown on either side still counts), so an Isle of Dogs MSOA is not named
+   after Hughesfield Estate across the Thames. When two boomtowns share a name ("around Inwood"),
+   the list adds each one's formal name. The tract panel's title is the toast name (capitalised),
+   with the formal name and id as its subtitle; the hover tip and the list capitalise it too.
+   New York's neighbourhood labels are only in tiles from zoom 14 (London's suburbs from zoom
+   12, its quarters and neighbourhoods from 14), so before the player zooms in New York tracts
+   are mostly "around <station>". A label whose point lies in water is skipped as designed (the
+   "Isle of Dogs" point is in Millwall Dock; Cubitt Town names that MSOA from zoom 14).
+4. **Index chart:** "Start" (the first day = 100), then each month close labelled with the month
+   that closed ("Index: 7 Jan 2030 = 100, then each month end"). The design's "2030 = 100" gave
+   the start and January's close the same label. The y range is at least 98–102.
+5. **Toasts** leave out a count that rounds to 0 and use the singular for 1 ("+77 residents, +1
+   job"); a click opens the tract. A migrated save also gets a toast when it loads ("New: the city
+   grows around good transit"; a click shows the growth map). The one-time hint goes in the first
+   month report or year in review.
+6. **Off.** The legend says city growth is off, the tract panel says so in its sentence and its
+   value-capture line, the station panel reads "None: city growth is off", the finance section
+   "city growth is off", and the goals "City growth is off (Menu → City growth)."
+7. **Station panel** also covers stations without service ("None: no service stops here", "None
+   until it opens with service"). **Finances:** "This month so far" adds value capture once any
+   was booked; the scorecard note says interest coverage counts it. **Goals** show the best tract
+   and the best month so far ("Counts outside the sandbox only." for value capture in the
+   sandbox). **Year in review:** value capture on the Money line and a City row (residents and
+   jobs over the year, its growth months, **Show growth map**).
+8. **No per-frame work.** Discs, rings and the columns' radius groups are built in `rebuild()`
+   only, which `setData` skips when the same objects arrive again (the cached view and the served
+   positions are handed over at every day end); `layers()` wraps the prepared arrays. The legend
+   refreshes when the units change in the menu.
+
+**Checked in the browser** (Vite dev server, Playwright with SwiftShader at 1440×900, a new career
+game with chaos Normal on the test network in New York and the Waterloo–North Greenwich line in
+London; no console, page or worker errors in any run). In each city: the overlay menu entry with
+its G key; the growth legend before any month closed; the January close on Steady (busy pill "The
+city is growing", the boomtown toast, the month report with Value capture, City and Boomtowns,
+**Show growth map**); the overlay at ±2%, the district rings, the hover tip, a click into the
+tract panel (title, current residents and jobs, Growth cards, index chart, sentence,
+value-capture line with "via <station>"); a station's *Value capture nearby*; Finances (the
+Yesterday row, the section with last month and the projection, the chart's revenue label); the
+goals' progress lines; February's close on Steady; Continue right after it (the autosave at that
+midnight: two months of history, the same value capture and pace, the overlay and the tract
+chart); Menu → City growth → Boom (the hint, the toast); March's close on Boom (+1.3% a month at
+the top, the ramp at ±5%, Residents now, the 3D columns tilted); the year in review from Finances
+(the City row); a save to a slot and its load (the growth view identical); a downgraded v4 save
+(the toast at load, the hint in the next month report). Also, in New York: the sandbox (the month
+end as a toast with "+2,857 residents", the sandbox goal note, value capture on the ledger), pace
+Off (toast, legend, tract panel), metric units (the legend's and tract panel's "800 m"), and the
+year in review on the first weekday of January (a save moved to late December).
 
 ## 0. Summary
 

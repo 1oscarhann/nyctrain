@@ -7,7 +7,7 @@
  */
 import { GROWTH, TIME, VALUE_CAPTURE, type GrowthPace } from '../balance';
 import { city } from '../cities';
-import { monthLabel } from '../core/calendar';
+import { fmtDate, monthLabel, yearOf } from '../core/calendar';
 import { fmtCount, fmtDistance, fmtMoney, getUnits } from '../core/units';
 import type { Boomtown, GrowthMonth, GrowthView, TractGrowth } from '../sim/protocol';
 
@@ -66,12 +66,17 @@ export interface GrowthToast {
   tone: 'green' | 'amber';
 }
 
-/** "Long Island City is booming": "+0.6% this month · +41 residents, +12 jobs · +4.8% since 2030". */
+/**
+ * "Long Island City is booming": "+0.6% this month · +41 residents, +12 jobs · +4.8% since 2030"
+ * (a count that rounds to 0 is left out).
+ */
 export function boomtownToast(b: Boomtown, name: string): GrowthToast {
+  const count = (n: number, one: string) => (Math.round(n) === 0 ? '' : `${fmtSignedCount(n)} ${one}${Math.abs(Math.round(n)) === 1 ? '' : 's'}`);
+  const counts = [count(b.dRes, 'resident'), count(b.dJobs, 'job')].filter(Boolean);
   return {
     tract: b.tract,
     title: `${capFirst(name)} is booming`,
-    body: `${fmtSignedPct(b.rate)} this month · ${fmtSignedCount(b.dRes)} residents, ${fmtSignedCount(b.dJobs)} jobs · ${fmtSignedPct(b.sinceStart)} ${sinceStart()}`,
+    body: [`${fmtSignedPct(b.rate)} this month`, counts.join(', '), `${fmtSignedPct(b.sinceStart)} ${sinceStart()}`].filter(Boolean).join(' · '),
     tone: 'green',
   };
 }
@@ -112,6 +117,20 @@ export function cityRows(gm: GrowthMonth): [string, string, string][] {
   ];
 }
 
+/**
+ * Names for a list of tracts (the month report's boomtowns), made distinct: when two share a name
+ * ("around Inwood"), each also gets its formal name ("Manhattan tract 297") as a detail.
+ */
+export function distinctNames(tracts: readonly number[], name: (i: number) => string, formal: (i: number) => string): { name: string; detail: string | null }[] {
+  const names = tracts.map(name);
+  const count = new Map<string, number>();
+  for (const n of names) count.set(n, (count.get(n) ?? 0) + 1);
+  return names.map((n, k) => {
+    const f = formal(tracts[k]);
+    return { name: n, detail: (count.get(n) ?? 0) > 1 && f !== n ? f : null };
+  });
+}
+
 /** A Boomtowns list line: "+0.45%/mo · +4.8% since 2030". */
 export function boomtownLine(b: Boomtown): string {
   return `${fmtSignedPct(b.rate, 2)}/mo · ${fmtSignedPct(b.sinceStart)} ${sinceStart()}`;
@@ -122,10 +141,52 @@ export function sandboxMonthBody(ridersPerDay: number, gm: GrowthMonth | null): 
   return `${fmtCount(ridersPerDay)} riders a day${gm ? ` · ${fmtSignedCount(gm.dResidents)} residents` : ''}`;
 }
 
+/**
+ * The year in review's City line, from the growth view's month rows: residents and jobs at the
+ * year's last close against the year before (the start for the first year), and the year's growth
+ * months (its value capture is on the Money line). Null when no month of that year grew the city.
+ */
+export function yearCityLine(v: Pick<GrowthView, 'city'> | null, year: number, startYear: number, totals: { residents: number; jobs: number }): string | null {
+  if (!v || !v.city.length) return null;
+  const rows = v.city.filter((c) => yearOf(c.day) === year);
+  if (!rows.length) return null;
+  const before = v.city.filter((c) => yearOf(c.day) < year).at(-1);
+  const r0 = before?.residents ?? (year <= startYear ? totals.residents : rows[0].residents);
+  const j0 = before?.jobs ?? (year <= startYear ? totals.jobs : rows[0].jobs);
+  const last = rows[rows.length - 1];
+  return `Residents ${fmtCount(last.residents)} (${fmtSignedCount(last.residents - r0)}, ${fmtSignedPct(r0 > 0 ? last.residents / r0 - 1 : 0, 2)}) · jobs ${fmtCount(last.jobs)} (${fmtSignedCount(last.jobs - j0)}) · ${rows.length} growth month${rows.length > 1 ? 's' : ''}`;
+}
+
 /** One-time hint in the first month report after an older save is loaded. */
 export const MIGRATED_HINT = 'Living City: your city now grows around good transit. Menu → City growth.';
 
 // ------------------------------------------------------------------ tract panel
+/**
+ * The tract panel's title and subtitle: its name for toasts and reports (a map label or "around
+ * <station>"), with the formal name in the subtitle; or the formal name alone.
+ */
+export function tractPanelTitle(name: string, formal: string, kind: string, id: string, borough: string): { title: string; sub: string } {
+  return name && name !== formal ? { title: capFirst(name), sub: `${formal} · ${kind} ${id}` } : { title: formal, sub: `${kind} ${id} · ${borough}` };
+}
+
+/** The game's first day without its weekday: "7 Jan 2030". */
+export function startDateText(): string {
+  return fmtDate(0).replace(/^\S+ /, '');
+}
+
+/**
+ * The tract panel's index chart: the start (= 100) and then one point per stored month close,
+ * labelled with the month that closed ("Start", "Jan 2030", "Feb 2030"…). A side with nobody at
+ * the start has no line (null).
+ */
+export function indexSeries(tg: Pick<TractGrowth, 'history' | 'residents0' | 'jobs0'>): { labels: string[]; res: (number | null)[]; jobs: (number | null)[] } {
+  const idx = (v: number, v0: number) => (v0 > 0 ? (v / v0) * 100 : null);
+  return {
+    labels: ['Start', ...tg.history.map((p) => monthLabel(p.day))],
+    res: [tg.residents0 > 0 ? 100 : null, ...tg.history.map((p) => idx(p.residents, tg.residents0))],
+    jobs: [tg.jobs0 > 0 ? 100 : null, ...tg.history.map((p) => idx(p.jobs, tg.jobs0))],
+  };
+}
 /** Residents + jobs growth rate a month at the tract's projected rates. */
 export function projectedRate(tg: TractGrowth): number {
   const r = tg.residents, j = tg.jobs;

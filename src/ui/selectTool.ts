@@ -6,9 +6,9 @@ import { TRACK } from '../balance';
 import { pickEdge } from '../construction/pick';
 import { edgeTooltip } from '../construction/describe';
 import { fmtCount } from '../core/units';
-import { tractGrowthSince } from '../map/overlays';
+import { tractGrowthSince } from '../map/growthMath';
 import type { App } from './app';
-import { growthHoverText } from './livingCity';
+import { capFirst, growthHoverText } from './livingCity';
 import type { Pointer, Tool } from './toolTypes';
 
 export class SelectTool implements Tool {
@@ -50,7 +50,7 @@ export class SelectTool implements Tool {
     if (gv) {
       const tract = this.tractAt(p.x, p.y);
       if (tract) {
-        const name = app.tractName(tract.index).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+        const name = capFirst(app.tractName(tract.index)).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
         app.tip(`<div class="title">${name}</div><div class="hw-muted">${growthHoverText(tractGrowthSince(tract, gv))}</div>`, p.px);
         return;
       }

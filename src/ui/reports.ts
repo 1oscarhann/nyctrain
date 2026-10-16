@@ -8,8 +8,9 @@ import type { App } from './app';
 import { CHART_TEAL, barChart } from './charts';
 import { h } from './dom';
 import { monthRatingText, ratingTone, yearReviewText } from './opsMoney';
-import type { GrowthMonth, GrowthView } from '../sim/protocol';
-import { boomtownLine, cityRows, fmtSignedCount, fmtSignedPct, MIGRATED_HINT, sandboxMonthBody } from './livingCity';
+import type { GrowthMonth } from '../sim/protocol';
+import { formalTractName } from '../map/placeNames';
+import { boomtownLine, capFirst, cityRows, distinctNames, MIGRATED_HINT, sandboxMonthBody, yearCityLine } from './livingCity';
 import { modal } from './widgets';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -29,16 +30,18 @@ function citySection(app: App, gm: GrowthMonth, close: () => void): HTMLElement 
   const grid = h('div', { class: 'kv', style: 'font-size:14px' });
   for (const [k, v, c] of cityRows(gm)) grid.append(h('div', { class: 'k' }, k), h('div', { class: `v ${c}` }, v));
   const list = h('div', { class: 'list', style: 'margin-top:4px' });
-  for (const b of gm.boomtowns) {
+  // Two boomtowns can share a name ("around Inwood"): each then also shows its formal name.
+  const names = distinctNames(gm.boomtowns.map((b) => b.tract), (i) => app.tractName(i), (i) => (app.world.tracts[i] ? formalTractName(app.world.tracts[i]) : `Tract ${i}`));
+  gm.boomtowns.forEach((b, k) => {
     list.append(
       h(
         'div',
-        { class: 'list-item', style: 'padding:4px 6px', onclick: () => { close(); app.showTract(b.tract); } },
-        h('span', { class: 'grow' }, app.tractName(b.tract)),
+        { class: 'list-item', style: 'padding:4px 6px', title: 'Show this neighbourhood', onclick: () => { close(); app.showTract(b.tract); } },
+        h('span', { class: 'grow' }, capFirst(names[k].name), names[k].detail ? h('span', { class: 'hw-muted', style: 'font-size:12px' }, ` · ${names[k].detail}`) : null),
         h('span', { class: 'num hw-muted', style: 'font-size:12.5px' }, boomtownLine(b)),
       ),
     );
-  }
+  });
   return h(
     'div',
     { class: 'month-city' },
@@ -98,21 +101,6 @@ export function showMonthReport(app: App, m: MonthReport, growth: GrowthMonth | 
     ),
   );
   close = modal(app.root, content);
-}
-
-/**
- * The year in review's City line, from the growth view's month rows: residents and jobs over the
- * year and the value capture paid (null when the city did not grow that year).
- */
-export function yearCityLine(v: GrowthView | null, year: number, startYear: number, totals: { residents: number; jobs: number }): string | null {
-  if (!v || !v.city.length) return null;
-  const rows = v.city.filter((c) => yearOf(c.day) === year);
-  if (!rows.length) return null;
-  const before = v.city.filter((c) => yearOf(c.day) < year).at(-1);
-  const r0 = before?.residents ?? (year <= startYear ? totals.residents : rows[0].residents);
-  const j0 = before?.jobs ?? (year <= startYear ? totals.jobs : rows[0].jobs);
-  const last = rows[rows.length - 1];
-  return `Residents ${fmtCount(last.residents)} (${fmtSignedCount(last.residents - r0)}, ${fmtSignedPct(r0 > 0 ? last.residents / r0 - 1 : 0, 2)}) · jobs ${fmtCount(last.jobs)} (${fmtSignedCount(last.jobs - j0)}) · ${rows.length} growth month${rows.length > 1 ? 's' : ''}`;
 }
 
 /**

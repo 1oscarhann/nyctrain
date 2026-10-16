@@ -90,6 +90,8 @@ Open Government Licence v3.0.
 | Incident / venue marker (map) | Tooltip; a click opens Service alerts focused on it |
 | Menu → City chaos | Off / Calm / Normal / Wild (applies from the next 3 am) |
 | M | Finances panel (toggle): Overview, Fares, Borrowing, Fleet |
+| G | City growth overlay (toggle): growth since 2030 and the value-capture district; tilted (V), new development |
+| Menu → City growth | Off / Steady / Boom (applies from the next month end; a toast confirms) |
 | H | Holding on / off for the selected route (a toast confirms) |
 | Clock toggle (route panel stop list) | Timepoint: trains may be held there to even out gaps (shown while holding is on) |
 
@@ -107,13 +109,13 @@ src/
   cities/         New York and London: regions, goals, copy, naming style; applyCity() switches everything
   core/           geo (local metres around City Hall), calendar (weekdays only), city chaos calendar and weather, units, game state, goals
   data/           world loading, tract index, land mask
-  map/            MapLibre style recolouring, network/station/elevated layers, overlays, naming, city chaos markers
+  map/            MapLibre style recolouring, network/station/elevated layers, overlays (city growth: growthMath.ts), naming and tract names (placeNames.ts), city chaos markers
   construction/   track graph with arc fillets, levels and ramps, validation and costs, tools
   routes/         route pathfinding on track, compilation for the sim, fleet sizing and car sales, operations control settings, route tool, event service estimates
   trains/         kinematics (run profiles), interpolated train layer
   sim/            worker, engine, train sim (moving block, merge locks, holding), regularity, commuters, mode choice, transit graph, city chaos (incidents, event trips), city growth (growth.ts)
   economy/        finance: daily settlement, monthly reports, bonds, bankruptcy, value capture; fares, credit rating and bond market, year in review
-  ui/             app shell, panels, charts, tutorial, menus, city chaos (alert feed, news ticker, Service alerts)
+  ui/             app shell, panels, charts, tutorial, menus, city chaos (alert feed, news ticker, Service alerts), Living City text (livingCity.ts)
   save/           save format, migrations, IndexedDB store, export and import
 scripts/          data pipeline, headless sim, balance tuning, performance check
 tests/            Vitest unit tests and the headless simulation tests
@@ -140,8 +142,8 @@ commuters are rebuilt from the data, scaled by the saved growth, when the save i
 ## Testing each part
 
 ```bash
-npm test                 # all 196 tests (unit + headless, both cities)
-npm run test:unit        # 173: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+npm test                 # all 218 tests (unit + headless, both cities)
+npm run test:unit        # 195: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
                          # chaos (calendar, weather, incidents, train-sim hooks and the watchdog's scope, event
                          # trips, event service, save v3 with today's level), chaos UI (alert text, feed and
                          # ticker order, announcements, cancelled service, wrap-up toasts, London wording and £),
@@ -155,7 +157,10 @@ npm run test:unit        # 173: geometry, costs, ramps, water, pathfinding, logi
                          # model (logsum, growth, bounds, Furness on both cities' data, value capture, history),
                          # agent regeneration equal to a from-scratch build in both cities, the starting city
                          # exactly as before Living City, carry-over, value capture in the ledger, the credit
-                         # scorecard and the year in review, its goals, save v5
+                         # scorecard and the year in review, its goals, save v5, and its UI text in both
+                         # cities (toasts and their selection, the month report's City rows, the tract,
+                         # station and finance lines, goals, the year's City line, units and currency), the
+                         # growth ramp and its span, and tract names (map labels, stations, the fallback)
 npm run test:headless    # 23: 3 days on the test network (with regularity and fares by band and period),
                          # holding against no holding, holding next to Wild chaos and event service, chaos end
                          # to end (closures, event agents, determinism, snow, breakdowns, Off is inert, mid-day
@@ -221,6 +226,12 @@ To check each milestone by hand in `npm run dev`:
    refinance when the market falls below its coupon. Lower a frequency and sell the idle cars
    (route panel or Fleet tab). Skip to a month end for the review (rating toast, rate history)
    and to January for the year in review.
+9. **Living City:** build a line and skip past 31 January. The busy pill says "The city is
+   growing", up to three toasts name the neighbourhoods that grew, and the month report has a
+   City section with the boomtowns. **Show growth map** (or **G**) colours the tracts by growth
+   since 2030 and rings the value-capture district; **V** raises the new development. Click a
+   tract for its growth, index chart and value capture, a station for the value capture paid
+   through it, and open Finances for the month's payment. Menu → City growth switches the pace.
 
 ## Balance
 
@@ -673,9 +684,53 @@ month's last weekday, the same moment the finances close the month, the worker:
 The pace (`Game.growthPace`, saved) is **Off** (the city before Living City, bit for bit),
 **Steady** (new games and migrated saves) or **Boom** (×3). It applies from the next month close.
 Goals: *Boomtown* (a neighbourhood of at least 1,000 people grows 25% since the start year) and
-*Land value pays*. (The growth overlay, the tract and station panels' growth sections, the month
-report's City section, the toasts and the menu switch are the next step; `App` already exposes
-the month's `GrowthMonth`, a cached `GrowthView` and `setGrowthPace`.)
+*Land value pays*.
+
+### In the game
+
+- **Month end.** The busy pill reads "The city is growing" while the worker closes the month (a
+  fraction of a second). Up to three toasts follow: the month's top boomtown when it grew at
+  least 0.3% ("Long Island City is booming: +0.4% this month · +41 residents, +12 jobs · +4.8%
+  since 2030"), then milestones (+10/25/50/100% in green, "is losing people" at −5/−10/−20% in
+  amber). A click flies to the tract and opens its panel.
+- **Month report.** Value capture is its own money row. A **City** section lists residents (with
+  the month's change), jobs, commuters and agents, and the district (tracts and the value
+  increment it pays on), then the five **Boomtowns** (a click opens the tract) and **Show growth
+  map**. The sandbox gets a toast instead ("1.35M riders a day · +2,860 residents").
+- **City growth overlay** (layers button or **G**; G again turns it off). Each tract is drawn in a
+  diverging ramp of its residents + jobs growth since the start: magenta to violet for decline,
+  teal to ice for growth, nothing under ±0.2%. The ramp's ends follow the biggest change so far
+  (±2%, ±5%, ±10%, then ±20%, shown in the legend), so the first months are visible. Thin rings
+  mark the value-capture district (½ mile, or 800 m, around every served station). Tilted (**V**),
+  growing tracts get hexagonal columns, 0.08 m per added resident or job (+2,500 people is a
+  200 m tower). The Residents and Jobs overlays show the city as it is now. The overlay is
+  rebuilt only when new growth arrives (a month close, a network change, a pace change). Hovering
+  a tract shows its name and growth.
+- **Tract panel** (click a neighbourhood). The title is the name the toasts use. Residents and
+  jobs are today's; *Growth since Jan 2030* has their change, the transit benefit (minutes saved
+  per commute) and the land-value premium, an index chart (the start = 100, one point per month
+  end, residents teal and jobs orange), a sentence ("Growing 0.43% a month. Residents here save
+  61 min per commute with your network (city average 7 min).") and the value-capture line ("In the
+  value-capture district (83% of its area) · $1,113/month to the authority · via Inwood", or
+  "Outside the district: no served station within ½ mi").
+- **Station panel.** *Value capture nearby*: the month's levy from the district tracts nearest
+  the station ("$39k/month · 7 tracts"; the tooltip names the tax).
+- **Finances → Overview.** Yesterday's ledger has a Value capture row (non-zero on month-close
+  days), and the month so far once any was paid. The *Value capture (Transit Improvement
+  District)* section counts the district's tracts and gives last month's payment and this
+  month's at today's values. The chart's revenue line is "Revenue (fares + value capture)". The
+  year in review adds value capture to its money line and a City row (residents and jobs over the
+  year, with **Show growth map**).
+- **Menu → City growth:** Off / Steady / Boom with a one-line hint; it applies from the next
+  month end and a toast confirms. **Goals** shows the best tract and the best month so far.
+- **Names.** There is no neighbourhood dataset, so a tract is named after the nearest map place
+  label seen this session within 1.2 km, on land and in the same borough (each city's place
+  classes: London adds villages and hamlets; neighbourhood labels load when you zoom in close),
+  else the nearest served station ("around 36 St"), else its own name ("Queens tract 57",
+  "Camden 028"). When two boomtowns share a name, the report adds their own names.
+- **Older saves** join on Steady. A toast says so when the save loads, and the first month report
+  carries a one-time hint ("Living City: your city now grows around good transit. Menu → City
+  growth.").
 
 **Placement and determinism.** The starting city's agents are placed exactly as before (one
 seeded stream). At the first growth regeneration every agent is placed again once from its own

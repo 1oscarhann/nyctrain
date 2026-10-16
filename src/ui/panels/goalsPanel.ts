@@ -1,7 +1,7 @@
 import { GROWTH } from '../../balance';
 import { goalDefs } from '../../core/goals';
 import { fmtDate } from '../../core/calendar';
-import { tractGrowthSince } from '../../map/overlays';
+import { tractGrowthSince } from '../../map/growthMath';
 import type { App } from '../app';
 import { h } from '../dom';
 import { growthGoalProgress } from '../livingCity';

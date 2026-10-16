@@ -53,7 +53,7 @@ export async function openMenu(app: App): Promise<void> {
   const renderUnits = () => {
     units.replaceChildren(
       ...(['imperial', 'metric'] as const).map((u) =>
-        h('button', { class: app.settings.units === u ? 'on' : '', onclick: () => { app.settings.units = u; setUnits(u); storeSettings(app.settings); renderUnits(); app.refreshPanel(); app.toolbar.update(); } }, u === 'imperial' ? 'Miles, mph' : 'Kilometres, km/h'),
+        h('button', { class: app.settings.units === u ? 'on' : '', onclick: () => { app.settings.units = u; setUnits(u); storeSettings(app.settings); renderUnits(); app.refreshPanel(); app.toolbar.update(); app.legend.set(app.overlays.legend()); } }, u === 'imperial' ? 'Miles, mph' : 'Kilometres, km/h'),
       ),
     );
   };
