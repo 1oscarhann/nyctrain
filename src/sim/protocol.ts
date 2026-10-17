@@ -17,6 +17,10 @@ export interface CStation {
   name: string;
   /** Interchange group index. */
   group: number;
+  /** Four-track sections (v2): compiled index of the cross-platform partner (−1 or absent = none). */
+  pair?: number;
+  /** The partner's track runs the same way along the platform as this one's. */
+  pairSameDir?: boolean;
 }
 
 export interface CElement {
@@ -82,6 +86,8 @@ export interface CRoute {
   shortTurn?: boolean;
   /** Settings fingerprint for App.recompile (holding, timepoints, short turns). */
   opsKey?: string;
+  /** Express service (v2); absent = local. */
+  express?: boolean;
 }
 
 export interface CompiledNetwork {
@@ -90,6 +96,8 @@ export interface CompiledNetwork {
   routes: CRoute[];
   trackCount: number;
   lockCount: number;
+  /** Stations to staff, counting a cross-platform pair as QUAD.pairStaffing (v2); absent = stations.length. */
+  staffedStations?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +260,10 @@ export interface DayReport {
   regularity: RegularityStats;
   /** Living City: present only on the day a growth month closed. */
   growth?: GrowthMonth;
+  /** Four-track sections (v2), per route id: times its trains overtook another route's train between consecutive cross-platform stations. */
+  routeOvertakes?: Record<number, number>;
+  /** Four-track sections (v2), per cross-platform station (key = the lower station id of the pair): people transferring across the platform. */
+  crossTransfers?: Record<number, number>;
 }
 
 export interface FareBreakdown {

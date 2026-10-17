@@ -278,3 +278,52 @@ export function minRadiusOver(geom: EdgeGeom, s0: number, s1: number): number {
   }
   return r;
 }
+
+// ---------------------------------------------------------------------------
+// Four-track sections (v2, docs/v2/express-quad.md §4.1). Re-exported from quad.ts; they live here
+// so network.ts can keep a twin pair parallel without importing the quad construction code.
+
+export interface XY {
+  x: number;
+  y: number;
+}
+
+/**
+ * Twin of vertex v at signed offset d (positive = right of the travel direction p → v → q): the
+ * mitre point v + d·(n(d1) + n(d2)) / (1 + d1·d2), with n(d) = (d.y, −d.x), so |v' − v| = |d| / cos(θ/2)
+ * and both offset segments are exactly |d| from the originals. With one neighbour (a chain end,
+ * p or q null) it is the perpendicular offset. Null when the turn is sharper than about 162°.
+ */
+export function mitre(p: XY | null, v: XY, q: XY | null, d: number): XY | null {
+  const u1 = p ? unit(v.x - p.x, v.y - p.y) : null;
+  const u2 = q ? unit(q.x - v.x, q.y - v.y) : null;
+  const a = u1 ?? u2;
+  const b = u2 ?? u1;
+  if (!a || !b) return null;
+  const den = 1 + a[0] * b[0] + a[1] * b[1];
+  if (den < 0.05) return null;
+  const nx = a[1] + b[1];
+  const ny = -a[0] - b[0];
+  return { x: v.x + (d * nx) / den, y: v.y + (d * ny) / den };
+}
+
+/**
+ * Fillet radius of the twin vertex: concentric with the original, larger on the outside of the
+ * turn. turn = +1 for a left turn (turnSign), d = the twin's signed offset (positive = right).
+ * 0 stays 0 (no curve); an inner radius that would vanish is kept at 1 m so validation reports it.
+ */
+export function concentric(r: number, turn: number, d: number): number {
+  if (!(r > 0)) return 0;
+  return Math.max(1, r + turn * d);
+}
+
+/** +1 if p → v → q turns left (counter-clockwise), −1 right, 0 straight. */
+export function turnSign(p: XY, v: XY, q: XY): -1 | 0 | 1 {
+  const c = (v.x - p.x) * (q.y - v.y) - (v.y - p.y) * (q.x - v.x);
+  return c > 0 ? 1 : c < 0 ? -1 : 0;
+}
+
+function unit(dx: number, dy: number): [number, number] | null {
+  const L = Math.hypot(dx, dy);
+  return L > 1e-9 ? [dx / L, dy / L] : null;
+}

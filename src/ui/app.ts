@@ -728,7 +728,7 @@ export class App implements AppContext {
     if (s) {
       const p = this.game.network.stationPos(s);
       const [lon, lat] = toLonLat(p.x, p.y);
-      this.routeTool.click({ x: p.x, y: p.y, lngLat: [lon, lat], px: [0, 0], shift: false });
+      this.routeTool.click({ x: p.x, y: p.y, lngLat: [lon, lat], px: [0, 0], shift: false, alt: false });
     }
   }
 

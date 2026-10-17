@@ -37,6 +37,8 @@ export interface Route {
   ownedCars: number;
   /** Operations control (v2). */
   control: RouteControl;
+  /** Express service (v2, four-track trunks): drawn with the lozenge bullet. Absent = local. */
+  express?: boolean;
 }
 
 /** One piece of a route path: traverse `edge` from u0 to u1 (edge coordinates from node a). */

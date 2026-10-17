@@ -146,6 +146,51 @@ export const STATION = {
 };
 
 // ---------------------------------------------------------------------------
+// Four-track trunks and express service (v2, docs/v2/express-quad.md §9). Shared by every city:
+// construction costs, levels and the water rule come from TRACK and STATION as for any track.
+export const QUAD = {
+  /** Centre to centre of the two double-track pairs, metres (four tracks at about 4.5 m). */
+  spacing: 9,
+  /** Turnout from the drawn pair to the express pair at a fan end (40 m leads + 70 m diagonal: r ≈ 551 m). */
+  turnoutLength: 150,
+  /** Each half of a scissors crossover (same geometry and speed as a turnout). */
+  crossoverLength: 150,
+  /** Clearance from the end of a straight piece to a turnout or crossover junction. */
+  connectorMargin: 20,
+  /** How far along the stroke a fan's turnout may start before the stroke is refused. */
+  connectorSearch: 1500,
+  /** Shortest express pair (between its two ends or turnouts), about a 10-car train. */
+  minLength: 200,
+  /** Scissors crossovers near free ends, out of the box. */
+  autoCrossovers: true,
+  /** Tolerance for matching partner points and partner ends. */
+  partnerTolerance: 3,
+  /** An existing platform on the other pair this close pairs up with a new one. */
+  pairLinkDistance: 40,
+  /** The express pair shares excavation, structure and right of way (cost × this). */
+  secondPairCostFactor: 0.75,
+  /** Turnouts and crossovers sit inside the four-track box (cost × this). */
+  linkCostFactor: 0.5,
+  /** Each platform of a cross-platform pair costs this share of a lone platform (shared entrances). */
+  pairPlatformCostShare: 0.8,
+  /** Staff of a cross-platform pair, in stations. */
+  pairStaffing: 1.4,
+  /** Seconds to step across an island platform. */
+  crossPlatformTransfer: 15,
+  /** Share of the transfer penalty felt across a platform. */
+  crossPlatformPenaltyFactor: 0.4,
+  /** Route pathfinding: metres added for running through a platform the route does not serve. */
+  passPenalty: 600,
+  /** Route pathfinding: metres added for each turnout or crossover used. */
+  linkPenalty: 250,
+  /** Map: gap between the local and express route bundles, px. */
+  pairGapPx: 3,
+  /** Map: rails of unrouted four-track sections, px. */
+  railWidthPx: 1.3,
+  railGapPx: 1.8,
+};
+
+// ---------------------------------------------------------------------------
 // Trains
 export interface TrainSpec {
   carLength: number;

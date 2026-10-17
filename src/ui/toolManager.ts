@@ -91,6 +91,6 @@ export class ToolManager {
 
   private pointer(e: MapMouseEvent): Pointer {
     const [x, y] = toLocal(e.lngLat.lng, e.lngLat.lat);
-    return { x, y, lngLat: [e.lngLat.lng, e.lngLat.lat], px: [e.originalEvent.clientX, e.originalEvent.clientY], shift: e.originalEvent.shiftKey };
+    return { x, y, lngLat: [e.lngLat.lng, e.lngLat.lat], px: [e.originalEvent.clientX, e.originalEvent.clientY], shift: e.originalEvent.shiftKey, alt: e.originalEvent.altKey };
   }
 }

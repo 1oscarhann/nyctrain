@@ -10,6 +10,8 @@ export interface Pointer {
   /** Screen pixels within the map canvas. */
   px: [number, number];
   shift: boolean;
+  /** Alt (Option) held: the route tool picks the other platform of a cross-platform pair (v2). */
+  alt: boolean;
 }
 
 export interface Tool {
