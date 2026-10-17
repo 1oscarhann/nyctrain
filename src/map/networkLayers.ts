@@ -5,16 +5,21 @@
  * route shows in muted grey with its level styling; routes draw over it in their own colours.
  * Where routes share track they are drawn as parallel lines with per-feature `line-offset`,
  * in a consistent order along the trunk so lines never swap sides.
+ *
+ * Four-track sections (v2, docs/v2/express-quad.md §2.5, §4.10): each pair is pushed a few pixels
+ * away from the other (on top of their 9 m), so the local and express bundles never overlap; an
+ * unrouted built quad shows as four thin rails.
  */
 import type { GeoJSONSource, Map as MLMap, LineLayerSpecification } from 'maplibre-gl';
 
 import type { Feature, FeatureCollection, LineString } from 'geojson';
-import { MAP, type TrackLevel } from '../balance';
+import { MAP, QUAD, type TrackLevel } from '../balance';
 import type { Game, Selection } from '../core/game';
 import { otherEnd } from '../construction/geometry';
 import { edgeReport } from '../construction/validate';
 import { progress } from '../construction/blueprint';
 import type { Network } from '../construction/network';
+import type { TrackEdge } from '../construction/types';
 import { slicePolyline, toLonLatLine } from './polyline';
 import type { Route } from '../routes/types';
 
@@ -105,6 +110,31 @@ export function orientEdges(net: Network): Map<number, boolean> {
   return flip;
 }
 
+/**
+ * Pixel push of each four-track group's pairs (at line scale 1): half its widest route bundle, half
+ * a line and half the gap between the pairs. Keyed by quad group id.
+ */
+export function quadOffsets(net: Network, routesOnEdge: Map<number, readonly unknown[]>): Map<number, number> {
+  const Q = new Map<number, number>();
+  for (const e of net.edges.values()) {
+    const t = e.quad;
+    if (!t || t.role === 'link') continue;
+    const k = Math.max(1, routesOnEdge.get(e.id)?.length ?? 0);
+    const q = ((k - 1) * MAP.interlineSpacingPx) / 2 + MAP.routeLineWidthPx / 2 + QUAD.pairGapPx / 2;
+    Q.set(t.g, Math.max(Q.get(t.g) ?? 0, q));
+  }
+  return Q;
+}
+
+/**
+ * An edge's pair offset in px, in its own a→b frame (positive = right of a→b, MapLibre's
+ * `line-offset` sign): `away` points away from the partner pair. 0 off four-track sections and on
+ * connectors. The drawn offset is −this when the edge is drawn b→a (orientEdges).
+ */
+export function pairOffsetAB(e: TrackEdge, Q: Map<number, number>): number {
+  return e.quad?.away ? e.quad.away * (Q.get(e.quad.g) ?? 0) : 0;
+}
+
 export interface RouteDrawInfo {
   route: Route;
   operational: boolean;
@@ -121,6 +151,8 @@ export class NetworkLayers {
   routeOffsets = new Map<string, number>();
   /** Edge orientation flags (true = drawn b→a). */
   flips = new Map<number, boolean>();
+  /** Four-track pair push per quad group, px at line scale 1 (station capsules use it). */
+  quadOffsets = new Map<number, number>();
 
   constructor(
     private map: MLMap,
@@ -161,8 +193,11 @@ export class NetworkLayers {
     map.addSource(HILITE_SOURCE, { type: 'geojson', data: empty });
     const add = (l: LineLayerSpecification) => map.addLayer(l);
     const base = { type: 'line' as const, layout: { 'line-cap': 'butt' as const, 'line-join': 'round' as const } };
-    const built = (level: TrackLevel): unknown[] => ['all', ['==', ['get', 'status'], 'built'], ['==', ['get', 'level'], level], ['!', ['get', 'routed']]];
+    const built = (level: TrackLevel): unknown[] => ['all', ['==', ['get', 'status'], 'built'], ['==', ['get', 'level'], level], ['!', ['get', 'routed']], ['!', ['get', 'quad']]];
+    const builtQuad = (level: TrackLevel): unknown[] => ['all', ['==', ['get', 'status'], 'built'], ['==', ['get', 'level'], level], ['!', ['get', 'routed']], ['get', 'quad']];
     const elevatedVisible = ['!', ['get', 'hide3d']];
+    // Four-track pairs are pushed apart by `pairOff` px (zoom-scaled like the route offsets).
+    const pairOff = ['interpolate', ['linear'], ['zoom'], ...ZOOM_SCALE.flatMap(([z, k]) => [z, ['*', ['get', 'pairOff'], k]])] as never;
 
     // Selection glow sits under everything.
     add({
@@ -186,16 +221,22 @@ export class NetworkLayers {
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': MUTED, 'line-width': W(3.4), 'line-dasharray': [0.05, 1.8], 'line-opacity': 0.6 },
     });
+    // ---- built four-track pairs without routes: two thin rails per pair (four in all)
+    const rails = (extra: Record<string, unknown> = {}) => ({ 'line-color': MUTED, 'line-width': W(QUAD.railWidthPx), 'line-gap-width': W(QUAD.railGapPx), 'line-offset': pairOff, ...extra });
+    add({ ...base, id: 'hw-quad-elevated', source: NETWORK_SOURCE, filter: ['all', builtQuad('elevated'), elevatedVisible] as never, paint: rails({ 'line-color': '#C9D1D9' }) as never });
+    add({ ...base, id: 'hw-quad-at-grade', source: NETWORK_SOURCE, filter: builtQuad('at-grade') as never, paint: rails() as never });
+    add({ ...base, id: 'hw-quad-cut', source: NETWORK_SOURCE, filter: builtQuad('cut-and-cover') as never, paint: rails({ 'line-dasharray': [3, 1.6] }) as never });
+    add({ ...base, id: 'hw-quad-deep', source: NETWORK_SOURCE, filter: builtQuad('deep') as never, paint: rails({ 'line-dasharray': [1.2, 1.4], 'line-opacity': 0.7 }) as never });
 
     // ---- under construction: animated amber hatching
-    add({ ...base, id: 'hw-construct-frame', source: NETWORK_SOURCE, filter: ['==', ['get', 'status'], 'construction'], paint: { 'line-color': AMBER, 'line-opacity': 0.35, 'line-width': W(8) } });
+    add({ ...base, id: 'hw-construct-frame', source: NETWORK_SOURCE, filter: ['==', ['get', 'status'], 'construction'], paint: { 'line-color': AMBER, 'line-opacity': 0.35, 'line-width': W(8), 'line-offset': pairOff } });
     for (let k = 0; k < 4; k++) {
       add({
         ...base,
         id: `hw-construct-${k}`,
         source: NETWORK_SOURCE,
         filter: ['==', ['get', 'status'], 'construction'],
-        paint: { 'line-pattern': `hw-hatch-${k}`, 'line-width': W(6), 'line-opacity': k === 0 ? 1 : 0, 'line-opacity-transition': { duration: 0, delay: 0 } },
+        paint: { 'line-pattern': `hw-hatch-${k}`, 'line-width': W(6), 'line-offset': pairOff, 'line-opacity': k === 0 ? 1 : 0, 'line-opacity-transition': { duration: 0, delay: 0 } },
       });
     }
 
@@ -227,14 +268,14 @@ export class NetworkLayers {
       id: 'hw-blueprint',
       source: NETWORK_SOURCE,
       filter: ['all', ['==', ['get', 'status'], 'blueprint'], ['get', 'valid']],
-      paint: { 'line-color': '#FFFFFF', 'line-opacity': 0.5, 'line-width': W(3), 'line-dasharray': [2, 1.4] },
+      paint: { 'line-color': '#FFFFFF', 'line-opacity': 0.5, 'line-width': W(3), 'line-dasharray': [2, 1.4], 'line-offset': pairOff },
     });
     add({
       ...base,
       id: 'hw-blueprint-invalid',
       source: NETWORK_SOURCE,
       filter: ['all', ['==', ['get', 'status'], 'blueprint'], ['!', ['get', 'valid']]],
-      paint: { 'line-color': RED, 'line-opacity': 0.95, 'line-width': W(3.4), 'line-dasharray': [2, 1.4] },
+      paint: { 'line-color': RED, 'line-opacity': 0.95, 'line-width': W(3.4), 'line-dasharray': [2, 1.4], 'line-offset': pairOff },
     });
   }
 
@@ -266,6 +307,13 @@ export class NetworkLayers {
         } else l.push({ route: info.route, operational: info.operational, u0, u1 });
       }
     }
+    // Four-track pairs: each group's push (px), and every pair edge's drawn offset.
+    const Q = quadOffsets(net, routesOnEdge);
+    this.quadOffsets = Q;
+    const drawnPairOff = (e: TrackEdge) => {
+      const pab = pairOffsetAB(e, Q);
+      return flips.get(e.id) ? -pab : pab;
+    };
 
     for (const e of net.edges.values()) {
       const g = net.geom(e.id);
@@ -274,6 +322,8 @@ export class NetworkLayers {
       const onEdge = routesOnEdge.get(e.id) ?? [];
       const coveredFully = onEdge.some((r) => r.u0 <= 1 && r.u1 >= L - 1);
       const valid = e.status !== 'blueprint' || edgeReport(net, e.id, game.terrain).ok;
+      const quad = !!e.quad && e.quad.role !== 'link';
+      const pairOff = drawnPairOff(e);
       for (const piece of edgePieces(net, e.id)) {
         let pts = slicePolyline(g.xs, g.ys, g.cum, piece.s0, piece.s1);
         if (flip) pts = pts.reverse();
@@ -281,11 +331,11 @@ export class NetworkLayers {
         const hide3d = is3D && piece.level === 'elevated' && e.status === 'built';
         features.push({
           type: 'Feature',
-          properties: { eid: e.id, level: piece.level, status: e.status, cls: e.cls, valid, routed: coveredFully && e.status === 'built', hide3d },
+          properties: { eid: e.id, level: piece.level, status: e.status, cls: e.cls, valid, routed: coveredFully && e.status === 'built', hide3d, quad, pairOff },
           geometry: { type: 'LineString', coordinates: coords },
         });
         if (hide3d && !coveredFully) {
-          this.elevated3d.push({ path: this.lift(pts, net, e.id, piece.s0, piece.s1, flip), color: [142, 153, 165, 255], offset: 0, casing: true });
+          this.elevated3d.push({ path: this.lift(pts, net, e.id, piece.s0, piece.s1, flip), color: [142, 153, 165, 255], offset: pairOff, casing: true });
         }
       }
       if (e.status === 'construction') {
@@ -301,8 +351,10 @@ export class NetworkLayers {
       const g = net.geom(edgeId);
       const flip = flips.get(edgeId) ?? false;
       const k = list.length;
+      // On a four-track pair the bundle is centred on the pair's push.
+      const base = drawnPairOff(net.edges.get(edgeId)!);
       list.forEach((r, i) => {
-        const offset = (i - (k - 1) / 2) * spacing;
+        const offset = base + (i - (k - 1) / 2) * spacing;
         this.routeOffsets.set(`${edgeId}:${r.route.id}`, flip ? -offset : offset);
         for (const piece of edgePieces(net, edgeId, r.u0, r.u1)) {
           let pts = slicePolyline(g.xs, g.ys, g.cum, piece.s0, piece.s1);

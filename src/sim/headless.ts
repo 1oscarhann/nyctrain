@@ -10,9 +10,11 @@ import { toLocal } from '../core/geo';
 import { LandMask } from '../data/landMask';
 import { TractIndex, type LandCollection, type World } from '../data/world';
 import { WorldTerrain } from '../construction/terrain';
-import { pickEdge } from '../construction/pick';
+import { pickEdge, pickNode } from '../construction/pick';
 import { sampleAt } from '../construction/geometry';
+import { addQuadStroke, partnerPoint, type QuadResult } from '../construction/quad';
 import { stationReport } from '../construction/validate';
+import { expressPattern } from '../routes/express';
 import { compileNetwork, trainsNeeded } from '../routes/compile';
 import { offControl } from '../routes/control';
 import { purchaseFleet } from '../routes/fleet';
@@ -23,7 +25,7 @@ import { dayKpi } from '../economy/finance';
 import { runProfile } from '../trains/kinematics';
 import { Engine, type EngineCallbacks } from './engine';
 import type { CompiledNetwork, CRoute, CRouteDir, DayReport, GrowthData, ModeState } from './protocol';
-import type { Snap } from '../construction/types';
+import type { QuadRole, Snap } from '../construction/types';
 import { edgeReport } from '../construction/validate';
 
 export interface HeadlessGameOptions {
@@ -89,16 +91,21 @@ export function edgeSnapNear(game: Game, p: LonLat, cls: TrackClass = 'heavy'): 
   throw new Error('no straight track to branch from near ' + p);
 }
 
-/** Place a station on the nearest valid spot of the track near a lon/lat. */
-export function stationNear(game: Game, p: LonLat, name: string, cars = STATION.cars.heavy.default): number {
+/**
+ * Place a station on the nearest valid spot of the track near a lon/lat. `role` (four-track
+ * sections, v2) only considers edges of that pair: 'local' places a local-only stop.
+ */
+export function stationNear(game: Game, p: LonLat, name: string, cars = STATION.cars.heavy.default, opts: { role?: QuadRole } = {}): number {
   const [x, y] = toLocal(p[0], p[1]);
   const net = game.network;
-  const hit = pickEdge(net, x, y, 600);
+  const role = opts.role;
+  const hit = pickEdge(net, x, y, 600, role ? (id) => net.edges.get(id)?.quad?.role === role : undefined);
   if (!hit) throw new Error(`no track near station ${name}`);
   // Search this edge and neighbouring ones for the closest valid platform position.
   let best: { edge: number; u: number; d: number } | null = null;
   let why = '';
   for (const e of net.edges.values()) {
+    if (role && e.quad?.role !== role) continue;
     const g = net.geom(e.id);
     for (let u = 0; u <= g.length; u += 10) {
       const q = sampleAt(g.xs, g.ys, g.cum, u);
@@ -114,9 +121,64 @@ export function stationNear(game: Game, p: LonLat, name: string, cars = STATION.
   return game.editBlueprint(() => net.addStation(b.edge, b.u, cars, name).id);
 }
 
+/**
+ * Four-track sections (v2): a quad stroke through lon/lat waypoints (one blueprint edit). The drawn
+ * line is the local pair; the express pair runs on `side` (+1 right of travel, −1 left). Ends snap
+ * like drawLine's (a node or edge snap fans; a quad's free end pair continues; none is free).
+ * Throws if the stroke is refused.
+ */
+export function quadLine(game: Game, pts: LonLat[], level: TrackLevel | TrackLevel[], start: Snap = { kind: 'none' }, end: Snap = { kind: 'none' }, side: 1 | -1 = 1, cls: TrackClass = 'heavy'): QuadResult {
+  const stroke = pts.map((p, i) => {
+    const [x, y] = toLocal(p[0], p[1]);
+    return { x, y, level: Array.isArray(level) ? level[i] : level };
+  });
+  const r = game.editBlueprint(() => addQuadStroke(game.network, stroke, cls, start, end, { side }));
+  if (!r.ok) throw new Error(`quad refused: ${r.fatal}`);
+  return r;
+}
+
+/** Snap to the track node nearest a lon/lat (within `tol` m), e.g. the end of a drawn line. */
+export function nodeSnapNear(game: Game, p: LonLat, tol = 30): Snap {
+  const [x, y] = toLocal(p[0], p[1]);
+  const id = pickNode(game.network, x, y, tol);
+  if (id === null) throw new Error('no track node near ' + p);
+  return { kind: 'node', node: id };
+}
+
+/**
+ * A cross-platform station (v2) on the four-track section nearest a lon/lat: the closest spot of a
+ * local-pair edge where both platforms (the partner opposite on the express pair) are valid, priced
+ * as a pair. Returns [local platform, express platform].
+ */
+export function pairNear(game: Game, p: LonLat, name: string, cars = STATION.cars.heavy.default): [number, number] {
+  const [x, y] = toLocal(p[0], p[1]);
+  const net = game.network;
+  let best: { edge: number; u: number; pe: number; pu: number; d: number } | null = null;
+  let why = '';
+  for (const e of net.edges.values()) {
+    if (e.quad?.role !== 'local') continue;
+    const g = net.geom(e.id);
+    for (let u = 0; u <= g.length; u += 10) {
+      const q = sampleAt(g.xs, g.ys, g.cum, u);
+      const d = Math.hypot(q.x - x, q.y - y);
+      if (d > 700 || (best && d >= best.d)) continue;
+      const pp = partnerPoint(net, e.id, u);
+      if (!pp) continue;
+      const a = stationReport(net, e.id, u, cars, game.terrain, null, { paired: true });
+      const b = stationReport(net, pp.edge, pp.u, cars, game.terrain, null, { paired: true });
+      if (a.ok && b.ok) best = { edge: e.id, u, pe: pp.edge, pu: pp.u, d };
+      else if (!why) why = (a.ok ? b : a).errors[0];
+    }
+  }
+  if (!best) throw new Error(`no valid cross-platform position near ${name}: ${why || 'no four-track section'}`);
+  const b = best;
+  const [l, xp] = game.editBlueprint(() => net.addStationPair(b.edge, b.u, b.pe, b.pu, cars, name));
+  return [l.id, xp.id];
+}
+
 /** A route with its fleet bought. `control` is merged over the game's control for new routes. */
-export function makeRoute(game: Game, name: string, bullet: string, color: string, stops: number[], cars: number, headways: Partial<Record<PeriodId, number>> = {}, cls: TrackClass = 'heavy', control?: Partial<RouteControl>): Route {
-  const r = game.routes.create({ name, bullet, color, cls, stops, cars, headways: { ...defaultHeadways(), ...headways }, ...(control ? { control } : {}) });
+export function makeRoute(game: Game, name: string, bullet: string, color: string, stops: number[], cars: number, headways: Partial<Record<PeriodId, number>> = {}, cls: TrackClass = 'heavy', control?: Partial<RouteControl>, express = false): Route {
+  const r = game.routes.create({ name, bullet, color, cls, stops, cars, headways: { ...defaultHeadways(), ...headways }, ...(control ? { control } : {}), ...(express ? { express } : {}) });
   const res = purchaseFleet(game, r);
   if (!res.ok) throw new Error(`can't buy trains for ${name}: ${res.reason}`);
   return r;
@@ -190,6 +252,131 @@ export function buildTestNetwork(game: Game, headways: { r1?: number; r2?: numbe
   const r1 = makeRoute(game, 'West Side', '1', '#E8443A', [southFerry, chambers, houston, fourteenth, penn, columbus, eightySixth, oneTen, oneThirtySeven, oneEightyFirst, inwood], 8, headways.r1 ? { am: headways.r1, pm: headways.r1 } : {});
   const r2 = makeRoute(game, 'Brooklyn Crosstown', 'B', '#2F7FE0', [columbus, penn, fourteenth, delancey, marcy, flushing, myrtle, bushwick], 8, headways.r2 ? { am: headways.r2, pm: headways.r2 } : {});
   return { r1, r2, errors };
+}
+
+/**
+ * The test network's West Side line with a four-track trunk (v2, docs/v2/express-quad.md §13 test
+ * 31): double track from South Ferry to Houston, a quad from there to 110 St (fanning at both ends,
+ * vertices 2–7 of the West Side waypoints), double track on to Inwood. Cross-platform stations at
+ * 14 St, 34 St–Penn, 72 St and 96 St; local-only stops between them (23, 28, 42, 50 St, Columbus
+ * Circle, 66, 79, 86 and 103 St), so riders from a local stop gain by changing across the platform;
+ * an all-stops local and an express (its Express pattern). Built and running (sandbox: at once).
+ */
+export function buildExpressTestNetwork(game: Game, headways: { local?: number; express?: number } = {}): { local: Route; express: Route; errors: string[]; quad: QuadResult } {
+  const w: LonLat[] = [
+    [-74.0135, 40.7030],
+    [-74.0105, 40.7120],
+    [-74.0072, 40.7255],
+    [-74.0035, 40.7395],
+    [-73.9935, 40.7530],
+    [-73.9818, 40.7685],
+    [-73.9762, 40.7860],
+    [-73.9650, 40.8060],
+    [-73.9505, 40.8255],
+    [-73.9385, 40.8490],
+    [-73.9205, 40.8690],
+  ];
+  drawLine(game, w.slice(0, 3), 'deep');
+  drawLine(game, w.slice(7), 'deep');
+  const quad = quadLine(game, w.slice(2, 8), 'deep', nodeSnapNear(game, w[2]), nodeSnapNear(game, w[7]), 1);
+  const errors: string[] = [];
+  for (const e of game.network.edges.values()) {
+    const r = edgeReport(game.network, e.id, game.terrain);
+    if (!r.ok) errors.push(`edge ${e.id}: ${r.errors.join('; ')}`);
+  }
+  // A point a fraction f along waypoint segment i → i + 1.
+  const at = (i: number, f: number): LonLat => [w[i][0] + (w[i + 1][0] - w[i][0]) * f, w[i][1] + (w[i + 1][1] - w[i][1]) * f];
+  const s = (p: LonLat, n: string, role?: QuadRole) => stationNear(game, p, n, STATION.cars.heavy.default, role ? { role } : {});
+  const loc = (p: LonLat, n: string) => s(p, n, 'local');
+  const pr = (p: LonLat, n: string) => pairNear(game, p, n);
+  const southFerry = s([-74.0128, 40.7045], 'South Ferry');
+  const chambers = s([-74.0098, 40.7150], 'Chambers St');
+  const houston = s([-74.0080, 40.7225], 'Houston St');
+  const fourteenth = pr(at(3, 0.11), '14 St');
+  const twentyThird = loc(at(3, 0.45), '23 St');
+  const twentyEighth = loc(at(3, 0.78), '28 St');
+  const penn = pr(at(4, 0.08), '34 St–Penn');
+  const fortySecond = loc(at(4, 0.4), '42 St');
+  const fiftieth = loc(at(4, 0.72), '50 St');
+  const columbus = loc(at(5, 0.04), 'Columbus Circle');
+  const sixtySixth = loc(at(5, 0.36), '66 St');
+  const seventySecond = pr(at(5, 0.68), '72 St');
+  const seventyNinth = loc(at(6, 0.06), '79 St');
+  const eightySixth = loc(at(6, 0.33), '86 St');
+  const ninetySixth = pr(at(6, 0.6), '96 St');
+  const oneOThird = loc(at(6, 0.85), '103 St');
+  const oneTen = s([-73.9640, 40.8075], '110 St');
+  const oneThirtySeven = s([-73.9497, 40.8270], '137 St');
+  const oneEightyFirst = s([-73.9378, 40.8500], '181 St');
+  const inwood = s([-73.9230, 40.8670], 'Inwood');
+  const cost = game.blueprintSummary().cost;
+  while (!game.finance.canAfford(cost + 2e9) && game.finance.issueBond(game.day)) {
+    /* issue another $1B */
+  }
+  const built = game.build(true);
+  if (!built.ok) errors.push('build failed: ' + built.reason);
+  while (!game.finance.canAfford(2.5e9) && game.finance.issueBond(game.day)) {
+    /* trains */
+  }
+  const allStops = [
+    southFerry, chambers, houston, fourteenth[0], twentyThird, twentyEighth, penn[0], fortySecond, fiftieth, columbus, sixtySixth,
+    seventySecond[0], seventyNinth, eightySixth, ninetySixth[0], oneOThird, oneTen, oneThirtySeven, oneEightyFirst, inwood,
+  ];
+  const hw = (m?: number) => (m ? { am: m, pm: m } : {});
+  const local = makeRoute(game, 'West Side Local', '1', '#E8443A', allStops, 8, hw(headways.local));
+  const express = makeRoute(game, 'West Side Express', '2', '#E8443A', expressPattern(game.network, allStops), 8, hw(headways.express), 'heavy', undefined, true);
+  return { local, express, errors, quad };
+}
+
+/**
+ * London's express test line (v2; call applyCity('london') first): Paddington → Mile End with a
+ * deep four-track trunk from west of Marble Arch along Oxford Street and through the City to east of
+ * Bank (fanning at both ends). Cross-platform stations at Marble Arch, Oxford Circus, Holborn and
+ * Bank; local-only stops at Bond Street, Tottenham Court Road, Chancery Lane and St Paul's; an
+ * all-stops local and its express. Built and running.
+ */
+export function buildLondonExpressTestNetwork(game: Game, headways: { local?: number; express?: number } = {}): { local: Route; express: Route; errors: string[]; quad: QuadResult } {
+  const w: LonLat[] = [[-0.1780, 51.5168], [-0.1585, 51.5136], [-0.1300, 51.5166], [-0.0975, 51.5146], [-0.0886, 51.5133], [-0.0600, 51.5195], [-0.0333, 51.5252]];
+  const at = (i: number, f: number): LonLat => [w[i][0] + (w[i + 1][0] - w[i][0]) * f, w[i][1] + (w[i + 1][1] - w[i][1]) * f];
+  const west = at(0, 0.45), east = at(4, 0.35);
+  drawLine(game, [w[0], west], 'deep');
+  drawLine(game, [east, ...w.slice(5)], 'deep');
+  const quad = quadLine(game, [west, ...w.slice(1, 5), east], 'deep', nodeSnapNear(game, west), nodeSnapNear(game, east), 1);
+  const errors: string[] = [];
+  for (const e of game.network.edges.values()) {
+    const r = edgeReport(game.network, e.id, game.terrain);
+    if (!r.ok) errors.push(`edge ${e.id}: ${r.errors.join('; ')}`);
+  }
+  const s = (p: LonLat, n: string) => stationNear(game, p, n);
+  const loc = (p: LonLat, n: string) => stationNear(game, p, n, STATION.cars.heavy.default, { role: 'local' });
+  const pr = (p: LonLat, n: string) => pairNear(game, p, n)[0];
+  const stops = [
+    s([-0.1755, 51.5162], 'Paddington'),
+    pr([-0.1585, 51.5136], 'Marble Arch'),
+    loc([-0.1494, 51.5142], 'Bond Street'),
+    pr([-0.1415, 51.5152], 'Oxford Circus'),
+    loc([-0.1308, 51.5165], 'Tottenham Court Road'),
+    pr([-0.1200, 51.5163], 'Holborn'),
+    loc([-0.1115, 51.5185], 'Chancery Lane'),
+    loc([-0.0975, 51.5146], "St Paul's"),
+    pr([-0.0886, 51.5133], 'Bank'),
+    s([-0.0726, 51.5165], 'Aldgate East'),
+    s([-0.0597, 51.5194], 'Whitechapel'),
+    s([-0.0340, 51.5250], 'Mile End'),
+  ];
+  const cost = game.blueprintSummary().cost;
+  while (!game.finance.canAfford(cost + 2e9) && game.finance.issueBond(game.day)) {
+    /* issue another bond */
+  }
+  const built = game.build(true);
+  if (!built.ok) errors.push('build failed: ' + built.reason);
+  while (!game.finance.canAfford(2.5e9) && game.finance.issueBond(game.day)) {
+    /* trains */
+  }
+  const hw = (m?: number) => (m ? { am: m, pm: m } : {});
+  const local = makeRoute(game, 'Central Local', 'C', '#E8443A', stops, 8, hw(headways.local));
+  const express = makeRoute(game, 'Central Express', 'X', '#E8443A', expressPattern(game.network, stops), 8, hw(headways.express), 'heavy', undefined, true);
+  return { local, express, errors, quad };
 }
 
 export interface HeadlessRun {
@@ -321,11 +508,19 @@ export const PERF_AREA_NYC: PerfArea = { lon0: -74.02, lonSpan: 0.27, latNs: [40
 /** London's grid of the same size around Charing Cross (≈ 23 × 21 km; 1° of longitude is shorter at 51.5° N). */
 export const PERF_AREA_LONDON: PerfArea = { lon0: -0.29, lonSpan: 0.33, latNs: [51.42, 51.61], lat0: 51.44, latSpan: 0.14, lonEw: [-0.3, 0.06] };
 
-export function buildPerfNetwork(game: Game, opts: { ns?: number; ew?: number; perLine?: number; control?: Partial<RouteControl>; area?: PerfArea } = {}): { routes: Route[]; fleet: number } {
+/**
+ * `quads` (v2) turns that many of the north–south lines (spread across the grid) into free/free
+ * four-track lines: cross-platform stations at the terminals and every third stop, local-only stops
+ * between, an all-stops local and an express (its Express pattern) at the same headways.
+ */
+export function buildPerfNetwork(game: Game, opts: { ns?: number; ew?: number; perLine?: number; control?: Partial<RouteControl>; area?: PerfArea; quads?: number } = {}): { routes: Route[]; fleet: number } {
   const ns = opts.ns ?? 17, ew = opts.ew ?? 8, perLine = opts.perLine ?? 12;
   const ar = opts.area ?? PERF_AREA_NYC;
   const net = game.network;
   const cars = STATION.cars.heavy.default;
+  const nq = Math.max(0, Math.min(ns, Math.floor(opts.quads ?? 0)));
+  const quadLines = new Set<number>();
+  for (let j = 0; j < nq; j++) quadLines.add(Math.min(ns - 1, Math.floor(((j + 0.5) * ns) / nq)));
   // North–south lines, then crosstown lines across them.
   const strokes: LonLat[][] = [];
   for (let i = 0; i < ns; i++) {
@@ -337,7 +532,30 @@ export function buildPerfNetwork(game: Game, opts: { ns?: number; ew?: number; p
     strokes.push([[ar.lonEw[0], lat], [ar.lonEw[1], lat + 0.005]]);
   }
   const lines: number[][] = [];
+  const expressLines: { line: number; stops: number[] }[] = [];
   for (let i = 0; i < strokes.length; i++) {
+    if (quadLines.has(i)) {
+      const q = quadLine(game, strokes[i], 'deep');
+      // The long local edge between the scissors near the two ends.
+      const edge = q.local.reduce((m, id) => (net.geom(id).length > net.geom(m).length ? id : m));
+      const L = net.geom(edge).length;
+      const us: number[] = [];
+      let last = -Infinity;
+      for (let u = 300; u < L - 200 && us.length < perLine; u += 50) {
+        if (u - last < 950 || !stationReport(net, edge, u, cars, game.terrain, null, { paired: true }).ok) continue;
+        us.push(u);
+        last = u;
+      }
+      const stops = us.map((u, k) => {
+        const name = `L${i + 1} S${k + 1}`;
+        const pp = k === 0 || k === us.length - 1 || k % 3 === 0 ? partnerPoint(net, edge, u) : null;
+        if (pp && stationReport(net, pp.edge, pp.u, cars, game.terrain, null, { paired: true }).ok) return game.editBlueprint(() => net.addStationPair(edge, u, pp.edge, pp.u, cars, name)[0].id);
+        return game.editBlueprint(() => net.addStation(edge, u, cars, name).id);
+      });
+      lines.push(stops);
+      expressLines.push({ line: i, stops });
+      continue;
+    }
     const [edge] = drawLine(game, strokes[i], 'deep');
     const L = net.geom(edge).length;
     const stops: number[] = [];
@@ -353,6 +571,11 @@ export function buildPerfNetwork(game: Game, opts: { ns?: number; ew?: number; p
   const routes = lines
     .filter((s) => s.length >= 2)
     .map((stops, i) => makeRoute(game, `Line ${i + 1}`, String(i + 1), ROUTE_COLORS[i % ROUTE_COLORS.length], stops, cars, { am: 2.5, pm: 2.5, midday: 5 }, 'heavy', opts.control));
+  for (const x of expressLines) {
+    if (x.stops.length < 2) continue;
+    const stops = expressPattern(net, x.stops);
+    if (stops.length >= 2) routes.push(makeRoute(game, `Line ${x.line + 1} Express`, `${x.line + 1}X`, ROUTE_COLORS[x.line % ROUTE_COLORS.length], stops, cars, { am: 2.5, pm: 2.5, midday: 5 }, 'heavy', opts.control, true));
+  }
   return { routes, fleet: routes.reduce((s, r) => s + Math.floor(r.ownedCars / r.cars), 0) };
 }
 

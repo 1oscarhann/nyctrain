@@ -2,6 +2,10 @@
  * Route panel (daily ridership, service regularity, peak-hour load profile per segment and
  * direction, trains in service, lateness, the frequency, train length and operations control
  * editor, timepoints in the stop list) and the route editor used by the route tool.
+ *
+ * Express service (v2, docs/v2/express-quad.md §2.3): the Service section (Local / Express, the
+ * Express pattern and All stops buttons), the Line list (every station along the line, served or
+ * skipped, with Skip / Stop here) and the Overtakes card.
  */
 import { OPERATIONS, OPS_CONTROL, STATION, TRAINS } from '../../balance';
 import { cap } from '../../construction/describe';
@@ -11,6 +15,8 @@ import { trainsNeeded } from '../../routes/compile';
 import { suggestTimepoints } from '../../routes/control';
 import { carSaleValue, fleetPlan, purchaseFleet } from '../../routes/fleet';
 import type { RouteTool } from '../../routes/routeTool';
+import { allStopsPattern, expressPattern, serveStops, skipStops, stationsAlongRoute, type AlongStation } from '../../routes/express';
+import { lineRows, OVERTAKES_TIP, overtakesValue, routeOnQuad, SERVICE_TIP, skipsText, type LineRow } from '../express';
 import { maxCarsFor } from '../../routes/routeSet';
 import { PERIOD_IDS, ROUTE_COLORS, type PeriodId, type Route, type RouteControl } from '../../routes/types';
 import type { RouteRegularityDetail } from '../../sim/protocol';
@@ -31,6 +37,8 @@ interface RouteDetail {
   inService: number;
   /** Operations control (v2): headway regularity (null when the route isn't in the compiled network). */
   regularity?: RouteRegularityDetail | null;
+  /** Four-track sections (v2): overtakes of another route's train so far today (the worker's 'route' reply). */
+  overtakesToday?: number;
 }
 
 const PERIOD_LABEL: Record<PeriodId, string> = { night: 'Night 0–6', am: 'AM peak 6–10', midday: 'Midday 10–16', pm: 'PM peak 16–20', evening: 'Evening 20–24' };
@@ -110,7 +118,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
   const net = game.network;
   const path = game.routes.path(net, r);
   const op = game.routes.operational(net, r);
-  const sh = shell(`Route · ${cap(r.cls)} metro · ${r.cars} cars`, r.name, () => game.select(null), bullet(r.color, r.bullet, 34));
+  const sh = shell(`Route · ${r.express ? 'Express · ' : ''}${cap(r.cls)} metro · ${r.cars} cars`, r.name, () => game.select(null), bullet(r.color, r.bullet, 34, r.express));
   const body = sh.body;
   const tip = (el: HTMLElement, title: string, text?: string, key?: string) => attachTip(el, app.tooltip, title, key, text);
   if (!op.ok) body.append(h('div', { class: path.ok ? 'warn' : 'err' }, op.reason ?? 'Not running'));
@@ -136,48 +144,100 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
   const dirty = () => draft.cars !== r.cars || PERIOD_IDS.some((p) => draft.headways[p] !== r.headways[p]) || !sameControl(draft.control, r.control);
   const draftRoute = (): Route => ({ ...r, headways: draft.headways, cars: draft.cars, control: draft.control });
 
-  // Stops (with timepoint toggles while holding is on)
-  const stops = h('div', { class: 'list', style: 'margin-top:4px' });
+  // The Line list (v2): every station along the line in direction-0 order, served or skipped,
+  // with timepoint toggles on served stops while holding is on.
+  const along: AlongStation[] = path.ok ? stationsAlongRoute(net, r.id, r.stops, path) : [];
+  const stopS = path.ok ? path.stopS : [];
+  const inLine = (a: AlongStation) => a.served || (a.s >= (stopS[0] ?? 0) - 1 && a.s <= (stopS[stopS.length - 1] ?? Infinity) + 1);
+  const rows: LineRow[] = lineRows(net, r, game.routes.list(), along.filter(inLine));
+  const skipped = rows.filter((x) => !x.served).length;
+  const stops = h('div', { class: 'list line-list', style: `margin-top:4px;--rc:${r.color}` });
   const renderStops = () => {
     stops.replaceChildren();
-    r.stops.forEach((sid, i) => {
-      const s = net.stations.get(sid);
-      if (!s) return;
-      const others = game.routes.list().filter((o) => o.id !== r.id && o.stops.includes(sid));
+    const timepointToggle = (sid: number, name: string, i: number) => {
       const mid = i > 0 && i < r.stops.length - 1;
+      if (!mid || !draft.control.hold) return null;
       const on = draft.control.timepoints.includes(sid);
-      let toggle: HTMLElement | null = null;
-      if (mid && draft.control.hold) {
-        toggle = h(
-          'button',
-          {
-            class: `tp-toggle${on ? ' on' : ''}`,
-            'aria-pressed': on ? 'true' : 'false',
-            'aria-label': `Timepoint at ${s.name}`,
-            onclick: (e: Event) => {
-              e.stopPropagation();
-              const tps = draft.control.timepoints;
-              draft.control.timepoints = on ? tps.filter((x) => x !== sid) : r.stops.filter((x) => x === sid || tps.includes(x));
-              renderStops();
-              renderOps();
-              renderFoot();
-            },
+      const toggle = h(
+        'button',
+        {
+          class: `tp-toggle${on ? ' on' : ''}`,
+          'aria-pressed': on ? 'true' : 'false',
+          'aria-label': `Timepoint at ${name}`,
+          onclick: (e: Event) => {
+            e.stopPropagation();
+            const tps = draft.control.timepoints;
+            draft.control.timepoints = on ? tps.filter((x) => x !== sid) : r.stops.filter((x) => x === sid || tps.includes(x));
+            renderStops();
+            renderOps();
+            renderFoot();
           },
-          svgIcon(ICONS.clock),
-        );
-        tip(toggle, on ? `Timepoint at ${s.name}` : `Make ${s.name} a timepoint`, TIMEPOINT_TIP);
+        },
+        svgIcon(ICONS.clock),
+      );
+      tip(toggle, on ? `Timepoint at ${name}` : `Make ${name} a timepoint`, TIMEPOINT_TIP);
+      return toggle;
+    };
+    if (!rows.length) {
+      // No path: the stop list as it is.
+      r.stops.forEach((sid, i) => {
+        const s = net.stations.get(sid);
+        if (!s) return;
+        stops.append(h('div', { class: 'list-item', onclick: () => game.select({ kind: 'station', id: sid }) }, h('span', { class: 'hw-muted num', style: 'width:18px' }, String(i + 1)), h('span', { class: 'grow' }, s.name)));
+      });
+      return;
+    }
+    for (const row of rows) {
+      const sid = row.station;
+      const i = row.served ? row.stopNo - 1 : -1;
+      const on = row.served && draft.control.timepoints.includes(sid);
+      let action: HTMLElement | null = null;
+      if (row.served && row.terminal) {
+        action = h('span', { class: 'line-term' }, 'terminal');
+        tip(action, 'Terminal', "Terminals can't be skipped — shorten the route instead");
+      } else if (row.served) {
+        action = h('button', { class: 'hw-btn ghost small', onclick: (e: Event) => { e.stopPropagation(); editStops(skipStops(net, r.stops, sid), `${row.name} skipped`); } }, 'Skip');
+      } else {
+        action = h('button', { class: 'hw-btn ghost small', onclick: (e: Event) => { e.stopPropagation(); editStops(serveStops(net, r.cls, r.stops, path, sid), `Stops at ${row.name}`); } }, 'Stop here');
       }
       stops.append(
         h(
           'div',
-          { class: `list-item${on && draft.control.hold ? ' tp-on' : ''}`, onclick: () => game.select({ kind: 'station', id: sid }) },
-          h('span', { class: 'hw-muted num', style: 'width:18px' }, String(i + 1)),
-          h('span', { class: 'grow' }, s.name),
-          ...others.map((o) => bullet(o.color, o.bullet, 16)),
-          toggle,
+          { class: `list-item line-row${row.served ? '' : ' skipped'}${on && draft.control.hold ? ' tp-on' : ''}`, onclick: () => game.select({ kind: 'station', id: sid }) },
+          h('span', { class: 'line-mark' }),
+          h('span', { class: 'hw-muted num', style: 'width:18px' }, row.served ? String(row.stopNo) : ''),
+          h('span', { class: 'grow' }, row.name, row.tag ? h('span', { class: 'line-tag' }, ` ${row.tag}`) : null),
+          ...row.others.map((o) => bullet(o.color, o.bullet, 16, o.express)),
+          row.served ? timepointToggle(sid, row.name, i) : null,
+          action,
         ),
       );
-    });
+    }
+  };
+  /** Change the stop list (and express flag) at once: checked by pathfinding and the fleet purchase, reverted with a toast. */
+  const editStops = (res: { stops: number[] } | { error: string }, done?: string, express?: boolean) => {
+    if ('error' in res) {
+      app.toast(`Can't change ${r.name}`, res.error, 'red');
+      return;
+    }
+    const before = { stops: [...r.stops], express: !!r.express, control: structuredClone(r.control) };
+    game.routes.update(r.id, { stops: res.stops, ...(express !== undefined ? { express } : {}) });
+    const p2 = game.routes.path(game.network, r);
+    if (!p2.ok) {
+      game.routes.update(r.id, before);
+      app.toast(`Can't change ${r.name}`, p2.error ?? 'No path along the track', 'red');
+      return;
+    }
+    const res2 = purchaseFleet(game, r);
+    if (!res2.ok) {
+      game.routes.update(r.id, before);
+      app.toast("Can't afford the trains", `${fmtMoney(res2.cost)} needed`, 'red');
+      return;
+    }
+    if (res2.cost) app.toast('Trains bought', fmtMoney(res2.cost), 'amber');
+    else if (done) app.toast(done, `${r.name} · trains restart on the new pattern`, 'green');
+    game.events.emit('routes', undefined);
+    game.select({ kind: 'route', id: r.id });
   };
 
   // Service regularity and the load profile
@@ -324,7 +384,29 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
     );
   };
   renderService();
+  // Service (v2): local or express, and the two patterns (shown when the route can use four tracks).
+  const serviceSec = h('div');
+  if (r.express || routeOnQuad(net, r.stops) || rows.some((x) => x.partner !== undefined)) {
+    const kind = h(
+      'div',
+      { class: 'seg' },
+      h('button', { class: r.express ? '' : 'on', onclick: () => r.express && editStops({ stops: [...r.stops] }, `${r.name} is a local`, false) }, 'Local'),
+      h('button', { class: r.express ? 'on' : '', onclick: () => !r.express && editStops({ stops: [...r.stops] }, `${r.name} is an express`, true) }, 'Express'),
+    );
+    tip(kind, r.express ? 'Express' : 'Local', r.express ? SERVICE_TIP.express : SERVICE_TIP.local);
+    const pattern = h('button', { class: 'hw-btn small', onclick: () => editStops({ stops: expressPattern(net, r.stops) }, 'Express pattern', true) }, 'Express pattern');
+    tip(pattern, 'Express pattern', SERVICE_TIP.pattern);
+    const all = h('button', { class: 'hw-btn small', onclick: () => editStops({ stops: path.ok ? allStopsPattern(net, r.cls, r.stops, path) : [...r.stops] }, 'All stops') }, 'All stops');
+    tip(all, 'All stops', SERVICE_TIP.allStops);
+    const skips = skipsText(along.filter(inLine));
+    serviceSec.append(
+      section('Service'),
+      h('div', { class: 'ops-row' }, h('span', { class: 'lbl' }, 'Runs as'), h('div', { class: 'ctl' }, kind)),
+      h('div', { class: 'ops-row' }, h('span', { class: 'lbl' }, 'Pattern'), h('div', { class: 'ctl' }, pattern, all), h('div', { class: 'note' }, skips ? `${skips} along the line` : 'Stops at every station along the line')),
+    );
+  }
   body.append(
+    serviceSec,
     section('Frequency'),
     service,
     frequencyTable(draft.headways, (p, v) => { draft.headways[p] = v; changed(); }),
@@ -333,7 +415,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
     section('Operations'),
     ops,
     h('div', { style: 'margin-top:8px' }, fleetWrap),
-    section(`Stops (${r.stops.length}) · ${fmtDistance(path.length || 0)}`),
+    section(`Line · ${r.stops.length} stops${skipped ? `, skips ${skipped}` : ''} · ${fmtDistance(path.length || 0)}`),
     stops,
     h(
       'div',
@@ -358,12 +440,20 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
     const lateness = app.report?.routeLateness[r.id];
     const late = statCard('Avg lateness', lateness !== undefined ? `${Math.round(lateness)} s` : '—', lateness !== undefined && lateness > 120 ? 'red' : lateness !== undefined && lateness > 45 ? 'amber' : undefined);
     tip(late, 'Average lateness (yesterday)', LATENESS_TIP);
-    stats.replaceChildren(
+    const cards = [
       statCard('Riders yesterday', fmtCount(detail?.ridersYesterday ?? app.report?.routeRiders[r.id] ?? 0)),
       statCard('Riders today', fmtCount(detail?.ridersToday ?? 0)),
       statCard('Trains in service', `${detail?.inService ?? 0} / ${Math.floor(r.ownedCars / r.cars)}`),
       late,
-    );
+    ];
+    // Four-track sections (v2): overtakes between cross-platform stations.
+    if (r.express || routeOnQuad(net, r.stops)) {
+      const rep = app.report?.routeOvertakes;
+      const card = statCard('Overtakes yesterday', overtakesValue(rep ? (rep[r.id] ?? 0) : undefined, detail?.overtakesToday));
+      tip(card, 'Overtakes yesterday', OVERTAKES_TIP);
+      cards.push(card);
+    }
+    stats.replaceChildren(...cards);
   };
   const renderReg = () => {
     const d = regDetail();
@@ -448,19 +538,70 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
 export function routeEditor(app: App, tool: RouteTool): Panel {
   const d = tool.draft;
   const game = app.game;
-  const sh = shell(d?.editing !== null && d ? 'Edit route' : 'New route', d?.name || 'Click stations in order', () => tool.cancel(), d ? bullet(d.color, d.bullet || '?', 34) : null);
+  const sh = shell(d?.editing !== null && d ? 'Edit route' : 'New route', d?.name || 'Click stations in order', () => tool.cancel(), d ? bullet(d.color, d.bullet || '?', 34, d.express) : null);
   const body = sh.body;
   if (!d) return { el: sh.el };
   const net = game.network;
-  body.append(h('div', { class: 'opt-hint' }, 'Click stations on the map in order. Click a stop again to remove it; Shift-click adds at the start. The path follows connected track automatically.'));
-  // Stops
-  const list = h('div', { class: 'list', style: 'margin:8px 0' });
-  d.stops.forEach((sid, i) => {
-    const s = net.stations.get(sid);
-    list.append(h('div', { class: 'list-item' }, h('span', { class: 'hw-muted num', style: 'width:18px' }, String(i + 1)), h('span', { class: 'grow' }, s?.name ?? '?'), h('button', { class: 'hw-btn ghost small', onclick: () => { d.stops.splice(i, 1); tool.recompute(); } }, '✕')));
-  });
+  body.append(h('div', { class: 'opt-hint' }, 'Click stations on the map in order. Click a stop again to remove it; Shift-click adds at the start; a station the line already runs past is added in order. The path follows connected track automatically.'));
+  // Local or express (E): which platform of a cross-platform station a click picks, and the bullet.
+  const kind = h(
+    'div',
+    { class: 'seg' },
+    h('button', { class: d.express ? '' : 'on', onclick: () => tool.setExpress(false) }, 'Local'),
+    h('button', { class: d.express ? 'on' : '', onclick: () => tool.setExpress(true) }, 'Express'),
+  );
+  attachTip(kind, app.tooltip, d.express ? 'Express' : 'Local', 'E', d.express ? SERVICE_TIP.express : SERVICE_TIP.local);
+  const kindRow = h('div', { class: 'ops-row' }, h('span', { class: 'lbl' }, 'Runs as'), h('div', { class: 'ctl' }, kind));
+  if (d.stops.length >= 2 && (d.express || routeOnQuad(net, d.stops) || tool.along.some((a) => a.partner !== undefined))) {
+    const pat = h('button', { class: 'hw-btn small', onclick: () => { d.stops = expressPattern(net, d.stops); d.express = true; tool.recompute(); } }, 'Express pattern');
+    attachTip(pat, app.tooltip, 'Express pattern', undefined, SERVICE_TIP.pattern);
+    const all = h('button', { class: 'hw-btn small', disabled: !tool.path?.ok, onclick: () => { if (tool.path?.ok && d.cls) { d.stops = allStopsPattern(net, d.cls, d.stops, tool.path); tool.recompute(); } } }, 'All stops');
+    attachTip(all, app.tooltip, 'All stops', undefined, SERVICE_TIP.allStops);
+    kindRow.append(h('span', { class: 'lbl' }, 'Pattern'), h('div', { class: 'ctl' }, pat, all));
+  }
+  body.append(kindRow);
+  // The line: stops in order, and the stations the path runs past (Stop here inserts in order).
+  const list = h('div', { class: 'list line-list', style: `margin:8px 0;--rc:${d.color}` });
+  const along = tool.along;
+  if (along.length && tool.path?.ok && d.cls) {
+    const p = tool.path;
+    const cls = d.cls;
+    for (const a of along) {
+      const s = net.stations.get(a.station);
+      const i = a.served ? d.stops.indexOf(a.station) : -1;
+      if (!a.served && (a.s < (p.stopS[0] ?? 0) - 1 || a.s > (p.stopS[p.stopS.length - 1] ?? Infinity) + 1)) continue;
+      list.append(
+        h(
+          'div',
+          { class: `list-item line-row${a.served ? '' : ' skipped'}` },
+          h('span', { class: 'line-mark' }),
+          h('span', { class: 'hw-muted num', style: 'width:18px' }, a.served ? String(i + 1) : ''),
+          h('span', { class: 'grow' }, s?.name ?? '?', !a.served ? h('span', { class: 'line-tag' }, a.where === 'beside' ? ' on the other pair' : ' passes') : null),
+          a.served
+            ? h('button', { class: 'hw-btn ghost small', onclick: () => { d.stops.splice(i, 1); tool.recompute(); } }, '✕')
+            : h('button', {
+                class: 'hw-btn ghost small',
+                onclick: () => {
+                  const res = serveStops(net, cls, d.stops, p, a.station);
+                  if ('error' in res) app.toast(`Can't stop at ${s?.name ?? 'this station'}`, res.error, 'red');
+                  else {
+                    d.stops = res.stops;
+                    tool.recompute();
+                  }
+                },
+              }, 'Stop here'),
+        ),
+      );
+    }
+  } else {
+    d.stops.forEach((sid, i) => {
+      const s = net.stations.get(sid);
+      list.append(h('div', { class: 'list-item' }, h('span', { class: 'hw-muted num', style: 'width:18px' }, String(i + 1)), h('span', { class: 'grow' }, s?.name ?? '?'), h('button', { class: 'hw-btn ghost small', onclick: () => { d.stops.splice(i, 1); tool.recompute(); } }, '✕')));
+    });
+  }
   if (!d.stops.length) list.append(h('div', { class: 'hw-muted', style: 'padding:6px 0' }, 'No stations yet'));
-  body.append(section(`Stops (${d.stops.length})`), list);
+  const skips = skipsText(along.filter((a) => a.served || !tool.path?.ok || (a.s >= (tool.path.stopS[0] ?? 0) - 1 && a.s <= (tool.path.stopS[tool.path.stopS.length - 1] ?? Infinity) + 1)));
+  body.append(section(`Stops (${d.stops.length})${skips ? ` · ${skips}` : ''}`), list);
   if (tool.path && !tool.path.ok) body.append(h('div', { class: 'err' }, tool.path.error ?? 'No path'));
   else if (tool.path?.ok) body.append(h('div', { class: 'ok' }, `Path found · ${fmtDistance(tool.path.length)}`));
   // Name / bullet / colour
@@ -512,8 +653,8 @@ export function routesList(app: App): Panel {
       h(
         'div',
         { class: 'list-item', onclick: () => game.select({ kind: 'route', id: r.id }) },
-        bullet(r.color, r.bullet, 24),
-        h('span', { class: 'grow' }, r.name, h('div', { class: op.ok ? 'hw-muted' : 'hw-amber', style: 'font-size:11.5px' }, op.ok ? `${r.stops.length} stops` : op.reason ?? '', op.ok && tag ? h('span', { class: `hw-${tag.tone}` }, ` · ${tag.text}`) : null)),
+        bullet(r.color, r.bullet, 24, r.express),
+        h('span', { class: 'grow' }, r.name, h('div', { class: op.ok ? 'hw-muted' : 'hw-amber', style: 'font-size:11.5px' }, op.ok ? `${r.express ? 'Express · ' : ''}${r.stops.length} stops` : op.reason ?? '', op.ok && tag ? h('span', { class: `hw-${tag.tone}` }, ` · ${tag.text}`) : null)),
         h('span', { class: 'num' }, fmtCount(app.report?.routeRiders[r.id] ?? 0)),
       ),
     );

@@ -233,7 +233,8 @@ export class ChaosController {
         let acc = 0;
         served.forEach((si, i) => {
           let b = 0;
-          if (hourly) for (let h = 0; h < 24; h++) b += hourly[si * 24 + h];
+          const pj = net.stations[si].pair;
+          if (hourly) for (let h = 0; h < 24; h++) b += hourly[si * 24 + h] + (pj !== undefined && pj >= 0 ? hourly[pj * 24 + h] : 0);
           acc += 1 + b / CHAOS.police.busyWeight;
           cdf[i] = acc;
         });
@@ -390,16 +391,23 @@ export class ChaosController {
     this.started({ alert, kind: 'sick', until, trainId: tr.id }, dur);
   }
 
-  /** Police activity: the station closes; trains run through. */
+  /**
+   * Police activity: the station closes; trains run through. A cross-platform pair (v2) is one
+   * station complex with shared entrances, so both of its platforms close.
+   */
   private firePolice(si: number, dur: number, t: number): number {
     const net = this.net!;
     const st = net.stations[si];
     if (!st) return -1;
     const id = this.newId(t);
     const until = t + dur;
-    this.closedUntil[si] = Math.max(this.closedUntil[si], until);
-    this.commuters?.evictStation(si, this.closedUntil[si], t);
-    const routes = net.routes.filter((r) => r.dirs.some((d) => d.stopStation.includes(si))).map((r) => r.id);
+    const pj = st.pair !== undefined && st.pair >= 0 && net.stations[st.pair] ? st.pair : -1;
+    const closed = pj >= 0 ? [si, pj] : [si];
+    for (const k of closed) {
+      this.closedUntil[k] = Math.max(this.closedUntil[k], until);
+      this.commuters?.evictStation(k, this.closedUntil[k], t);
+    }
+    const routes = net.routes.filter((r) => r.dirs.some((d) => closed.some((k) => d.stopStation.includes(k)))).map((r) => r.id);
     const alert: Alert = {
       id,
       kind: 'police',
@@ -411,6 +419,7 @@ export class ChaosController {
       place: st.name,
       routes,
       stationId: st.id,
+      ...(pj >= 0 ? { partnerStationId: net.stations[pj].id } : {}),
       pos: [st.x, st.y],
     };
     this.started({ alert, kind: 'police', until }, dur);
@@ -557,10 +566,14 @@ export class ChaosController {
   }
 
   // ------------------------------------------------------------------ helpers
+  /**
+   * Stations a police incident can close: those routes call at, a cross-platform pair once (under
+   * its lower index; closing either closes both), its weight from both platforms' boardings.
+   */
   private servedStations(): number[] {
     const net = this.net!;
     const s = new Set<number>();
-    for (const r of net.routes) for (const d of r.dirs) for (const si of d.stopStation) s.add(si);
+    for (const r of net.routes) for (const d of r.dirs) for (const si of d.stopStation) s.add(pairRoot(net, si));
     return [...s].sort((a, b) => a - b);
   }
 
@@ -588,6 +601,12 @@ export class ChaosController {
     const b = st[dir.stopStation[Math.min(dir.stopStation.length - 1, next)]]?.name ?? '';
     return a === b ? b : `between ${a} and ${b}`;
   }
+}
+
+/** A station's pair key (v2): the lower compiled index of its cross-platform pair, else itself. */
+function pairRoot(net: CompiledNetwork, si: number): number {
+  const p = net.stations[si]?.pair;
+  return p !== undefined && p >= 0 && p < si ? p : si;
 }
 
 /** Point (local metres) at path distance s along a route direction. */

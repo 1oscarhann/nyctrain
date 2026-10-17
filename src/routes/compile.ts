@@ -3,7 +3,7 @@
  * operational routes with paths, speed limits, directed track elements, junction merge locks
  * and timetables.
  */
-import { OPERATIONS, TRAINS, type TrackLevel } from '../balance';
+import { OPERATIONS, QUAD, TRAINS, type TrackLevel } from '../balance';
 import type { Game } from '../core/game';
 import { curveSpeed, otherEnd } from '../construction/geometry';
 import type { Network } from '../construction/network';
@@ -294,6 +294,8 @@ function compileRoute(
     hold: r.control.hold ? r.control.holdFraction : 0,
     shortTurn: r.control.shortTurn,
     opsKey: opsKey(r.control),
+    // Express service (v2): only set on expresses, so a local's compiled route is as before.
+    ...(r.express ? { express: true } : {}),
   };
 }
 
@@ -306,6 +308,17 @@ export function compileNetwork(game: Game): CompileResult {
     stationIndex.set(s.id, i);
     const p = net.stationPos(s);
     return { id: s.id, x: p.x, y: p.y, name: s.name, group: ic.groupOf.get(s.id) ?? i };
+  });
+  // Four-track sections (v2): cross-platform pairs whose platforms are both built. A pair is one
+  // station complex for staffing (QUAD.pairStaffing stations). Nothing is added without pairs.
+  let pairs = 0;
+  builtStations.forEach((s, i) => {
+    const j = s.pair !== undefined ? stationIndex.get(s.pair) : undefined;
+    if (j === undefined || j === i) return;
+    const a = net.stationPos(s), b = net.stationPos(builtStations[j]);
+    stations[i].pair = j;
+    stations[i].pairSameDir = a.hx * b.hx + a.hy * b.hy >= 0;
+    if (i < j) pairs++;
   });
   const trackMap = new Map<number, number>();
   const trackIdx = (edge: number, dir: 0 | 1) => {
@@ -325,7 +338,14 @@ export function compileNetwork(game: Game): CompileResult {
     routes.push(c);
   }
   return {
-    net: { version: net.version * 1000 + game.routes.version, stations, routes, trackCount: trackMap.size, lockCount: locks.size },
+    net: {
+      version: net.version * 1000 + game.routes.version,
+      stations,
+      routes,
+      trackCount: trackMap.size,
+      lockCount: locks.size,
+      ...(pairs ? { staffedStations: stations.length - pairs * (2 - QUAD.pairStaffing) } : {}),
+    },
     routeIndex,
     stationIndex,
   };

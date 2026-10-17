@@ -11,7 +11,7 @@ import { flatFares, type FarePolicy } from '../economy/fares';
 import { Growth, servedStations, type Benefits } from './growth';
 import { emptyStats } from './regularity';
 import type { Alert, ChaosInit, CompiledNetwork, DayChaosInfo, DayReport, GrowthData, GrowthMonth, GrowthView, LiveStats, ModeState, ServiceOverride, SimState, Snapshot, TractGrowth } from './protocol';
-import { GROWTH_LABEL, SNAP_HELD, TRAIN_STRIDE } from './protocol';
+import { GROWTH_LABEL, hasExpressService, SNAP_HELD, TRAIN_STRIDE } from './protocol';
 import { TrainSim, TState } from './trainSim';
 
 export interface EngineCallbacks {
@@ -189,6 +189,8 @@ export class Engine {
     // Chaos counters and event outcomes, read before the commuters' day resets.
     const chaosStats = c?.chaosStats() ?? { eventRiders: 0, diverted: 0, carriedPast: 0 };
     const outcomes = c?.eventOutcomes() ?? [];
+    // Four-track sections and express service (v2): only reported where they exist.
+    const express = hasExpressService(this.net) ? { routeOvertakes: Object.fromEntries(tr.overtakes) as Record<number, number>, crossTransfers: c?.crossTransfersToday() ?? {} } : null;
     const base = c?.dayReport(day) ?? emptyReport(day);
     // Operations control: the day's regularity (the accumulators roll over to tomorrow).
     const reg = this.trains.closeDayRegularity();
@@ -206,11 +208,13 @@ export class Engine {
       avgLateness: tr.lateCount ? tr.lateSum / tr.lateCount : 0,
       deadlocks: tr.deadlocks,
       routeLateness,
-      stationsOpen: this.net?.stations.length ?? 0,
+      // A cross-platform pair is staffed as QUAD.pairStaffing stations (v2).
+      stationsOpen: this.net?.staffedStations ?? this.net?.stations.length ?? 0,
       chaos: this.chaos.daySummary(outcomes, chaosStats),
       routeRegularity: reg.routes,
       regularity: reg.network,
       ...(growth ? { growth } : {}),
+      ...(express ?? {}),
     };
     this.chaos.endDay();
     this.trains.resetDay();

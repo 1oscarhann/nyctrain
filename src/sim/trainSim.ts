@@ -110,7 +110,28 @@ export interface TrainDayStats {
   routeLate: Map<number, { sum: number; n: number }>;
   /** Terminal turnarounds shortened because the next departure was already due. */
   shortTurns: number;
+  /**
+   * Four-track sections (v2), per route id: overtakes of another route's train between two
+   * consecutive cross-platform stations both trains call at.
+   */
+  overtakes: Map<number, number>;
 }
+
+/** A train's last call at a cross-platform pair (the overtake counter). */
+interface PairCall {
+  key: number;
+  t: number;
+  /** Travel direction along the pair's reference platform (0/1). */
+  sgn: number;
+  route: number;
+  routeId: number;
+  dir: 0 | 1;
+  stop: number;
+}
+
+/** Arrivals at a pair are remembered this long for the overtake counter (s), at most PAIR_LOG_MAX each. */
+const PAIR_LOG_SPAN = 1800;
+const PAIR_LOG_MAX = 16;
 
 export class TrainSim {
   net: CompiledNetwork | null = null;
@@ -148,6 +169,18 @@ export class TrainSim {
   private yesterdayById = new Map<number, { stats: RegularityStats; byStop: [number[], number[]] }>();
   /** Timepoint holds in progress, by train id. */
   private holds = new Map<number, Hold>();
+  // ---- four-track sections (v2): the overtake counter (inert without cross-platform pairs)
+  private pairOn = false;
+  /** Per compiled station: the pair key (the lower compiled index of its pair), or −1. */
+  private pairKey = new Int32Array(0);
+  /** Per route index and direction, per stop: travel sign along the pair's reference platform (−1: not a pair). */
+  private stopSgn: [Int8Array, Int8Array][] = [];
+  /** Per route index and direction, per stop: the key of the next pair called at after it (−1: none). */
+  private nextPairAt: [Int32Array, Int32Array][] = [];
+  /** Recent arrivals by key × 2 + sgn. */
+  private pairLog = new Map<number, { train: number; t: number }[]>();
+  /** Each train's last pair call, by train id. */
+  private lastPair = new Map<number, PairCall>();
 
   /** Real people per agent: train loads are counted in agents, capacities in people. */
   constructor(private hooks: PassengerHooks, private agentScale = 1) {}
@@ -260,6 +293,7 @@ export class TrainSim {
       for (const id of [...this.holds.keys()]) if (!ids.has(id)) this.holds.delete(id);
     }
     for (const id of [...this.yesterdayById.keys()]) if (!newRegs.has(id)) this.yesterdayById.delete(id);
+    this.buildPairs(net);
     // Routes that vanished: deliver anyone on board.
     for (const trs of oldByRoute.values()) for (const tr of trs) if (tr.load > 0) this.hooks.evacuate(tr, t);
   }
@@ -318,6 +352,7 @@ export class TrainSim {
     tr.incident = 0;
     tr.out = 0;
     if (this.holds.size) this.holds.delete(tr.id);
+    if (this.pairOn) this.lastPair.delete(tr.id);
     const r = this.net!.routes[tr.route];
     tr.buckets = Array.from(r.dirs[dir].stopS, () => []);
     this.dispatch[tr.route].ready[dir].push(tr.id);
@@ -696,6 +731,7 @@ export class TrainSim {
         g.termLateN++;
       }
     }
+    if (this.pairOn) this.notePair(tr, stopIdx, t);
     const overComfort = tr.load * this.agentScale > r.capComfort;
     const { alight, board } = this.hooks.arrive(tr, r, stopIdx, t);
     let dwell = OPERATIONS.dwellBase + ((alight + board) * OPERATIONS.dwellPerPassenger) / r.cars;
@@ -746,6 +782,87 @@ export class TrainSim {
   private releaseLocks(tr: Train): void {
     for (const l of tr.locks) if (this.lockHolder[l.lock] === tr.id) this.lockHolder[l.lock] = -1;
     tr.locks = [];
+  }
+
+  // ------------------------------------------------------------------ four-track sections (v2)
+  /**
+   * The overtake counter's tables (docs/v2/express-quad.md §4.8): pair keys per station, and per
+   * route direction and stop the travel sign along the pair's reference platform and the next pair
+   * called at. Pair calls in progress are forgotten (an edit just after an overtake may miss it).
+   */
+  private buildPairs(net: CompiledNetwork): void {
+    this.pairLog.clear();
+    this.lastPair.clear();
+    this.pairOn = net.stations.some((s) => s.pair !== undefined && s.pair >= 0);
+    if (!this.pairOn) {
+      this.pairKey = new Int32Array(0);
+      this.stopSgn = [];
+      this.nextPairAt = [];
+      return;
+    }
+    const key = Int32Array.from(net.stations, (s, i) => (s.pair !== undefined && s.pair >= 0 ? Math.min(i, s.pair) : -1));
+    this.pairKey = key;
+    this.stopSgn = net.routes.map((r) =>
+      r.dirs.map((dir) => {
+        const n = dir.stopStation.length;
+        const sg = new Int8Array(n).fill(-1);
+        let e = 0;
+        for (let k = 0; k < n; k++) {
+          const si = dir.stopStation[k];
+          if (key[si] < 0) continue;
+          const s = dir.stopS[k];
+          while (e + 1 < dir.elems.length && dir.elems[e].s1 < s) e++;
+          const ed = dir.elems[e]?.edgeDir ?? 0;
+          // Relative to the reference platform: flipped on the partner when the two run opposite ways.
+          sg[k] = si !== key[si] && net.stations[si].pairSameDir === false ? 1 - ed : ed;
+        }
+        return sg;
+      }) as [Int8Array, Int8Array],
+    );
+    this.nextPairAt = net.routes.map((r) =>
+      r.dirs.map((dir) => {
+        const n = dir.stopStation.length;
+        const nx = new Int32Array(n).fill(-1);
+        let next = -1;
+        for (let k = n - 1; k >= 0; k--) {
+          nx[k] = next;
+          const kk = key[dir.stopStation[k]];
+          if (kk >= 0) next = kk;
+        }
+        return nx;
+      }) as [Int32Array, Int32Array],
+    );
+  }
+
+  /**
+   * An overtake is an inversion of order between two consecutive cross-platform stations both trains
+   * call at: this train reaches pair `key` while another route's train, which left the previous pair
+   * before it, has not got here yet (its next pair call is this one).
+   */
+  private notePair(tr: Train, k: number, t: number): void {
+    const dir = this.net!.routes[tr.route].dirs[tr.dir];
+    const key = this.pairKey[dir.stopStation[k]];
+    if (key < 0) return;
+    const sgn = this.stopSgn[tr.route][tr.dir][k];
+    const prev = this.lastPair.get(tr.id);
+    if (prev && prev.sgn === sgn && prev.key !== key) {
+      const log = this.pairLog.get(prev.key * 2 + sgn);
+      if (log) {
+        for (const e of log) {
+          if (e.t >= prev.t || e.train === tr.id) continue;
+          const y = this.lastPair.get(e.train);
+          if (!y || y.routeId === tr.routeId || y.key !== prev.key || y.t !== e.t || y.sgn !== sgn) continue;
+          if (this.nextPairAt[y.route]?.[y.dir]?.[y.stop] !== key) continue;
+          this.day.overtakes.set(tr.routeId, (this.day.overtakes.get(tr.routeId) ?? 0) + 1);
+        }
+      }
+    }
+    const lk = key * 2 + sgn;
+    let log = this.pairLog.get(lk);
+    if (!log) this.pairLog.set(lk, (log = []));
+    log.push({ train: tr.id, t });
+    while (log.length > PAIR_LOG_MAX || (log.length && t - log[0].t > PAIR_LOG_SPAN)) log.shift();
+    this.lastPair.set(tr.id, { key, t, sgn, route: tr.route, routeId: tr.routeId, dir: tr.dir, stop: k });
   }
 
   // ------------------------------------------------------------------ operations control
@@ -950,7 +1067,7 @@ export class TrainSim {
 }
 
 function newDayStats(): TrainDayStats {
-  return { carKm: 0, lateSum: 0, lateCount: 0, deadlocks: 0, routeLate: new Map(), shortTurns: 0 };
+  return { carKm: 0, lateSum: 0, lateCount: 0, deadlocks: 0, routeLate: new Map(), shortTurns: 0, overtakes: new Map() };
 }
 
 /**

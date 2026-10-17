@@ -8,6 +8,11 @@
  * is a migrated route (no holding or recovery), tp adds suggested timepoints, and ops=off turns
  * every v2 mechanic off, which reproduces the code before operations control exactly. farePeak /
  * fareOff / low set the fare policy; peak= is still the peak headway in minutes.)
+ * scenario=express (v2): the core with a four-track trunk (New York: Lexington through Midtown and
+ * the Upper East Side; London: Oxford Street and the City), an all-stops local A and an express X,
+ * each at twice the core's headway by default (localPeak= / expressPeak= set their peak minutes);
+ * it prints both routes' run times, trains, riders, lateness and overtakes, and the transfers
+ * across the platform.
  * Living City: pace= sets the growth pace (default Steady, as a new game; pace=off is the code
  * before Living City). A growth month closes at each calendar month end (from day 18, 31 Jan
  * 2030). months=N instead runs N growth months of monthDays=K days each (default 5: shares
@@ -15,7 +20,9 @@
  * growth month (riders, value capture, city ×, top boomtown, agents) and the month-12 summary.
  */
 import { loadLandFromDisk, loadWorldFromDisk } from './nodeData';
-import { buildTestNetwork, createHeadlessGame, drawLine, makeRoute, runDays, stationNear } from '../src/sim/headless';
+import { buildTestNetwork, createHeadlessGame, drawLine, makeRoute, nodeSnapNear, pairNear, quadLine, runDays, stationNear } from '../src/sim/headless';
+import { expressPattern } from '../src/routes/express';
+import { routeTimetable } from '../src/routes/compile';
 import type { Game } from '../src/core/game';
 import { BONDS, CHAOS, COMMUTERS, ECONOMY, GROWTH, type ChaosLevel, type GrowthPace, type TrackLevel } from '../src/balance';
 import { weatherLabel } from '../src/core/cityCalendar';
@@ -78,6 +85,11 @@ export function buildCoreNetwork(game: Game) {
       [[-73.9408, 40.8010], '120 St'],
     ],
   );
+  return { A, ...buildCoreTrunks(game) };
+}
+
+/** The core's three other lines (8th Av / CPW, Queens, 14 St), drawn after Lexington. */
+function buildCoreTrunks(game: Game) {
   // 8th Av / CPW: Atlantic Av (Brooklyn) → under the East River → West Side → 110 St
   const B = line(
     game,
@@ -150,7 +162,46 @@ export function buildCoreNetwork(game: Game) {
       [[-73.9135, 40.6998], 'Myrtle–Wyckoff'],
     ],
   );
-  return { A, B, C, D };
+  return { B, C, D };
+}
+
+/** A point a fraction f of the way from a to b. */
+const lerpLL = (a: LL, b: LL, f: number): LL => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+
+/**
+ * Express service (v2, docs/v2/express-quad.md §12): the core with Lexington's Midtown and Upper
+ * East Side section as a four-track trunk. Double track Bowling Green → past Canal and from past
+ * 106 St to 120 St, a quad between them (fanning at both ends); cross-platform stations at 18 St,
+ * Grand Central, 53 St and 92 St, local-only stops at Astor Pl, 28 St, 68 St, 79 St and 106 St.
+ * A is the all-stops local, X the express (its Express pattern); both run at twice the core's
+ * headways, so the shared ends see the core's service.
+ */
+export function buildCoreExpressNetwork(game: Game) {
+  const lex: LL[] = [[-74.0134, 40.7046], [-74.0045, 40.714], [-73.993, 40.7285], [-73.9775, 40.75], [-73.9378, 40.805]];
+  const south = lerpLL(lex[1], lex[2], 0.586);
+  const north = lerpLL(lex[3], lex[4], 0.845);
+  drawLine(game, [lex[0], lex[1], south], 'deep');
+  drawLine(game, [north, lex[4]], 'deep');
+  quadLine(game, [south, lex[2], lex[3], north], 'deep', nodeSnapNear(game, south), nodeSnapNear(game, north), 1);
+  const s = (p: LL, n: string) => stationNear(game, p, n, CARS);
+  const loc = (p: LL, n: string) => stationNear(game, p, n, CARS, { role: 'local' });
+  const pr = (p: LL, n: string) => pairNear(game, p, n, CARS)[0];
+  const A = [
+    s([-74.0125, 40.7062], 'Bowling Green'),
+    s([-74.0068, 40.7112], 'Fulton St'),
+    s([-74.0000, 40.7195], 'Canal St'),
+    loc([-73.9930, 40.7290], 'Astor Pl'),
+    pr([-73.9870, 40.7375], '18 St'),
+    loc([-73.9818, 40.7448], '28 St'),
+    pr([-73.9765, 40.7520], 'Grand Central'),
+    pr([-73.9705, 40.7600], '53 St'),
+    loc([-73.9645, 40.7683], '68 St'),
+    loc([-73.9585, 40.7765], '79 St'),
+    pr([-73.9525, 40.7847], '92 St'),
+    loc([-73.9465, 40.7930], '106 St'),
+    s([-73.9408, 40.8010], '120 St'),
+  ];
+  return { A, X: expressPattern(game.network, A), ...buildCoreTrunks(game) };
 }
 
 /** Low-density sprawl: long elevated lines through eastern Queens and Staten Island. */
@@ -218,6 +269,11 @@ export function buildLondonCoreNetwork(game: Game) {
       [[-0.0040, 51.5415], 'Stratford'],
     ],
   );
+  return { A, ...buildLondonCoreTrunks(game) };
+}
+
+/** London's core: the three lines drawn after Paddington–Stratford. */
+function buildLondonCoreTrunks(game: Game) {
   const B = line(
     game,
     [[-0.1405, 51.5502], [-0.1430, 51.5390], [-0.1240, 51.5300], [-0.1050, 51.5200], [-0.1040, 51.5040], [-0.1000, 51.4945], [-0.1130, 51.4815], [-0.1145, 51.4627]],
@@ -271,7 +327,42 @@ export function buildLondonCoreNetwork(game: Game) {
       [[-0.0575, 51.5112], 'Shadwell'],
     ],
   );
-  return { A, B, C, D };
+  return { B, C, D };
+}
+
+/**
+ * London express service (v2): the core with a deep four-track trunk along a Central-line-like
+ * corridor, from west of Marble Arch along Oxford Street and through the City to east of Bank
+ * (fanning at both ends). Cross-platform stations at Marble Arch, Oxford Circus, Holborn and Bank,
+ * local-only stops at Bond Street, Tottenham Court Road, Chancery Lane and St Paul's. A is the
+ * all-stops local, X the express; both at twice the core's headways.
+ */
+export function buildLondonCoreExpressNetwork(game: Game) {
+  const cen: LL[] = [[-0.1780, 51.5168], [-0.1585, 51.5136], [-0.1300, 51.5166], [-0.0975, 51.5146], [-0.0886, 51.5133], [-0.0600, 51.5195], [-0.0333, 51.5252], [-0.0030, 51.5420]];
+  const west = lerpLL(cen[0], cen[1], 0.45);
+  const east = lerpLL(cen[4], cen[5], 0.35);
+  drawLine(game, [cen[0], west], 'deep');
+  drawLine(game, [east, ...cen.slice(5)], 'deep');
+  quadLine(game, [west, ...cen.slice(1, 5), east], 'deep', nodeSnapNear(game, west), nodeSnapNear(game, east), 1);
+  const s = (p: LL, n: string) => stationNear(game, p, n, CARS);
+  const loc = (p: LL, n: string) => stationNear(game, p, n, CARS, { role: 'local' });
+  const pr = (p: LL, n: string) => pairNear(game, p, n, CARS)[0];
+  const A = [
+    s([-0.1755, 51.5162], 'Paddington'),
+    pr([-0.1585, 51.5136], 'Marble Arch'),
+    loc([-0.1494, 51.5142], 'Bond Street'),
+    pr([-0.1415, 51.5152], 'Oxford Circus'),
+    loc([-0.1308, 51.5165], 'Tottenham Court Road'),
+    pr([-0.1200, 51.5163], 'Holborn'),
+    loc([-0.1115, 51.5185], 'Chancery Lane'),
+    loc([-0.0975, 51.5146], "St Paul's"),
+    pr([-0.0886, 51.5133], 'Bank'),
+    s([-0.0726, 51.5165], 'Aldgate East'),
+    s([-0.0597, 51.5194], 'Whitechapel'),
+    s([-0.0333, 51.5252], 'Mile End'),
+    s([-0.0040, 51.5415], 'Stratford'),
+  ];
+  return { A, X: expressPattern(game.network, A), ...buildLondonCoreTrunks(game) };
 }
 
 /** London sprawl: elevated lines through low-density Havering and Bexley. */
@@ -341,10 +432,11 @@ if (scenario === 'test' && cityId !== 'nyc') throw new Error('scenario=test is t
 if (scenario === 'test') {
   buildTestNetwork(game);
 } else {
+  if (!['core', 'sprawl', 'express'].includes(scenario)) throw new Error(`Unknown scenario ${scenario} (core|sprawl|express|test)`);
   stopsets =
     cityId === 'london'
-      ? scenario === 'sprawl' ? buildLondonSprawlNetwork(game) : buildLondonCoreNetwork(game)
-      : scenario === 'sprawl' ? buildSprawlNetwork(game) : buildCoreNetwork(game);
+      ? scenario === 'sprawl' ? buildLondonSprawlNetwork(game) : scenario === 'express' ? buildLondonCoreExpressNetwork(game) : buildLondonCoreNetwork(game)
+      : scenario === 'sprawl' ? buildSprawlNetwork(game) : scenario === 'express' ? buildCoreExpressNetwork(game) : buildCoreNetwork(game);
   const bad = [...game.network.edges.values()].map((e) => edgeReport(game.network, e.id, game.terrain)).filter((r) => !r.ok);
   if (bad.length) console.log('INVALID EDGES:', bad.map((b) => b.errors[0]));
   fund(game, 3e9);
@@ -353,7 +445,15 @@ if (scenario === 'test') {
   const colors = ['#2F7FE0', '#E8443A', '#B04FCF', '#9BA4AE', '#F28C28', '#3FAE5A'];
   Object.entries(stopsets).forEach(([k, stops], i) => {
     fund(game, 2e9);
-    makeRoute(game, `Line ${k}`, k, colors[i % colors.length], stops, CARS, { am: PEAK, pm: PEAK, midday: PEAK * 2, evening: Math.max(6, PEAK * 3), night: 20 });
+    // scenario=express: the trunk's local (A) and express (X) each run at twice the core's headways
+    // (the express not at night), so the shared ends get the core's service.
+    // localPeak= / expressPeak= (minutes) override their peak headways (the off-peak scales with them).
+    const pair = scenario === 'express' && (k === 'A' || k === 'X');
+    const pk = pair ? Number((k === 'X' ? args.expressPeak : args.localPeak) ?? PEAK * 2) : PEAK;
+    const hw = pair
+      ? { am: pk, pm: pk, midday: pk * 2, evening: Math.max(6, (pk / 2) * 3) * 2, night: k === 'X' ? 0 : 20 }
+      : { am: PEAK, pm: PEAK, midday: PEAK * 2, evening: Math.max(6, PEAK * 3), night: 20 };
+    makeRoute(game, k === 'X' ? 'Line A Express' : `Line ${k}`, k, colors[(k === 'X' ? 0 : i) % colors.length], stops, CARS, hw, 'heavy', undefined, k === 'X');
   });
 }
 if (controlArg === 'tp') for (const r of game.routes.list()) game.routes.update(r.id, { control: { ...r.control, timepoints: suggestTimepoints(r, game.routes.list()) } });
@@ -431,6 +531,22 @@ const lastGm = growthReports[growthReports.length - 1];
 const vcPerDay = lastGm ? lastGm.growth!.valueCapture / monthWeekdays(lastGm.day) : 0;
 if (lastGm) console.log(`  with value capture (${lastGm.growth!.label}: ${fmtMoney(vcPerDay)}/day): operating ${fmtMoney(f.revenue + vcPerDay - opCost, { sign: true })}/day · after bond interest ${fmtMoney(f.revenue + vcPerDay - opCost - interest, { sign: true })}/day`);
 console.log(`  route riders ${JSON.stringify(last.routeRiders)} · goal trip ${last.goalTrip?.toFixed(0) ?? '—'} · ${run.ms} ms`);
+if (scenario === 'express') {
+  // Express service (v2): run times, lateness, riders and overtakes of the trunk's local and express,
+  // and transfers across the platform (the last day; overtakes and transfers averaged over days 1+).
+  const days1 = run.reports.filter((r) => r.day >= 1);
+  const mean = (f: (r: DayReport) => number) => (days1.length ? days1.reduce((a, r) => a + f(r), 0) / days1.length : 0);
+  const sum = (o: Record<number, number> | undefined) => Object.values(o ?? {}).reduce((a, b) => a + b, 0);
+  for (const r of game.routes.list().filter((x) => x.bullet === 'A' || x.bullet === 'X')) {
+    const tt = routeTimetable(game, r);
+    console.log(
+      `  ${r.express ? 'express' : 'local  '} ${r.bullet}: ${r.stops.length} stops · run ${tt ? (tt.runTimes[0] / 60).toFixed(1) : '—'} / ${tt ? (tt.runTimes[1] / 60).toFixed(1) : '—'} min · ${Math.floor(r.ownedCars / r.cars)} trains` +
+        ` · riders ${Math.round(last.routeRiders[r.id] ?? 0).toLocaleString()} · late ${(last.routeLateness[r.id] ?? 0).toFixed(0)} s · overtakes ${mean((x) => x.routeOvertakes?.[r.id] ?? 0).toFixed(0)}/day`,
+    );
+  }
+  const pairs = [...game.network.stations.values()].filter((st) => st.pair !== undefined && st.id < st.pair).length;
+  console.log(`  four-track: ${pairs} cross-platform stations · ${Math.round(mean((x) => sum(x.crossTransfers))).toLocaleString()} cross-platform transfers/day · last day ${JSON.stringify(last.crossTransfers ?? {})}`);
+}
 if (!opsOff) {
   // Fares by band and period on the last day, and the credit rating a player with this network
   // would get: the debt needed, an assumed 0.5B cash buffer, the last 4 days' revenue and costs.

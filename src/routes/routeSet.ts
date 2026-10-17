@@ -36,7 +36,7 @@ export class RouteSet {
   create(partial: Omit<Route, 'id' | 'ownedCars' | 'control'> & { ownedCars?: number; control?: Partial<RouteControl> }): Route {
     const base = this.newControl();
     const control = partial.control ? normalizeControl(partial.control, base) : base;
-    const r: Route = { ownedCars: 0, ...partial, control, id: this.nextId++ };
+    const r: Route = { ownedCars: 0, ...partial, express: partial.express ?? false, control, id: this.nextId++ };
     r.control.timepoints = r.control.timepoints.filter((s) => r.stops.includes(s));
     this.routes.set(r.id, r);
     this.invalidate();
@@ -139,7 +139,8 @@ export class RouteSet {
   load(d: RouteSetData): void {
     this.routes.clear();
     // Routes saved before operations control have none: legacy settings (holding off, no recovery).
-    for (const r of d.routes) this.routes.set(r.id, { ...r, headways: { ...r.headways }, stops: [...r.stops], control: normalizeControl(r.control, legacyControl()) });
+    // Express service (v2): routes saved before it are locals.
+    for (const r of d.routes) this.routes.set(r.id, { ...r, headways: { ...r.headways }, stops: [...r.stops], control: normalizeControl(r.control, legacyControl()), express: r.express === true });
     this.nextId = d.nextId;
     this.spareCars = { heavy: d.spareCars?.heavy ?? 0, light: d.spareCars?.light ?? 0 };
     this.invalidate();

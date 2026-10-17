@@ -134,18 +134,19 @@ The worker steps a fixed 2 s game timestep in 14 ms slices and posts compact sna
 thread interpolates train positions between snapshots. Edits are compiled and sent to the worker
 200 ms after they stop (`SimClient.setNetworkSoon`). A compile still pending is sent before any
 skip or speed change, so the night and the 3 am mode choice always run on the network on screen. Agents are never saved. A save stores
-the network, routes (with their operations control settings), finances (bonds with their coupons,
+the network (with four-track sections and cross-platform stations), routes (with their operations
+control settings and the express flag), finances (bonds with their coupons,
 the bond market and the rating), the fare policy, goals, the day's mode shares and observations,
 the city chaos level (today's and the one from the next 3 am), seed, today's incident-plan
 basis and planned event service, and the city's growth (pace, per-tract multipliers and balancing
-factors, the land-value premium and a thinned history; save format v5; older saves migrate). The
+factors, the land-value premium and a thinned history; save format v6; older saves migrate). The
 commuters are rebuilt from the data, scaled by the saved growth, when the save is loaded.
 
 ## Testing each part
 
 ```bash
-npm test                 # all 225 tests (unit + headless, both cities)
-npm run test:unit        # 200: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+npm test                 # all 272 tests (unit + headless, both cities)
+npm run test:unit        # 245: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
                          # chaos (calendar, weather, incidents, train-sim hooks and the watchdog's scope, event
                          # trips, event service, save v3 with today's level), chaos UI (alert text, feed and
                          # ticker order, announcements, cancelled service, wrap-up toasts, London wording and £),
@@ -162,15 +163,22 @@ npm run test:unit        # 200: geometry, costs, ramps, water, pathfinding, logi
                          # scorecard and the year in review, its goals, save v5, and its UI text in both
                          # cities (toasts and their selection, the month report's City rows, the tract,
                          # station and finance lines, goals, the year's City line, units and currency), the
-                         # growth ramp and its span, and tract names (map labels, stations, the fallback)
-npm run test:headless    # 25: 3 days on the test network (with regularity and fares by band and period),
+                         # growth ramp and its span, and tract names (map labels, stations, the fallback);
+                         # four-track trunks and express service: quad geometry and strokes, crossovers, pairs
+                         # and costs (also on London's land), route pathfinding and its gate (ordinary track
+                         # keeps its paths), stations along a path, skip/serve and the patterns, compile,
+                         # cross-platform transfers, overtaking against a shared pair (280 s against 462 s),
+                         # incidents, closures, event service, holding, timepoints and value capture on four
+                         # tracks, save v6
+npm run test:headless    # 27: 3 days on the test network (with regularity and fares by band and period),
                          # holding against no holding, holding next to Wild chaos and event service, chaos end
                          # to end (closures, event agents, determinism, snow, breakdowns, Off is inert, mid-day
                          # loads after a level change, an edit or an event, a London venue event), the
                          # browser's message order (an edit followed at once by a skip), and Living City (the
                          # commute benefit, a month close in New York and London, a save mid-growth, value
                          # capture through the finances, pace Off, an event day right after a month close,
-                         # one snowy closing day against a clear one, a save made at once after a close)
+                         # one snowy closing day against a clear one, a save made at once after a close), and
+                         # an express on a four-track trunk (West Side; Oxford Street and the City)
 npm run sim -- days=3    # headless run of the test network, with a daily summary (and regularity, fares, market)
 npm run sim -- days=3 chaos=normal           # the same with city chaos: weather, incidents and events per day
 npm run sim -- days=3 ops=off                # operations control, fare policy and bond market all off: as before v2
@@ -181,17 +189,23 @@ npm run balance -- city=london scenario=core days=12   # the same for London (43
 npm run balance -- scenario=core days=12 chaos=normal  # chaos=off|calm|normal|wild, seed=N, money=1
 npm run balance -- scenario=core days=12 control=tp    # control=default|legacy|tp|off, ops=off,
                                                        # farePeak= fareOff= low=1|0.5|0, dump=file.json
+npm run balance -- scenario=express days=12            # the core with a four-track Lexington trunk: local + express
+npm run balance -- city=london scenario=express days=12 # Oxford Street and the City as four tracks
 npm run balance -- scenario=core months=12             # Living City: 12 growth months of monthDays=5 days each
                                                        # (pace=off|steady|boom); days=262 runs a calendar year
 npm run perf -- city=london                            # London's grid of the same size; month=0 skips the month closes
 npm run perf             # 300 stations / 25 routes / ~430 trains: times one peak game-hour and two month closes
 npm run perf -- chaos=wild weather=snow outdoor=1      # worst case: Wild, full snow, every track outdoor
 npm run perf -- ops=off  # without operations control (by default every route holds, with timepoints)
+npm run perf -- quads=5  # 5 north–south lines as four-track lines, each with an express (25 pairs, 30 routes)
 ```
 
 `dump=file.json` (sim and balance) writes the run's `DayReport`s, the finance state and hashes of
 the mode shares, for comparing two versions field by field. With `pace=off` every dump is
-byte-identical to the code before Living City, including runs that cross a month end.
+byte-identical to the code before Living City, including runs that cross a month end. A network
+with no four-track sections and no express routes is byte-identical to the code before them
+(`headless-sim days=3`, `balance` core and sprawl in both cities, core over 25 days across the
+January month close, and the perf peak hour).
 
 To check each milestone by hand in `npm run dev`:
 
@@ -280,6 +294,23 @@ Every value is in `src/balance.ts`. Main values (spec values unless noted):
 |---|---|---|---|---|
 | **Core** (`balance -- scenario=core`) | 4 deep routes, 40 stations: Lexington, CPW–Atlantic, Times Sq–Jackson Hts, 6 Av–Myrtle–Wyckoff; 67 trains (holding, 10% recovery: one more train per route) | $23.3B (needs $17.3B of bonds) | 1.35M on day 11 (still rising slowly), 21% transit share | Operating +$1.4M/day; −$0.28M/day after bond interest; −$1.8M/day after full debt service; rated BBB (new bonds 3.10%) |
 | **Sprawl** (`scenario=sprawl`) | Elevated Jamaica–Glen Oaks and St George–Huguenot | $5.00B | 15.7k | −$0.81M/day; rated BB with no debt |
+| **Express** (`scenario=express`) | The core with Lexington from Canal to 106 St as four tracks: pairs at 18 St, Grand Central, 53 St and 92 St; local A and express X every 5 min each | $25.7B (+$2.4B) | 1.35M on day 11 (−0.3%) | Operating +$1.3M/day; −$0.63M/day after bond interest; rated BB |
+
+**Four tracks and express service** (day 11 of 12, details in `docs/v2/express-quad.md`):
+
+| Trunk | Run time, local / express | Trains | Riders, local + express | Lateness, local / express | Overtakes a day | Left behind (network) |
+|---|---|---|---|---|---|---|
+| New York, Lexington | 18.3 / 14.0 min (13 / 8 stops) | 11 + 9 (core: 20) | 219,570 + 257,810 (core: 487,160) | 120 / 191 s | 170 (local 20) | 537k (core 824k) |
+| London, Oxford Street and the City | 18.7 / 15.3 min (13 / 9 stops) | 11 + 9 (core: 19) | 91,800 + 108,240 | 9 / 27 s | 148 | 150 (core 120) |
+
+The express saves 4.3 minutes end to end in New York (3.4 in London), overtakes a local on about
+every other trip and relieves crowding, but ridership doesn't rise: each rider waits for one route, so at
+5 minutes each a station both serve waits twice as long as on the core's single 2.5-minute route.
+Changing across the platform costs more than one or two skipped stops save, so neither scenario has
+cross-platform transfers (the West Side headless test, with three or four local stops between
+pairs, has about 6,000 a day). A quad is a service investment that pays only on long, dense
+corridors. With the local kept at 2.5 minutes and the express added on top (`localPeak=2.5
+expressPeak=5`): 1.36M riders (+0.7%) for −$0.77M/day after interest (London 763k, −£2.7M/day).
 
 So the core covers its operating costs and interest at about 1.45–1.5M riders. Repaying the
 principal as well needs more ridership or a higher fare. The sprawl network loses money every
@@ -304,6 +335,7 @@ are in `CITY_BALANCE.london`:
 |---|---|---|---|---|
 | **Core** (`city=london scenario=core`) | 4 deep routes, 43 stations: Paddington–Bank–Stratford, Kentish Town–King's Cross–Elephant–Brixton, Victoria–Waterloo–Canary Wharf–North Greenwich, Hammersmith–Piccadilly–Cannon St–Shadwell | £24.3B (needs £19.3B of bonds) | 764k on day 11, 13% transit share | Operating −£0.31M/day; −£2.2M/day after bond interest; rated BB (new bonds 3.75%: it recovers 86% of its operating costs; New York's anchors would rate it CCC) |
 | **Sprawl** (`scenario=sprawl`) | Elevated Dagenham–Upminster and Eltham–Bexleyheath | £3.43B | 16k | −£0.59M/day; rated BB with no debt |
+| **Express** (`city=london scenario=express`) | The core with west of Marble Arch to east of Bank as four tracks: pairs at Marble Arch, Oxford Circus, Holborn and Bank; local A (adds Bond Street, Chancery Lane) and express X every 5 min each | £26.6B (+£2.3B; £21.6B of bonds, over the cap) | 761k on day 11 (−0.3%) | Operating −£0.43M/day; −£2.5M/day after bond interest; rated BB |
 
 (With `ops=off`: 761k, £24.2B, −£0.29M/−£2.1M a day; sprawl £3.38B, −£0.59M/day, as before
 operations control.)
@@ -341,6 +373,12 @@ Single runs vary by ±40 ms here, so the same hour was also timed in one process
 and new engines alternately in 30-step chunks: the new code costs about +3.5% with operations
 control on and +4.5% with it off (the regularity statistics run either way). The clean grid runs
 like clockwork (headway CV 0.04), so nothing is held there with chaos Off.
+
+**Four tracks and express service.** On the unchanged grid the peak hour is the same (40,320
+boardings, 1,090 waiting; 176 / 140 / 152 ms against 173 / 223 / 200 ms for the code before it, in
+interleaved runs). `perf -- quads=5` (325 stations, 30 routes, 494 trains, 25 cross-platform pairs,
+40 merge locks, about 440 overtakes by 08:00) takes 176–255 ms (London 183 ms), within the 300 ms
+target.
 
 **Living City.** The peak hour never crosses a month, so it is unchanged: 40,320 boardings and
 1,090 waiting as before, 220–266 ms against 211–265 ms for the code before Living City in

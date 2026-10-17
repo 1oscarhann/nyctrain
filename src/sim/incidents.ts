@@ -73,7 +73,11 @@ export function measureExposure(net: CompiledNetwork): Exposure {
       const hw = r.headways[i];
       if (hw > 0) trainKmByPeriod[i] += ((h * 3600) / hw) * len;
     });
-    for (const dir of r.dirs) for (const si of dir.stopStation) served.add(si);
+    // A cross-platform pair (v2) is one station (under its lower index).
+    for (const dir of r.dirs) for (const si of dir.stopStation) {
+      const p = net.stations[si]?.pair;
+      served.add(p !== undefined && p >= 0 && p < si ? p : si);
+    }
   }
   let trackKm = 0;
   for (const sp of trackSpans(net)) trackKm += (sp.u1 - sp.u0) / 1000;

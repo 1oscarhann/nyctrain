@@ -424,8 +424,8 @@ describe('save v4 (operations control and the money market)', () => {
   it('migrates a v3 save to v4 defaults, idempotently, and rates it on load', () => {
     const m = migrate(v3Save());
     expect(m.version).toBe(SAVE_VERSION);
-    // (v5 since Living City: its step runs on the way.)
-    expect(SAVE_VERSION).toBe(5);
+    // (v5 since Living City and v6 since express service: their steps run on the way.)
+    expect(SAVE_VERSION).toBe(6);
     expect(m.migratedFrom).toBe(3);
     expect(m.game.fares).toEqual({ peak: 3.25, offPeak: 3.25, lowIncome: 1 });
     expect('fare' in m.game).toBe(false);

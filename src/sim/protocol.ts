@@ -100,6 +100,18 @@ export interface CompiledNetwork {
   staffedStations?: number;
 }
 
+/**
+ * Four-track sections and express service (v2) are in play: a cross-platform pair or an express
+ * route. Only then do day reports carry routeOvertakes and crossTransfers, so a network without
+ * them reports exactly as before.
+ */
+export function hasExpressService(net: CompiledNetwork | null): boolean {
+  if (!net) return false;
+  for (const s of net.stations) if (s.pair !== undefined && s.pair >= 0) return true;
+  for (const r of net.routes) if (r.express) return true;
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 
 export interface TrainSnap {
@@ -325,6 +337,8 @@ export interface Alert {
   /** Affected route ids. */
   routes: number[];
   stationId?: number;
+  /** Police at a cross-platform pair (v2): its other platform, closed too. */
+  partnerStationId?: number;
   trainId?: number;
   eventId?: number;
   /** Signal crawl speed, m/s. */

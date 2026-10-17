@@ -44,8 +44,21 @@ export function svgIcon(path: string, viewBox = '0 0 24 24'): SVGSVGElement {
   return wrap.firstChild as SVGSVGElement;
 }
 
-/** Route bullet: circle in the route colour with a bold white letter or number. */
-export function bullet(color: string, text: string, size = 22): HTMLElement {
+/**
+ * Route bullet: circle in the route colour with a bold white letter or number. Express routes
+ * (v2, docs/v2/express-quad.md §2.4) get the express lozenge: an elongated hexagon 1.32× as wide
+ * as it is tall with pointed ends and a white keyline (an outer white hexagon holding the coloured
+ * one), deliberately not a diamond.
+ */
+export function bullet(color: string, text: string, size = 22, express = false): HTMLElement {
+  const fontSize = Math.round(size * (text.length > 1 ? 0.48 : 0.6)) + 'px';
+  if (express) {
+    return h(
+      'span',
+      { class: 'bullet express', title: 'Express', style: { width: Math.round(size * 1.32) + 'px', height: size + 'px', fontSize } },
+      h('span', { style: `--c:${color}` }, text),
+    );
+  }
   return h(
     'span',
     {
@@ -54,7 +67,7 @@ export function bullet(color: string, text: string, size = 22): HTMLElement {
         background: color,
         width: size + 'px',
         height: size + 'px',
-        fontSize: Math.round(size * (text.length > 1 ? 0.48 : 0.6)) + 'px',
+        fontSize,
       },
     },
     text,

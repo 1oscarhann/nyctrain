@@ -1,10 +1,11 @@
 /**
  * Validation, cost and construction-time calculation for track and stations.
  */
-import { STATION, TRACK, TRAINS, type TrackClass, type TrackLevel } from '../balance';
+import { QUAD, STATION, TRACK, TRAINS, type TrackClass, type TrackLevel } from '../balance';
 import { fmtDistance } from '../core/units';
 import { curveSpeed, minRadiusOver, otherEnd } from './geometry';
 import { platformLength, type Network } from './network';
+import type { TrackEdge } from './types';
 
 /** Everything construction needs to know about the ground. */
 export interface Terrain {
@@ -41,6 +42,15 @@ export interface EdgeReport {
 
 export function classMult(cls: TrackClass): number {
   return cls === 'light' ? TRACK.lightCostMultiplier : 1;
+}
+
+/**
+ * Four-track sections (v2): the second pair shares excavation, structure and right of way, and
+ * turnouts and crossovers sit inside the four-track box. Exactly 1 for ordinary track.
+ */
+export function quadCostFactor(e: TrackEdge): number {
+  const r = e.quad?.role;
+  return r === 'express' ? QUAD.secondPairCostFactor : r === 'link' ? QUAD.linkCostFactor : 1;
 }
 
 export function edgeReport(net: Network, edgeId: number, terrain: Terrain): EdgeReport {
@@ -133,7 +143,7 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
     const what = badWaterLevel === 'elevated' || badWaterLevel === 'deep' ? 'This ramp' : `${cap(LEVEL_NAMES[badWaterLevel])} track`;
     errors.push(`${what} can't cross water — use elevated (bridge) or deep tunnel over the water`);
   }
-  cost *= classMult(e.cls);
+  cost *= classMult(e.cls) * quadCostFactor(e);
   return {
     ok: errors.length === 0,
     errors,
@@ -166,6 +176,13 @@ export function stationCost(level: TrackLevel, cars: number, cls: TrackClass): n
   return (STATION.costByLevel[level] + STATION.costPerCar * cars) * classMult(cls);
 }
 
+export interface StationReportOptions {
+  /** Price it as one platform of a cross-platform pair (default: when it has a partner). */
+  paired?: boolean;
+  /** Its cross-platform partner, ignored by the spacing rule (default: ignoreStation's `pair`). */
+  partner?: number | null;
+}
+
 export function stationReport(
   net: Network,
   edgeId: number,
@@ -173,6 +190,7 @@ export function stationReport(
   cars: number,
   terrain: Terrain,
   ignoreStation: number | null = null,
+  opts: StationReportOptions = {},
 ): StationReport {
   const e = net.edges.get(edgeId);
   if (!e) return { ok: false, errors: ['No track here'], cost: 0, days: 0, level: null };
@@ -195,7 +213,10 @@ export function stationReport(
   }
   const pos = net.stationPos({ edge: edgeId, u } as never);
   if (terrain.isWater(pos.x, pos.y)) errors.push('Stations must be on land');
-  const near = nearestStationAlongTrack(net, edgeId, u, STATION.minSpacing, ignoreStation);
+  // A cross-platform partner is reachable along track through any crossover; it never counts.
+  const partner = opts.partner ?? (ignoreStation !== null ? net.stations.get(ignoreStation)?.pair : undefined) ?? null;
+  const paired = opts.paired ?? partner !== null;
+  const near = nearestStationAlongTrack(net, edgeId, u, STATION.minSpacing, ignoreStation, partner);
   if (near) {
     errors.push(
       `Too close to ${near.name} (${fmtDistance(near.dist, true)} along the track; needs ${fmtDistance(STATION.minSpacing, true)})`,
@@ -204,7 +225,7 @@ export function stationReport(
   return {
     ok: errors.length === 0,
     errors,
-    cost: stationCost(level, cars, e.cls),
+    cost: stationCost(level, cars, e.cls) * (paired ? QUAD.pairPlatformCostShare : 1),
     days: STATION.buildDays[level],
     level,
   };
@@ -217,10 +238,11 @@ export function nearestStationAlongTrack(
   u: number,
   limit: number,
   ignore: number | null,
+  ignore2: number | null = null,
 ): { id: number; name: string; dist: number } | null {
   const byEdge = new Map<number, { id: number; u: number; name: string }[]>();
   for (const s of net.stations.values()) {
-    if (s.id === ignore) continue;
+    if (s.id === ignore || s.id === ignore2) continue;
     let l = byEdge.get(s.edge);
     if (!l) byEdge.set(s.edge, (l = []));
     l.push({ id: s.id, u: s.u, name: s.name });

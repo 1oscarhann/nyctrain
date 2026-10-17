@@ -85,7 +85,19 @@ export function servedStations(net: CompiledNetwork | null): StationPt[] {
   }
   const out: StationPt[] = [];
   net.stations.forEach((s, i) => {
-    if (used[i]) out.push({ id: s.id, x: s.x, y: s.y });
+    if (!used[i]) return;
+    // Four-track sections (v2): a cross-platform pair is one station complex. It is listed once,
+    // under its lower station id at the platforms' midpoint, when either platform is served (a
+    // platform no route calls at is never served: skipping stations is just leaving them out of
+    // the stop list).
+    const j = s.pair;
+    if (j !== undefined && j >= 0 && net.stations[j]) {
+      if (used[j] && j < i) return;
+      const p = net.stations[j];
+      out.push({ id: Math.min(s.id, p.id), x: (s.x + p.x) / 2, y: (s.y + p.y) / 2 });
+      return;
+    }
+    out.push({ id: s.id, x: s.x, y: s.y });
   });
   return out;
 }

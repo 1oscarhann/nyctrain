@@ -3,7 +3,7 @@
  * pathfinding, and an event-driven simulation of every transit trip (walk → platform queue →
  * train with capacity → transfers → walk) whose observed times feed the next day's choice.
  */
-import { CHAOS, COMMUTERS, EVENTS, FARES, GOALS, OPERATIONS, TIME } from '../balance';
+import { CHAOS, COMMUTERS, EVENTS, FARES, GOALS, OPERATIONS, QUAD, TIME } from '../balance';
 import { expectedFare, fareAt, isPeakTime, isPeakTod, tripFare, variesByTime, type FarePolicy } from '../economy/fares';
 import { emptyStats } from './regularity';
 import { SECONDS_PER_DAY, dayIndex } from '../core/calendar';
@@ -31,7 +31,7 @@ import {
   type TransitCostInput,
 } from './modeChoice';
 import type { CompiledNetwork, CRoute, DayReport, EventDayInfo, EventOutcome, LiveStats, ModeState, ServiceOverride } from './protocol';
-import { TransitGraph } from './transitGraph';
+import { effectiveTransfers, TransitGraph } from './transitGraph';
 import { periodIndex, type PassengerHooks, type Train } from './trainSim';
 
 const MAX_LEGS = 5;
@@ -1124,7 +1124,9 @@ export class Commuters implements PassengerHooks {
         arr[i * 3 + 1] = net.stations[dir.stopStation[l.board]].id;
         arr[i * 3 + 2] = net.stations[dir.stopStation[l.alight]].id;
       });
-      const transfers = legs.length - 1;
+      // Four-track sections (v2): a transfer across a cross-platform pair counts (and was charged)
+      // QUAD.crossPlatformPenaltyFactor of one; without pairs this is legs.length − 1 exactly.
+      const transfers = effectiveTransfers(net, legs);
       return { legs: arr, time: cand.cost - transfers * COMMUTERS.transferPenalty, transfers };
     }
     return null;
@@ -1429,8 +1431,15 @@ export class Commuters implements PassengerHooks {
       if (this.aLeg[a] < this.aLegN[a]) {
         // Transfer: walk to the next platform.
         const o = (a * MAX_LEGS + this.aLeg[a]) * 3;
-        const nextSt = net.stations[this.stationById.get(this.aLegs[o + 1]) ?? -1];
-        const walk = nextSt ? (Math.hypot(nextSt.x - station.x, nextSt.y - station.y) / (1.2 * this.wx.walkSpeed) + 60) : 60;
+        const ni = this.stationById.get(this.aLegs[o + 1]) ?? -1;
+        const nextSt = net.stations[ni];
+        let walk: number;
+        if (nextSt && station.pair === ni) {
+          // Four-track sections (v2): a step across the island platform to the partner.
+          walk = QUAD.crossPlatformTransfer;
+          const key = Math.min(station.id, nextSt.id);
+          this.day.crossTransfers.set(key, (this.day.crossTransfers.get(key) ?? 0) + 1);
+        } else walk = nextSt ? (Math.hypot(nextSt.x - station.x, nextSt.y - station.y) / (1.2 * this.wx.walkSpeed) + 60) : 60;
         this.aState[a] = S_WALK;
         this.push(t + walk, a, E_PLATFORM);
       } else {
@@ -2167,6 +2176,16 @@ export class Commuters implements PassengerHooks {
     return n;
   }
 
+  /**
+   * Four-track sections (v2): today's transfers across each cross-platform pair (real people, key =
+   * the lower station id of the pair), read by the engine before the day closes.
+   */
+  crossTransfersToday(): Record<number, number> {
+    const out: Record<number, number> = {};
+    for (const [k, n] of this.day.crossTransfers) out[k] = n * this.scale;
+    return out;
+  }
+
   /** Today's chaos counters (real people), read by the engine before the day closes. */
   chaosStats(): { eventRiders: number; diverted: number; carriedPast: number } {
     const d = this.day;
@@ -2186,6 +2205,8 @@ function newDayStats(day: number) {
     gaveUp: 0,
     stuck: 0,
     routeBoard: new Map<number, number>(),
+    // Four-track sections (v2): agents transferring across a cross-platform pair, by the pair's lower station id.
+    crossTransfers: new Map<number, number>(),
     // City chaos (agents): event fans' boardings and completed fare-paying trips, people sent
     // away from closed stations by cab, and riders carried past a closed station.
     eventBoard: 0,

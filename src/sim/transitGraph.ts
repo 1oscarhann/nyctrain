@@ -10,9 +10,9 @@
  *             (walk + half the outgoing route's headway, capped, + transfer penalty)
  * Access and egress walks connect tracts to stations.
  */
-import { COMMUTERS } from '../balance';
+import { COMMUTERS, QUAD } from '../balance';
 import type { CompiledNetwork } from './protocol';
-import { transferTime } from '../routes/interchange';
+import { platformTransfer, transferPenaltyFor } from '../routes/interchange';
 
 export interface Leg {
   route: number;
@@ -34,6 +34,11 @@ export class TransitGraph {
   trOff: Int32Array;
   trTo: Int32Array;
   trWalk: Float64Array;
+  /**
+   * Four-track sections (v2): the transfer penalty per transfer edge (reduced across a
+   * cross-platform pair); null without pairs, when every transfer pays COMMUTERS.transferPenalty.
+   */
+  trPen: Float64Array | null = null;
   /** First platform index of each route-direction. */
   base: number[][];
   /** Board platforms per station. */
@@ -103,6 +108,8 @@ export class TransitGraph {
     const off = new Int32Array(P + 1);
     const to: number[] = [];
     const walk: number[] = [];
+    const anyPair = net.stations.some((s) => s.pair !== undefined && s.pair >= 0);
+    const pen: number[] = [];
     for (let p = 0; p < P; p++) {
       off[p] = to.length;
       if (!this.canAlight[p]) continue;
@@ -110,12 +117,15 @@ export class TransitGraph {
       const sp = net.stations[st];
       for (const st2 of groups.get(sp.group) ?? [st]) {
         const s2 = net.stations[st2];
-        const w = transferTime(Math.hypot(s2.x - sp.x, s2.y - sp.y));
+        // Exactly transferTime(distance), except a step across to the cross-platform partner.
+        const w = platformTransfer(sp, s2, st2);
+        const pn = anyPair ? transferPenaltyFor(sp, st2) : 0;
         for (const q of this.stationBoard[st2]) {
           // No staying on the same route, and no U-turn onto its other direction here.
           if (this.platRoute[q] === this.platRoute[p] && (this.platDir[q] === this.platDir[p] || st2 === st)) continue;
           to.push(q);
           walk.push(w);
+          if (anyPair) pen.push(pn);
         }
       }
     }
@@ -123,6 +133,7 @@ export class TransitGraph {
     this.trOff = off;
     this.trTo = new Int32Array(to);
     this.trWalk = new Float64Array(walk);
+    if (anyPair) this.trPen = new Float64Array(pen);
     this.dist = new Float64Array(2 * P);
     this.prev = new Int32Array(2 * P);
     this.stamp = new Int32Array(2 * P);
@@ -160,7 +171,7 @@ export class TransitGraph {
     const e = ++this.epoch;
     const dist = this.dist, prev = this.prev, stamp = this.stamp;
     const rideNext = this.rideNext, rideCost = this.rideCost, wait = this.wait;
-    const trOff = this.trOff, trTo = this.trTo, trWalk = this.trWalk;
+    const trOff = this.trOff, trTo = this.trTo, trWalk = this.trWalk, trPen = this.trPen;
     const P = this.P;
     const penalty = COMMUTERS.transferPenalty;
     this.heapN = 0;
@@ -206,10 +217,18 @@ export class TransitGraph {
         }
       }
       // …or get off and transfer.
-      for (let k = trOff[p]; k < trOff[p + 1]; k++) {
-        const t = trTo[k];
-        const nc = c + trWalk[k] + wait[t] + penalty;
-        if (nc < Infinity) reachWaiting(t, nc, node);
+      if (trPen) {
+        for (let k = trOff[p]; k < trOff[p + 1]; k++) {
+          const t = trTo[k];
+          const nc = c + trWalk[k] + wait[t] + trPen[k];
+          if (nc < Infinity) reachWaiting(t, nc, node);
+        }
+      } else {
+        for (let k = trOff[p]; k < trOff[p + 1]; k++) {
+          const t = trTo[k];
+          const nc = c + trWalk[k] + wait[t] + penalty;
+          if (nc < Infinity) reachWaiting(t, nc, node);
+        }
       }
     }
   }
@@ -292,4 +311,20 @@ export class TransitGraph {
     }
     return top;
   }
+}
+
+/**
+ * Transfers on a path as mode choice counts them (v2): 1 per transfer, QUAD.crossPlatformPenaltyFactor
+ * across a cross-platform pair (the share of the penalty the graph charged). Without pairs this is
+ * exactly legs.length − 1.
+ */
+export function effectiveTransfers(net: CompiledNetwork, legs: readonly Leg[]): number {
+  let n = 0;
+  for (let i = 0; i + 1 < legs.length; i++) {
+    const a = legs[i], b = legs[i + 1];
+    const sa = net.routes[a.route].dirs[a.dir].stopStation[a.alight];
+    const sb = net.routes[b.route].dirs[b.dir].stopStation[b.board];
+    n += net.stations[sa]?.pair === sb ? QUAD.crossPlatformPenaltyFactor : 1;
+  }
+  return n;
 }

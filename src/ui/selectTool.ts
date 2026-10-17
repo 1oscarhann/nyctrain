@@ -36,8 +36,11 @@ export class SelectTool implements Tool {
     const sid = app.stations.pick(p.x, p.y, app.tol(10));
     if (sid !== null) {
       const s = app.game.network.stations.get(sid)!;
-      const b = app.report?.stationBoardings[sid];
-      app.tip(`<div class="title">${s.name}</div><div class="hw-muted">${b !== undefined ? `${fmtCount(b)} boardings yesterday · ` : ''}click for details</div>`, p.px);
+      // A cross-platform station (v2) is one: both platforms' boardings.
+      const q = s.pair !== undefined ? app.game.network.stations.get(s.pair) : undefined;
+      const bs = [sid, ...(q ? [q.id] : [])].map((x) => app.report?.stationBoardings[x]).filter((v): v is number => v !== undefined);
+      const b = bs.length ? bs.reduce((x, y) => x + y, 0) : undefined;
+      app.tip(`<div class="title">${s.name}${q ? ' <span class="hw-muted">· cross-platform</span>' : ''}</div><div class="hw-muted">${b !== undefined ? `${fmtCount(b)} boardings yesterday · ` : ''}click for details</div>`, p.px);
       return;
     }
     const hit = pickEdge(app.game.network, p.x, p.y, app.tol(TRACK.snapPx * 0.7));

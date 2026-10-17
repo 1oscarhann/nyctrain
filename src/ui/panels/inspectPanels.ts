@@ -30,7 +30,7 @@ export function trainPanel(app: App, id: number): Panel {
     const next = st?.[dir.stopStation[Math.min(t.nextStop, dir.stopStation.length - 1)]]?.name ?? '';
     const people = t.load * app.agentScale;
     const lf = people / r.capComfort;
-    sh.titleEl.replaceChildren(bullet(r.color, r.bullet, 22), ' ', `${r.name}`);
+    sh.titleEl.replaceChildren(bullet(r.color, r.bullet, 22, !!r.express), ' ', `${r.name}`);
     // City chaos: stalled (breakdown) or held at a station (sick passenger).
     const inc = app.feed.activeFor({ trainId: id });
     const banner = inc

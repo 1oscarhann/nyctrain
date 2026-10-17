@@ -11,8 +11,11 @@ import type { ChaosLevel, CityId, GrowthPace } from '../balance';
 import type { DayExposure, ServiceOverride } from '../sim/protocol';
 import type { FarePolicy } from '../economy/fares';
 
-/** v3: city chaos (events, disruptions, weather). v4: operations control and the money market. v5: Living City. */
-export const SAVE_VERSION = 5;
+/**
+ * v3: city chaos (events, disruptions, weather). v4: operations control and the money market.
+ * v5: Living City. v6: express services and four-track trunks.
+ */
+export const SAVE_VERSION = 6;
 
 /**
  * Living City growth state (v5): what the saved groups (and so the saved mode shares) were

@@ -18,7 +18,13 @@ export interface TrainDatum {
   color: [number, number, number, number];
   offset: number;
   train: TrainView;
+  /** An express route's train (v2): a light casing, so an express sliding past a local is visible. */
+  express: boolean;
 }
+
+/** Casing colours: dark for locals, light for expresses (docs/v2/express-quad.md §2.3). */
+export const CASING_LOCAL: [number, number, number, number] = [16, 20, 25, 235];
+export const CASING_EXPRESS: [number, number, number, number] = [236, 240, 244, 235];
 
 const WIDTH = 6;
 const offsetExt = new PathStyleExtension({ offset: true });
@@ -57,7 +63,7 @@ export class TrainLayer {
       const offAB = el ? (offsets.get(`${el.edge}:${r.id}`) ?? 0) : 0;
       const travelOffset = el && el.edgeDir === 1 ? -offAB : offAB;
       // Right-hand running: each direction sits slightly to its own side of the line.
-      out.push({ id: t.id, path, color: col, offset: (travelOffset * scale + 1.6) / WIDTH, train: t });
+      out.push({ id: t.id, path, color: col, offset: (travelOffset * scale + 1.6) / WIDTH, train: t, express: !!r.express });
     }
     this.data = out;
   }
@@ -96,7 +102,7 @@ export class TrainLayer {
         id: 'trains-casing',
         data: this.data,
         getPath: (d) => d.path,
-        getColor: (d) => (d.id === sel ? [255, 194, 74, 255] : al.has(d.id) ? [255, 93, 93, 255] : [16, 20, 25, 235]),
+        getColor: (d) => (d.id === sel ? [255, 194, 74, 255] : al.has(d.id) ? [255, 93, 93, 255] : d.express ? CASING_EXPRESS : CASING_LOCAL),
         getWidth: casing,
         widthUnits: 'pixels',
         capRounded: true,

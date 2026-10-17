@@ -458,6 +458,22 @@ select {
   line-height: 1;
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
 }
+/* Express lozenge (v2): an elongated hexagon with a 1.5 px white keyline (docs/v2/express-quad.md §2.4). */
+.bullet.express {
+  border-radius: 0;
+  background: #fff;
+  position: relative;
+  clip-path: polygon(20% 0, 80% 0, 100% 50%, 80% 100%, 20% 100%, 0 50%);
+}
+.bullet.express > span {
+  position: absolute;
+  inset: 1.5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c);
+  clip-path: polygon(20% 0, 80% 0, 100% 50%, 80% 100%, 20% 100%, 0 50%);
+}
 .list {
   display: flex;
   flex-direction: column;
@@ -1275,6 +1291,60 @@ input[type='checkbox'] {
 }
 .score-bar.bad > i {
   background: var(--red);
+}
+/* The route panel's Line list (v2): a spine in the route colour, served stops filled, skipped hollow. */
+.line-list {
+  --rc: #8e99a5;
+  gap: 0;
+}
+.line-row {
+  position: relative;
+}
+.line-row::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--rc);
+  opacity: 0.5;
+}
+.line-row:first-child::before {
+  top: 50%;
+}
+.line-row:last-child::before {
+  bottom: 50%;
+}
+.line-row .line-mark {
+  position: relative;
+  z-index: 1;
+  width: 11px;
+  height: 11px;
+  flex: none;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid var(--rc);
+}
+.line-row.skipped .line-mark {
+  width: 9px;
+  height: 9px;
+  margin: 0 1px;
+  background: var(--panel-solid);
+  border: 1.5px solid var(--rc);
+}
+.line-row.skipped .grow {
+  color: var(--muted);
+}
+.line-tag {
+  font-size: 11px;
+  color: var(--dim);
+}
+.line-term {
+  font-size: 11px;
+  color: var(--dim);
+  padding: 0 4px;
 }
 /* Timepoint clock toggle in the route panel's stop list (amber when on). */
 .tp-toggle {

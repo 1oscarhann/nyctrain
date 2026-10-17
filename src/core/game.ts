@@ -271,17 +271,28 @@ export class Game {
     return { ok: true, refund };
   }
 
-  bulldozeStation(id: number): { ok: boolean; reason?: string; refund?: number } {
+  /**
+   * Demolish a station. A cross-platform pair (v2) goes together by default (`withPartner: false`:
+   * just this platform; the partner becomes a lone platform); refused while a route serves either.
+   */
+  bulldozeStation(id: number, opts: { withPartner?: boolean } = {}): { ok: boolean; reason?: string; refund?: number } {
     const s = this.network.stations.get(id);
     if (!s) return { ok: false, reason: 'Nothing here' };
-    const users = this.routesUsingStation(id);
+    const partner = (opts.withPartner ?? true) && s.pair !== undefined ? this.network.stations.get(s.pair) : undefined;
+    const all = partner ? [s, partner] : [s];
+    const users = [...new Set(all.flatMap((x) => this.routesUsingStation(x.id)))];
     if (users.length) return { ok: false, reason: `Served by ${users.join(', ')} — remove it from the route first` };
-    if (s.status === 'blueprint') {
-      this.editBlueprint(() => this.network.removeStation(id));
+    if (all.every((x) => x.status === 'blueprint')) {
+      this.editBlueprint(() => {
+        for (const x of all) this.network.removeStation(x.id);
+      });
       return { ok: true, refund: 0 };
     }
-    const refund = this.finance.refund(s.cost, TRACK.bulldozeRefund);
-    this.network.removeStation(id);
+    let refund = 0;
+    for (const x of all) {
+      if (x.status !== 'blueprint') refund += this.finance.refund(x.cost, TRACK.bulldozeRefund);
+      this.network.removeStation(x.id);
+    }
     this.history.clear();
     this.afterNetworkChange();
     this.events.emit('money', undefined);

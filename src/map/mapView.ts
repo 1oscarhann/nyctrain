@@ -69,6 +69,9 @@ export class MapView {
     });
     map.doubleClickZoom.disable(); // double-click finishes track
     map.keyboard.disable(); // game shortcuts own the keyboard
+    // Shift-click is a tool modifier (single platform, just this platform, add at the start); box
+    // zoom would swallow it (it suppresses the click after every Shift+mouseup).
+    map.boxZoom.disable();
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
     // The scale bar follows the units setting (miles or kilometres).
     const scaleUnit = () => (getUnits() === 'metric' ? 'metric' : 'imperial');

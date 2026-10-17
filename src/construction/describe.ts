@@ -1,8 +1,10 @@
 /** Human-readable descriptions of track for tooltips and panels. */
+import { QUAD } from '../balance';
 import { fmtDistance, fmtMoney, fmtSpeed } from '../core/units';
 import type { Game } from '../core/game';
 import { edgeReport, LEVEL_NAMES } from './validate';
 import { progress } from './blueprint';
+import type { TrackEdge } from './types';
 
 export function cap(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -13,6 +15,14 @@ export function levelLabel(net: Game['network'], edgeId: number): string {
   const la = net.nodes.get(e.a)!.level;
   const lb = net.nodes.get(e.b)!.level;
   return la === lb ? cap(LEVEL_NAMES[la]) : `Ramp: ${LEVEL_NAMES[la]} → ${LEVEL_NAMES[lb]}`;
+}
+
+/** Which part of a four-track section an edge is (null for ordinary double track). */
+export function quadLabel(e: TrackEdge): string | null {
+  if (!e.quad) return null;
+  if (e.quad.role === 'local') return 'Local pair';
+  if (e.quad.role === 'express') return `Express pair · shared works ×${QUAD.secondPairCostFactor}`;
+  return `Turnout or crossover · ×${QUAD.linkCostFactor}`;
 }
 
 export function edgeTooltip(game: Game, edgeId: number): string {
@@ -34,6 +44,8 @@ export function edgeTooltip(game: Game, edgeId: number): string {
     `<div class="row"><span class="hw-muted">Curve</span><span class="num">${curve} · ${fmtSpeed(r.speedLimit)} max</span></div>`,
     `<div class="row"><span class="hw-muted">${e.status === 'blueprint' ? 'Cost' : 'Built for'}</span><span class="num">${fmtMoney(cost)}</span></div>`,
   ];
+  const quad = quadLabel(e);
+  if (quad) lines.splice(1, 0, `<div class="row"><span class="hw-muted">Four-track</span><span class="num">${quad}</span></div>`);
   if (r.waterLength > 0) lines.push(`<div class="row"><span class="hw-muted">Over water</span><span class="num">${fmtDistance(r.waterLength)}</span></div>`);
   if (r.densityMult > 1.05 && e.status === 'blueprint') lines.push(`<div class="row"><span class="hw-muted">Density premium</span><span class="num">×${r.densityMult.toFixed(1)}</span></div>`);
   lines.push(`<div>${status}</div>`);

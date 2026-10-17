@@ -79,7 +79,7 @@ export function alertsPanel(app: App, focus?: number, focusEvent?: number): Pane
       h(
         'div',
         { class: 'alert-detail' },
-        h('span', { class: 'alert-routes' }, ...t.routes.map((r) => bullet(r.color, r.bullet, 16))),
+        h('span', { class: 'alert-routes' }, ...t.routes.map((r) => bullet(r.color, r.bullet, 16, r.express))),
         h('span', { class: 'grow' }, t.routes.length ? t.detail : cap(t.detail)),
         showBtn,
       ),
@@ -105,7 +105,7 @@ export function alertsPanel(app: App, focus?: number, focusEvent?: number): Pane
           'div',
           { class: 'ev-line' },
           `${venue.name}: ${stops}`,
-          serving.length ? h('span', { class: 'ev-serving' }, ' · served by ', ...serving.map((s) => app.routeRef(s.routeId)).filter((r) => !!r).map((r) => bullet(r!.color, r!.bullet, 15))) : null,
+          serving.length ? h('span', { class: 'ev-serving' }, ' · served by ', ...serving.map((s) => app.routeRef(s.routeId)).filter((r) => !!r).map((r) => bullet(r!.color, r!.bullet, 15, r!.express))) : null,
         ),
       );
     } else {
@@ -158,7 +158,7 @@ export function alertsPanel(app: App, focus?: number, focusEvent?: number): Pane
           'div',
           { class: 'ev-service', title: 'Event service (temporary headway)' },
           svgIcon(ICONS.ticket),
-          h('span', { class: 'alert-routes' }, ...refs.map((r, i) => (r ? bullet(r.color, r.bullet, 15) : `route ${rids[i]}`))),
+          h('span', { class: 'alert-routes' }, ...refs.map((r, i) => (r ? bullet(r.color, r.bullet, 15, r.express) : `route ${rids[i]}`))),
           h('span', { class: 'grow' }, `every ${list[0].headwayMin} min · ${wins.map((o) => `${fmtClock(o.from)}–${fmtClock(o.to)}`).join(', ')}`),
           h('button', {
             class: 'hw-btn ghost small',
@@ -394,7 +394,7 @@ function serviceEditor(app: App, ev: FeedEvent, close: () => void): HTMLElement 
         h(
           'div',
           { class: 'svc-row' },
-          bullet(r.color, r.bullet, 16),
+          bullet(r.color, r.bullet, 16, r.express),
           h(
             'span',
             { class: 'grow' },
@@ -431,7 +431,7 @@ function serviceEditor(app: App, ev: FeedEvent, close: () => void): HTMLElement 
       else st.routes.delete(r.id);
       renderEstimate();
     });
-    routeList.append(h('label', { class: 'svc-route' }, cb, bullet(r.color, r.bullet, 16), h('span', { class: 'grow' }, r.name), nearIds.includes(r.id) ? h('span', { class: 'hw-muted', style: 'font-size:11px' }, 'near') : null));
+    routeList.append(h('label', { class: 'svc-route' }, cb, bullet(r.color, r.bullet, 16, r.express), h('span', { class: 'grow' }, r.name), nearIds.includes(r.id) ? h('span', { class: 'hw-muted', style: 'font-size:11px' }, 'near') : null));
   }
   // Windows
   const winRow = (i: number, label: string) => {

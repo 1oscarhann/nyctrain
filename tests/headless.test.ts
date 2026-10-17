@@ -5,7 +5,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import { loadLandFromDisk, loadWorldFromDisk } from '../scripts/nodeData';
-import { buildTestNetwork, createHeadlessGame, runDays, startEngine, stepUntil } from '../src/sim/headless';
+import { buildExpressTestNetwork, buildLondonExpressTestNetwork, buildTestNetwork, createHeadlessGame, runDays, startEngine, stepUntil, type HeadlessRun } from '../src/sim/headless';
+import type { Game } from '../src/core/game';
+import type { Route } from '../src/routes/types';
+import { applyCity } from '../src/cities';
+import { pairKeyId } from '../src/routes/express';
 import { TState } from '../src/sim/trainSim';
 import type { Alert, DayReport } from '../src/sim/protocol';
 import { fmtMoney } from '../src/core/units';
@@ -158,5 +162,69 @@ describe('headless simulation', () => {
     const r = run.reports[0];
     expect(r.avgLateness).toBeGreaterThan(30);
     expect(r.deadlocks).toBe(0);
+  }, 180_000);
+});
+
+/**
+ * Express service on a four-track trunk (v2, docs/v2/express-quad.md §13 test 31): checks shared by
+ * the New York and London runs.
+ */
+function expressChecks(game: Game, run: HeadlessRun, local: Route, express: Route): { overtakes: number; cross: number } {
+  const c = run.engine.commuters!;
+  for (const r of run.reports) expect(r.deadlocks).toBe(0);
+  expect(c.stuckCount()).toBe(0);
+  expect(c.inFlight()).toBe(0);
+  const last = run.reports[run.reports.length - 1];
+  expect(last.riders).toBeGreaterThan(10_000);
+  expect(last.riders).toBeLessThan(1_000_000);
+  expect(last.routeRiders[local.id]).toBeGreaterThan(0);
+  expect(last.routeRiders[express.id]).toBeGreaterThan(0);
+  const overtakes = run.reports.reduce((s, r) => s + (r.routeOvertakes?.[express.id] ?? 0), 0);
+  const cross = run.reports.reduce((s, r) => s + Object.values(r.crossTransfers ?? {}).reduce((a, b) => a + b, 0), 0);
+  expect(overtakes).toBeGreaterThan(0);
+  for (const r of run.reports) expect(r.crossTransfers).toBeDefined();
+  // A cross-platform pair is staffed as 1.4 stations.
+  const pairs = [...game.network.stations.values()].filter((s) => s.pair !== undefined && s.id < s.pair).length;
+  expect(last.stationsOpen).toBeCloseTo(game.network.stations.size - pairs * 0.6, 9);
+  for (const h of game.finance.history) for (const v of [h.revenue, h.operating, h.staffing, h.maintenance, h.cash]) expect(Number.isFinite(v)).toBe(true);
+  // Living City: each pair is one served station (one value-capture district point, under its key).
+  const v = run.engine.growthView()!;
+  for (const s of game.network.stations.values()) {
+    if (s.pair === undefined) continue;
+    const key = pairKeyId(game.network, s.id);
+    expect(key).toBe(Math.min(s.id, s.pair));
+    if (s.id !== key) expect(v.stationTracts[s.id]).toBeUndefined();
+  }
+  // Express trips are shorter than the local's: the express skips the local-only stops.
+  return { overtakes, cross };
+}
+
+describe('express service on a four-track trunk', () => {
+  it('31. runs an express on a four-track West Side trunk', () => {
+    const game = createHeadlessGame(loadWorldFromDisk(), loadLandFromDisk());
+    const { local, express, errors, quad } = buildExpressTestNetwork(game);
+    expect(errors).toEqual([]);
+    expect(quad.problems).toEqual([]);
+    expect(express.express).toBe(true);
+    expect(express.stops.length).toBeLessThan(local.stops.length);
+    const run = runDays(game, 2);
+    const { overtakes, cross } = expressChecks(game, run, local, express);
+    console.log(`West Side: riders ${Math.round(run.reports[1].riders).toLocaleString()} (local ${run.reports[1].routeRiders[local.id]}, express ${run.reports[1].routeRiders[express.id]}) · ${overtakes} overtakes · ${cross} cross-platform transfers in 2 days`);
+    expect(cross).toBeGreaterThan(0);
+  }, 180_000);
+
+  it('London: an express on a deep four-track trunk along Oxford Street and through the City', () => {
+    applyCity('london');
+    try {
+      const game = createHeadlessGame(loadWorldFromDisk(), loadLandFromDisk());
+      const { local, express, errors, quad } = buildLondonExpressTestNetwork(game);
+      expect(errors).toEqual([]);
+      expect(quad.problems).toEqual([]);
+      const run = runDays(game, 2);
+      const { overtakes, cross } = expressChecks(game, run, local, express);
+      console.log(`London Central: riders ${Math.round(run.reports[1].riders).toLocaleString()} (local ${run.reports[1].routeRiders[local.id]}, express ${run.reports[1].routeRiders[express.id]}) · ${overtakes} overtakes · ${cross} cross-platform transfers in 2 days`);
+    } finally {
+      applyCity('nyc');
+    }
   }, 180_000);
 });

@@ -29,6 +29,11 @@ export function toLonLat(x: number, y: number): LonLat {
   return [ORIGIN_LON + x / M_PER_DEG_LON, ORIGIN_LAT + y / M_PER_DEG_LAT];
 }
 
+/** Ground metres per screen pixel at a zoom level (MapLibre's 512 px tiles), at the city's origin latitude. */
+export function metresPerPixel(zoom: number): number {
+  return (40075016.686 * Math.cos((ORIGIN_LAT * Math.PI) / 180)) / (512 * 2 ** zoom);
+}
+
 export function dist(ax: number, ay: number, bx: number, by: number): number {
   return Math.hypot(bx - ax, by - ay);
 }

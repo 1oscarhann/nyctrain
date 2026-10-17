@@ -332,7 +332,7 @@ export function financePanel(app: App): Panel {
         h(
           'div',
           { class: 'list-item', style: 'cursor:default' },
-          bullet(r.color, r.bullet, 20),
+          bullet(r.color, r.bullet, 20, r.express),
           h('span', { class: 'grow' }, r.name, h('div', { class: 'hw-muted', style: 'font-size:11.5px' }, `Idle: ${trains ? `${trains} train${trains > 1 ? 's' : ''} (${n} cars)` : `${n} cars`}`)),
           h('button', { class: 'hw-btn small', onclick: () => app.sellIdleCars(r.id) }, `Sell for ${fmtMoneyFine(carSaleValue(r.cls, n))}`),
         ),

@@ -2,8 +2,9 @@
  * Interchanges: stations within 200 m of each other (on different track) are linked.
  * Transfer walk time is distance ÷ 1.2 m/s + 60 s.
  */
-import { STATION } from '../balance';
+import { COMMUTERS, QUAD, STATION } from '../balance';
 import type { Network } from '../construction/network';
+import type { CStation } from '../sim/protocol';
 
 export interface Interchanges {
   /** station id → group index */
@@ -62,4 +63,18 @@ export function computeInterchanges(net: Network, filter?: (stationId: number) =
 /** Walk time between two platforms (same station: just the base transfer time). */
 export function transferTime(distance: number): number {
   return distance / STATION.walkSpeed + STATION.transferBase;
+}
+
+/**
+ * Four-track sections (v2): walk time from platform a to platform b (compiled index bIndex). A
+ * step across to the cross-platform partner takes QUAD.crossPlatformTransfer; anything else is
+ * exactly transferTime of the distance.
+ */
+export function platformTransfer(a: CStation, b: CStation, bIndex: number): number {
+  return a.pair === bIndex ? QUAD.crossPlatformTransfer : transferTime(Math.hypot(b.x - a.x, b.y - a.y));
+}
+
+/** Transfer penalty (s) from platform a to the platform with compiled index bIndex: reduced across a pair. */
+export function transferPenaltyFor(a: CStation, bIndex: number): number {
+  return a.pair === bIndex ? COMMUTERS.transferPenalty * QUAD.crossPlatformPenaltyFactor : COMMUTERS.transferPenalty;
 }

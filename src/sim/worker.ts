@@ -125,7 +125,8 @@ function answer(q: Extract<ToWorker, { type: 'query' }>['q']): unknown {
       const d = c.routeDetail(q.route);
       if (!d) return null;
       const ri = engine!.net?.routes.findIndex((r) => r.id === q.route) ?? -1;
-      return { ...d, inService: ri >= 0 ? engine!.trains.inService(ri) : 0, regularity: engine!.trains.regularityDetail(q.route) };
+      // Four-track sections (v2): overtakes by this route's trains so far today.
+      return { ...d, inService: ri >= 0 ? engine!.trains.inService(ri) : 0, regularity: engine!.trains.regularityDetail(q.route), overtakesToday: engine!.trains.day.overtakes.get(q.route) ?? 0 };
     }
     case 'tract':
       return c.tractDetail(q.tract);

@@ -1,6 +1,8 @@
 /**
  * Performance check for the spec's target (300 stations, 25 routes, ~400 trains):
- *   npm run perf [-- city=nyc|london scale=10 ns=17 ew=8 stations=12 chaos=off|calm|normal|wild weather=clear|rain|snow|heat outdoor=1 ops=on|off month=0]
+ *   npm run perf [-- city=nyc|london scale=10 ns=17 ew=8 stations=12 chaos=off|calm|normal|wild weather=clear|rain|snow|heat outdoor=1 ops=on|off month=0 quads=N]
+ * quads=N (express service, v2) turns N of the north–south lines into four-track lines with
+ * cross-platform stations, each with an all-stops local and an express (docs/v2/express-quad.md §10).
  * ops= (operations control): by default every route holds at 70% with suggested timepoints and no
  * recovery (so the fleet stays at 431 trains while the holding code runs); ops=off is the code
  * before operations control (no holding, standard turnarounds, one flat fare).
@@ -40,11 +42,12 @@ const outdoor = args.outdoor === '1';
 const chaosArgs = chaos !== 'off' || weather !== undefined || outdoor;
 const opsOff = args.ops === 'off';
 const monthClose = args.month !== '0';
+const quads = Number(args.quads ?? 0);
 
 const world = loadWorldFromDisk();
 const game = createHeadlessGame(world, loadLandFromDisk(), { sandbox: true, ops: opsOff ? 'off' : 'default' });
 let t0 = Date.now();
-const { routes, fleet } = buildPerfNetwork(game, { ns: NS, ew: EW, perLine: PER_LINE, ...(opsOff ? {} : { control: { hold: true, recoveryPct: 0 } }), ...(cityId === 'london' ? { area: PERF_AREA_LONDON } : {}) });
+const { routes, fleet } = buildPerfNetwork(game, { ns: NS, ew: EW, perLine: PER_LINE, ...(opsOff ? {} : { control: { hold: true, recoveryPct: 0 } }), ...(cityId === 'london' ? { area: PERF_AREA_LONDON } : {}), ...(quads > 0 ? { quads } : {}) });
 if (!opsOff) for (const r of routes) game.routes.update(r.id, { control: { ...r.control, timepoints: suggestTimepoints(r, routes) } });
 const net = game.network;
 console.log(`network: ${net.stations.size} stations, ${routes.length} routes, ${fleet} trains, ${net.edges.size} edges · built in ${Date.now() - t0} ms`);
@@ -104,6 +107,11 @@ console.log(
   `operations control ${opsOff ? 'off' : 'on (holding 70%, suggested timepoints, no recovery)'}: ${reg1.holds - reg0.holds} holds in the timed hour` +
     ` (${reg1.holds ? ((reg1.holdSec - reg0.holdSec) / Math.max(1, reg1.holds - reg0.holds)).toFixed(0) : 0} s each) · ${engine.trains.day.shortTurns} short turnarounds today · headway CV so far ${reg1.cv.toFixed(2)}, bunched ${(reg1.bunched * 100).toFixed(1)}%`,
 );
+if (quads > 0) {
+  const ov = [...engine.trains.day.overtakes.values()].reduce((a, b) => a + b, 0);
+  const pairs = compiled.stations.filter((s, i) => s.pair !== undefined && s.pair > i).length;
+  console.log(`four-track: ${quads} quad lines · ${pairs} cross-platform stations · ${compiled.routes.filter((r) => r.express).length} express routes · ${ov} overtakes so far today · ${compiled.lockCount} merge locks`);
+}
 if (chaosArgs) {
   const w = engine.chaos.todayWeather();
   console.log(`chaos ${chaos} · day 1 weather ${w.weather.kind} (${w.weather.severity.toFixed(2)}) · outdoor ${outdoor ? 'all track' : 'as built'} · ${incidents} incidents started in the timed hour · ${engine.commuters!.eventAgentCount().toLocaleString()} event agents today`);

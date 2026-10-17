@@ -40,6 +40,8 @@ export interface RouteRef {
   bullet: string;
   color: string;
   name: string;
+  /** Express service (v2): drawn with the lozenge bullet. */
+  express?: boolean;
 }
 
 export interface AlertText {
@@ -312,7 +314,12 @@ export class AlertFeed {
 
   closedStations(): Set<number> {
     const s = new Set<number>();
-    for (const a of this.alerts.values()) if (a.status === 'active' && a.kind === 'police' && a.stationId !== undefined) s.add(a.stationId);
+    for (const a of this.alerts.values()) {
+      if (a.status !== 'active' || a.kind !== 'police') continue;
+      if (a.stationId !== undefined) s.add(a.stationId);
+      // Both platforms of a cross-platform pair close (v2).
+      if (a.partnerStationId !== undefined) s.add(a.partnerStationId);
+    }
     return s;
   }
 
@@ -326,7 +333,7 @@ export class AlertFeed {
   activeFor(target: { stationId?: number; trainId?: number }): Alert | null {
     for (const a of this.alerts.values()) {
       if (a.status !== 'active') continue;
-      if (target.stationId !== undefined && a.kind === 'police' && a.stationId === target.stationId) return a;
+      if (target.stationId !== undefined && a.kind === 'police' && (a.stationId === target.stationId || a.partnerStationId === target.stationId)) return a;
       if (target.trainId !== undefined && (a.kind === 'breakdown' || a.kind === 'sick') && a.trainId === target.trainId) return a;
     }
     return null;

@@ -95,6 +95,25 @@ const STEPS: Record<number, (s: AnySave) => AnySave> = {
     s.version = 5;
     return s;
   },
+  // v5 → v6: express services and four-track trunks (docs/v2/express-quad.md §8). Defaults only
+  // (??=), so it is idempotent:
+  // - every route is a local (express false);
+  // - the saved day report has no overtakes or cross-platform transfers yet ({}).
+  // Quad tags, twins and cross-platform pairs are optional network fields (absent: ordinary track,
+  // lone platforms); Network.load drops malformed tags and dangling or one-way references.
+  5: (s) => {
+    const game = (s.game ?? {}) as Loose;
+    const routes = game.routes && typeof game.routes === 'object' ? (game.routes as Loose) : null;
+    for (const r of Array.isArray(routes?.routes) ? (routes!.routes as Loose[]) : []) if (r && typeof r === 'object') r.express ??= false;
+    const lr = game.lastReport && typeof game.lastReport === 'object' ? (game.lastReport as Loose) : null;
+    if (lr) {
+      lr.routeOvertakes ??= {};
+      lr.crossTransfers ??= {};
+    }
+    s.game = game;
+    s.version = 6;
+    return s;
+  },
 };
 
 /**

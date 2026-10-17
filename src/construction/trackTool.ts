@@ -2,19 +2,26 @@
  * Track tool: click to place points, double-click or Enter to finish. Snaps to track ends and
  * branches off straight track. Segments preview live in green (valid) or red (with the reason).
  * Blueprint vertices can be dragged.
+ *
+ * Four tracks (v2, docs/v2/express-quad.md §2.1): Q switches between two and four tracks. In four,
+ * the drawn line is the local pair and the express pair runs alongside on the side F picks; it
+ * fans off through turnouts where the stroke attaches to other track, gets scissors crossovers
+ * near free ends, and continues an existing four-track free end. X places scissors crossovers.
  */
 import { PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
-import { LEVELS, TRACK, type TrackClass, type TrackLevel } from '../balance';
+import { LEVELS, QUAD, TRACK, type TrackClass, type TrackLevel } from '../balance';
 import { toLonLat } from '../core/geo';
 import { fmtDistance, fmtMoney, fmtPerDistance, fmtSpeed } from '../core/units';
 import type { AppContext } from '../ui/context';
 import { h } from '../ui/dom';
+import { crossoverTip, QUAD_COLORS, quadHoverTip, quadStrokeTip, SIDE_LABEL, strokeRoles } from '../ui/express';
 import type { Pointer, Tool } from '../ui/toolTypes';
 import { cap, edgeTooltip } from './describe';
 import type { Network } from './network';
 import { pickEdge, pickNode, snapForTrack, type SnapResult } from './pick';
-import type { Snap, StrokePoint } from './types';
+import { addQuadStroke, addScissors, scissorsCandidate, type QuadResult } from './quad';
+import type { QuadRole, Snap, StrokePoint } from './types';
 import { edgeReport, LEVEL_NAMES, type EdgeReport } from './validate';
 
 const GREEN: [number, number, number, number] = [76, 208, 138, 255];
@@ -32,6 +39,25 @@ interface Preview {
   net: Network;
   edges: number[];
   reports: EdgeReport[];
+  /** Four tracks: what each edge is (colours the preview); absent for two tracks. */
+  roles?: Map<number, QuadRole | 'double'>;
+  /** Four tracks refused: the drawn line is shown red. */
+  refused?: boolean;
+}
+
+/** Crossover mode's hover: a candidate scissors, previewed on a clone. */
+interface CrossoverHover {
+  key: string;
+  ok: boolean;
+  reason?: string;
+  g: number;
+  edge: number;
+  uA: number;
+  uB: number;
+  cls: TrackClass;
+  net: Network | null;
+  links: number[];
+  reports: EdgeReport[];
 }
 
 export class TrackTool implements Tool {
@@ -48,6 +74,13 @@ export class TrackTool implements Tool {
   private press: { id: number; px: [number, number]; dragging: boolean } | null = null;
   private hoverNode: number | null = null;
   private lastPointer: Pointer | null = null;
+  /** Two tracks or four (Q). */
+  tracks: 2 | 4 = 2;
+  /** Four tracks: the side of the drawn line the express pair runs on (F): +1 right, −1 left. */
+  side: 1 | -1 = 1;
+  /** Four tracks: placing scissors crossovers (X) instead of drawing. */
+  crossing = false;
+  private xo: CrossoverHover | null = null;
 
   constructor(private ctx: AppContext) {}
 
@@ -57,6 +90,7 @@ export class TrackTool implements Tool {
 
   deactivate(): void {
     this.cancel();
+    this.xo = null;
     this.ctx.tip(null);
   }
 
@@ -79,16 +113,52 @@ export class TrackTool implements Tool {
     this.ctx.refreshOptions();
   }
 
+  /** Two or four tracks (Q). Works mid-stroke: the preview is rebuilt from the same points. */
+  setTracks(n: 2 | 4): void {
+    this.tracks = n;
+    if (n === 2) this.crossing = false;
+    this.xo = null;
+    this.ctx.refreshOptions();
+    if (this.lastPointer) this.move(this.lastPointer);
+  }
+
+  /** Flip the express pair's side (F). Works mid-stroke. */
+  setSide(side: 1 | -1): void {
+    this.side = side;
+    this.ctx.refreshOptions();
+    if (this.lastPointer) this.move(this.lastPointer);
+  }
+
+  /** Crossover placement on or off (X, four tracks only). */
+  setCrossing(on: boolean): void {
+    if (on && this.tracks !== 4) return;
+    if (on && this.drawing) this.cancel();
+    this.crossing = on;
+    this.xo = null;
+    this.ctx.refreshOptions();
+    if (this.lastPointer) this.move(this.lastPointer);
+    else this.ctx.redraw();
+  }
+
   // ------------------------------------------------------------------ events
   move(p: Pointer): void {
     this.lastPointer = p;
     const net = this.ctx.game.network;
     const tol = this.ctx.tol(TRACK.snapPx);
+    if (this.crossing) {
+      this.hover = null;
+      this.hoverNode = null;
+      this.moveCrossover(p);
+      return;
+    }
     this.hover = snapForTrack(net, p.x, p.y, tol, this.cls);
     if (!this.drawing) {
       this.hoverNode = pickNode(net, p.x, p.y, tol, (id) => net.nodeEditable(id) && net.degree(id) > 0 && !(net.nodes.get(id)!.anchor && net.degree(id) > 1));
       if (this.hover.snap.kind !== 'none' && !this.hover.ok) {
         this.ctx.tip(`<div class="reason hw-red">${this.hover.reason}</div>`, p.px);
+      } else if (this.tracks === 4) {
+        const snap = this.hover.snap;
+        this.ctx.tip((snap.kind === 'edge' ? edgeTooltip(this.ctx.game, snap.edge) + '<div style="margin-top:4px"></div>' : '') + quadHoverTip(net, snap, this.level, this.side), p.px);
       } else if (this.hover.snap.kind === 'edge') {
         this.ctx.tip(edgeTooltip(this.ctx.game, this.hover.snap.edge) + `<div class="hw-muted" style="margin-top:4px">Click to branch off here</div>`, p.px);
       } else if (this.hover.snap.kind === 'node') {
@@ -115,6 +185,10 @@ export class TrackTool implements Tool {
       this.ctx.tip(`<div class="hw-muted">Click the next point</div>`, p.px);
       return;
     }
+    if (this.tracks === 4) {
+      this.buildQuadPreview(net, points, endSnap, p);
+      return;
+    }
     let edges: number[] = [];
     try {
       edges = net.addStroke(points, this.cls, this.startSnap, endSnap);
@@ -138,6 +212,89 @@ export class TrackTool implements Tool {
     this.ctx.tip(lines.join(''), p.px);
   }
 
+  /** Four tracks: the whole stroke on a clone (pairs, turnouts, crossovers), coloured by part. */
+  private buildQuadPreview(net: Network, points: StrokePoint[], endSnap: Snap, p: Pointer): void {
+    let res: QuadResult;
+    try {
+      res = addQuadStroke(net, points, this.cls, this.startSnap, endSnap, { side: this.side });
+    } catch (e) {
+      res = { ok: false, fatal: String((e as Error)?.message ?? e), group: -1, local: [], express: [], links: [], double: [], edges: [], problems: [] };
+    }
+    const terrain = this.ctx.game.terrain;
+    const byId = new Map<number, EdgeReport>();
+    let edges: number[];
+    let roles: Map<number, QuadRole | 'double'> | undefined;
+    if (res.ok) {
+      edges = res.edges;
+      roles = strokeRoles(res);
+    } else {
+      // Refused (the clone is as it was): show the drawn line in red.
+      try {
+        edges = net.addStroke(points, this.cls, this.startSnap, endSnap);
+      } catch {
+        edges = [];
+      }
+    }
+    for (const id of edges) byId.set(id, edgeReport(net, id, terrain));
+    this.preview = { net, edges, reports: edges.map((id) => byId.get(id)!), roles, refused: !res.ok };
+    let html = quadStrokeTip(net, res, byId, this.level, this.cls);
+    if (this.hover && this.hover.snap.kind !== 'none' && !this.hover.ok) html += `<div class="reason hw-red">${this.hover.reason}</div>`;
+    this.ctx.tip(html, p.px);
+  }
+
+  /** Crossover mode: the nearest valid scissors on the hovered four-track edge, previewed on a clone. */
+  private moveCrossover(p: Pointer): void {
+    const game = this.ctx.game;
+    const net = game.network;
+    const hit = pickEdge(net, p.x, p.y, this.ctx.tol(TRACK.snapPx + 4), (id) => {
+      const t = net.edges.get(id)!.quad;
+      return !!t && t.role !== 'link';
+    });
+    if (!hit) {
+      this.xo = null;
+      this.ctx.tip(crossoverTip(null), p.px);
+      this.ctx.redraw();
+      return;
+    }
+    const cls = net.edges.get(hit.edge)!.cls;
+    const c = scissorsCandidate(net, hit.edge, hit.u, cls);
+    if (!c.ok) {
+      this.xo = { key: '', ok: false, reason: c.reason, g: -1, edge: hit.edge, uA: hit.u, uB: hit.u, cls, net: null, links: [], reports: [] };
+      this.ctx.tip(crossoverTip({ ok: false, reason: c.reason }), p.px);
+      this.ctx.redraw();
+      return;
+    }
+    const key = `${net.version}:${c.edge}:${c.uA.toFixed(1)}`;
+    if (this.xo?.key !== key) {
+      const clone = net.clone();
+      const r = addScissors(clone, c.g, c.edge, c.uA, c.uB, cls);
+      this.xo = { key, ok: r.ok, reason: r.reason, g: c.g, edge: c.edge, uA: c.uA, uB: c.uB, cls, net: clone, links: r.links, reports: r.links.map((id) => edgeReport(clone, id, game.terrain)) };
+    }
+    const xo = this.xo;
+    if (!xo.ok) this.ctx.tip(crossoverTip({ ok: false, reason: xo.reason ?? 'No room for a crossover here' }), p.px);
+    else {
+      const cost = xo.reports.reduce((t, r) => t + r.cost, 0);
+      this.ctx.tip(crossoverTip({ ok: true, cost, error: xo.reports.find((r) => !r.ok)?.errors[0] }), p.px);
+    }
+    this.ctx.redraw();
+  }
+
+  private clickCrossover(p: Pointer): void {
+    this.moveCrossover(p);
+    const xo = this.xo;
+    if (!xo) return;
+    if (!xo.ok || xo.reports.some((r) => !r.ok)) {
+      this.ctx.toast("Can't place a crossover here", xo.reason ?? xo.reports.find((r) => !r.ok)?.errors[0], 'red');
+      return;
+    }
+    const game = this.ctx.game;
+    const res = game.editBlueprint(() => addScissors(game.network, xo.g, xo.edge, xo.uA, xo.uB, xo.cls));
+    if (!res.ok) this.ctx.toast("Can't place a crossover here", res.reason, 'red');
+    else this.ctx.toast('Crossover planned', `Scissors · ${fmtDistance(QUAD.crossoverLength, true)} · Build to start construction`, 'green');
+    this.xo = null;
+    this.move(p);
+  }
+
   private levelOfSnap(s: Snap): TrackLevel {
     const net = this.ctx.game.network;
     if (s.kind === 'node') return net.nodes.get(s.node)!.level;
@@ -146,6 +303,10 @@ export class TrackTool implements Tool {
   }
 
   click(p: Pointer): void {
+    if (this.crossing) {
+      this.clickCrossover(p);
+      return;
+    }
     const snap = this.hover ?? snapForTrack(this.ctx.game.network, p.x, p.y, this.ctx.tol(TRACK.snapPx), this.cls);
     if (!this.drawing) {
       if (snap.snap.kind !== 'none' && !snap.ok) {
@@ -165,7 +326,11 @@ export class TrackTool implements Tool {
         return;
       }
       this.pts.push({ x: snap.x, y: snap.y, level: this.levelOfSnap(snap.snap) });
-      this.finish(snap.snap);
+      // A refused four-track stroke keeps drawing, without the end it couldn't attach to.
+      if (!this.finish(snap.snap)) {
+        this.pts.pop();
+        this.move(p);
+      }
       return;
     }
     this.pts.push({ x: p.x, y: p.y, level: this.level });
@@ -176,22 +341,39 @@ export class TrackTool implements Tool {
     if (this.drawing) this.finish({ kind: 'none' });
   }
 
-  private finish(endSnap: Snap): void {
+  /** Lay the stroke (one undo step). False when a four-track stroke is refused: it stays drawn. */
+  private finish(endSnap: Snap): boolean {
     const pts = this.pts;
     if (pts.length < 2) {
       this.cancel();
-      return;
+      return true;
     }
     const game = this.ctx.game;
     const start = this.startSnap;
+    if (this.tracks === 4) {
+      // Decide on a clone first: a refused stroke must not leave an empty undo step.
+      const side = this.side;
+      const test = addQuadStroke(game.network.clone(), pts, this.cls, start, endSnap, { side });
+      if (!test.ok) {
+        this.ctx.toast("Can't build four tracks here", test.fatal, 'red');
+        return false;
+      }
+      const res = game.editBlueprint(() => addQuadStroke(game.network, pts, this.cls, start, endSnap, { side }));
+      this.cancel();
+      const sum = game.blueprintSummary();
+      if (sum.invalid.length) this.ctx.toast('Some segments need fixing', sum.invalid[0].reason, 'amber');
+      else if (res.problems.length) this.ctx.toast('Four tracks planned', res.problems[0], 'amber');
+      return true;
+    }
     game.editBlueprint(() => game.network.addStroke(pts, this.cls, start, endSnap));
     this.cancel();
     const sum = game.blueprintSummary();
     if (sum.invalid.length) this.ctx.toast('Some segments need fixing', sum.invalid[0].reason, 'amber');
+    return true;
   }
 
   down(p: Pointer): boolean {
-    if (this.drawing) return false;
+    if (this.drawing || this.crossing) return false;
     const net = this.ctx.game.network;
     const id = pickNode(net, p.x, p.y, this.ctx.tol(TRACK.snapPx), (nid) => net.nodeEditable(nid) && !(net.nodes.get(nid)!.anchor && net.degree(nid) > 1));
     if (id === null) return false;
@@ -210,7 +392,10 @@ export class TrackTool implements Tool {
       this.ctx.game.history.record(this.ctx.game.network);
     }
     const game = this.ctx.game;
-    game.network.moveNode(pr.id, p.x, p.y);
+    if (!game.network.moveNode(pr.id, p.x, p.y)) {
+      this.ctx.tip(`<div class="reason hw-red">The other pair is already built: this vertex can't move</div>`, p.px);
+      return;
+    }
     game.afterNetworkChange();
     const eid = game.network.incident(pr.id)[0];
     if (eid !== undefined) this.ctx.tip(edgeTooltip(game, eid), p.px);
@@ -226,6 +411,23 @@ export class TrackTool implements Tool {
   }
 
   key(e: KeyboardEvent): boolean {
+    const k = e.key.toLowerCase();
+    if (k === 'q' && !e.repeat) {
+      this.setTracks(this.tracks === 4 ? 2 : 4);
+      return true;
+    }
+    if (k === 'f' && this.tracks === 4 && !e.repeat) {
+      this.setSide(this.side === 1 ? -1 : 1);
+      return true;
+    }
+    if (k === 'x' && this.tracks === 4 && !e.repeat) {
+      this.setCrossing(!this.crossing);
+      return true;
+    }
+    if (e.key === 'Escape' && this.crossing) {
+      this.setCrossing(false);
+      return true;
+    }
     if (e.key === 'Escape' && this.drawing) {
       this.cancel();
       return true;
@@ -248,16 +450,32 @@ export class TrackTool implements Tool {
   }
 
   // ------------------------------------------------------------------ rendering
+  private pathOf(net: Network, id: number): [number, number][] {
+    const g = net.geom(id);
+    const path: [number, number][] = [];
+    for (let k = 0; k < g.xs.length; k++) path.push(toLonLat(g.xs[k], g.ys[k]));
+    return path;
+  }
+
   layers(): (Layer | null)[] {
     const out: (Layer | null)[] = [];
     const DEPTH = { depthCompare: 'always', depthWriteEnabled: false } as const;
+    if (this.crossing && this.xo?.net && this.xo.ok) {
+      const xo = this.xo;
+      const net = xo.net!;
+      const data = xo.links.map((id, i) => ({ path: this.pathOf(net, id), ok: xo.reports[i].ok }));
+      out.push(
+        new PathLayer({ id: 'track-xo-casing', data, getPath: (d) => d.path, getColor: [22, 27, 33, 200], getWidth: 6, widthUnits: 'pixels', capRounded: true, jointRounded: true, parameters: DEPTH }),
+        new PathLayer({ id: 'track-xo', data, getPath: (d) => d.path, getColor: (d) => (d.ok ? QUAD_COLORS.link : RED), getWidth: 3, widthUnits: 'pixels', capRounded: true, jointRounded: true, parameters: DEPTH }),
+      );
+    }
     if (this.preview && this.drawing) {
-      const { net, edges, reports } = this.preview;
+      const { net, edges, reports, roles, refused } = this.preview;
       const data = edges.map((id, i) => {
-        const g = net.geom(id);
-        const path: [number, number][] = [];
-        for (let k = 0; k < g.xs.length; k++) path.push(toLonLat(g.xs[k], g.ys[k]));
-        return { path, ok: reports[i].ok };
+        const role = roles?.get(id);
+        const ok = reports[i].ok && !refused;
+        const color = !ok ? RED : role ? QUAD_COLORS[role] : GREEN;
+        return { path: this.pathOf(net, id), ok, color, link: role === 'link' };
       });
       out.push(
         new PathLayer({
@@ -275,8 +493,8 @@ export class TrackTool implements Tool {
           id: 'track-preview',
           data,
           getPath: (d) => d.path,
-          getColor: (d) => (d.ok ? GREEN : RED),
-          getWidth: 4,
+          getColor: (d) => d.color,
+          getWidth: (d) => (d.link ? 2.5 : 4),
           widthUnits: 'pixels',
           capRounded: true,
           jointRounded: true,
@@ -352,18 +570,47 @@ export class TrackTool implements Tool {
         cap(LEVEL_NAMES[l]),
       );
     const clsBtn = (c: TrackClass) => h('button', { class: this.cls === c ? 'on' : '', onclick: () => this.setClass(c) }, c === 'heavy' ? 'Heavy metro' : 'Light metro');
+    const tracksBtn = (n: 2 | 4) => h('button', { class: this.tracks === n ? 'on' : '', onclick: () => this.setTracks(n), title: 'Q — two or four tracks' }, `${n} tracks`);
+    const sideBtn = (sd: 1 | -1) => h('button', { class: this.side === sd ? 'on' : '', onclick: () => this.setSide(sd), title: 'F — flip which side the express pair runs on' }, sd < 0 ? '◀ Left' : 'Right ▶');
+    const quad = this.tracks === 4;
     return h(
       'div',
       null,
       h('div', { class: 'opt-row' }, h('span', { class: 'opt-label' }, 'Class'), h('div', { class: 'seg' }, clsBtn('heavy'), clsBtn('light'))),
+      h('div', { class: 'opt-row', style: 'margin-top:8px' }, h('span', { class: 'opt-label' }, 'Tracks'), h('div', { class: 'seg', title: 'Q — two or four tracks' }, tracksBtn(2), tracksBtn(4))),
+      quad ? h('div', { class: 'opt-row', style: 'margin-top:8px' }, h('span', { class: 'opt-label' }, 'Express'), h('div', { class: 'seg' }, sideBtn(-1), sideBtn(1))) : null,
       h('div', { class: 'opt-row', style: 'margin-top:8px' }, h('span', { class: 'opt-label' }, 'Level'), h('div', { class: 'seg' }, ...LEVELS.map(levelBtn))),
-      h(
-        'div',
-        { class: 'opt-hint', style: 'margin-top:8px' },
-        `Click to place points · double-click or Enter to finish · Backspace removes the last point · drag white points to edit · `,
-        h('span', { class: 'kbd' }, 'Ctrl+Z'),
-        ' undo',
-      ),
+      quad
+        ? h(
+            'div',
+            { class: 'opt-row', style: 'margin-top:8px' },
+            h('span', { class: 'opt-label' }, ''),
+            h('div', { class: 'seg' }, h('button', { class: this.crossing ? 'on' : '', onclick: () => this.setCrossing(!this.crossing), title: 'X — place a scissors crossover between the pairs' }, '⨯ Crossover')),
+          )
+        : null,
+      quad
+        ? h(
+            'div',
+            { class: 'opt-hint', style: 'margin-top:8px' },
+            this.crossing
+              ? `Hover a four-track section and click to place a ${fmtDistance(QUAD.crossoverLength, true)} scissors crossover: trains can switch pairs both ways. `
+              : `Four tracks: the line you draw is the local pair; the express pair runs alongside on the ${SIDE_LABEL[this.side]} and splits off where you connect to other track. Inner curves need ${fmtDistance(QUAD.spacing, true)} more radius. `,
+            h('span', { class: 'kbd' }, 'Q'),
+            ' two tracks · ',
+            h('span', { class: 'kbd' }, 'F'),
+            ' flip · ',
+            h('span', { class: 'kbd' }, 'X'),
+            ' crossover',
+          )
+        : h(
+            'div',
+            { class: 'opt-hint', style: 'margin-top:8px' },
+            `Click to place points · double-click or Enter to finish · Backspace removes the last point · drag white points to edit · `,
+            h('span', { class: 'kbd' }, 'Ctrl+Z'),
+            ' undo · ',
+            h('span', { class: 'kbd' }, 'Q'),
+            ' four tracks',
+          ),
     );
   }
 

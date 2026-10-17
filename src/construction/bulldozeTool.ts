@@ -1,6 +1,7 @@
 /**
  * Bulldoze: blueprints are deleted for free; built or in-progress track and stations
  * are demolished for a 20% refund. Track or stations used by a route are protected.
+ * A cross-platform station (v2) goes with both platforms; Shift-click takes just one.
  */
 import { PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
@@ -8,6 +9,7 @@ import { TRACK } from '../balance';
 import { toLonLat } from '../core/geo';
 import { fmtMoney } from '../core/units';
 import type { AppContext } from '../ui/context';
+import { bulldozePairTip } from '../ui/express';
 import type { Pointer, Tool } from '../ui/toolTypes';
 import { pickEdge } from './pick';
 
@@ -18,6 +20,8 @@ export class BulldozeTool implements Tool {
   readonly xray = true;
   private target: Target | null = null;
   private blocked: string | null = null;
+  /** The hovered station's cross-platform partner goes too (no Shift). */
+  private partner: number | null = null;
 
   constructor(private ctx: AppContext) {}
 
@@ -39,8 +43,22 @@ export class BulldozeTool implements Tool {
     const net = game.network;
     this.target = this.find(p);
     this.blocked = null;
+    this.partner = null;
+    const pairOf = (id: number) => {
+      const q = net.stations.get(id)?.pair;
+      return q !== undefined && net.stations.has(q) ? q : null;
+    };
     if (!this.target) {
       this.ctx.tip(`<div class="hw-muted">Hover over track or a station</div>`, p.px);
+    } else if (this.target.kind === 'station' && pairOf(this.target.id) !== null) {
+      const s = net.stations.get(this.target.id)!;
+      const q = net.stations.get(pairOf(s.id)!)!;
+      const all = p.shift ? [s] : [s, q];
+      if (!p.shift) this.partner = q.id;
+      const users = [...new Set(all.flatMap((x) => game.routesUsingStation(x.id)))];
+      if (users.length) this.blocked = `Served by ${users.join(', ')}`;
+      const refund = all.reduce((t, x) => t + (x.status === 'blueprint' ? 0 : x.cost * TRACK.bulldozeRefund), 0);
+      this.ctx.tip(bulldozePairTip({ name: s.name, blueprint: all.every((x) => x.status === 'blueprint'), refund, shift: p.shift, blocked: this.blocked }), p.px);
     } else if (this.target.kind === 'station') {
       const s = net.stations.get(this.target.id)!;
       const users = game.routesUsingStation(s.id);
@@ -80,11 +98,20 @@ export class BulldozeTool implements Tool {
     const net = game.network;
     if (t.kind === 'station') {
       const s = net.stations.get(t.id)!;
-      if (s.status !== 'blueprint') {
-        const ok = await this.ctx.confirm(`Demolish ${s.name}?`, `You get back ${fmtMoney(s.cost * TRACK.bulldozeRefund)} (20% of what it cost).`, 'Demolish', true);
+      const q = s.pair !== undefined ? net.stations.get(s.pair) : undefined;
+      const withPartner = !!q && !p.shift;
+      const all = withPartner ? [s, q!] : [s];
+      if (all.some((x) => x.status !== 'blueprint')) {
+        const refund = all.reduce((sum, x) => sum + (x.status === 'blueprint' ? 0 : x.cost * TRACK.bulldozeRefund), 0);
+        const ok = await this.ctx.confirm(
+          withPartner ? `Demolish both platforms of ${s.name}?` : q ? `Demolish this platform of ${s.name}?` : `Demolish ${s.name}?`,
+          `You get back ${fmtMoney(refund)} (20% of what it cost).${q && !withPartner ? ' The other platform stays as a lone platform.' : ''}`,
+          'Demolish',
+          true,
+        );
         if (!ok) return;
       }
-      const r = game.bulldozeStation(t.id);
+      const r = game.bulldozeStation(t.id, { withPartner });
       if (!r.ok) this.ctx.toast("Can't demolish", r.reason, 'red');
     } else {
       const e = net.edges.get(t.id)!;
@@ -113,9 +140,13 @@ export class BulldozeTool implements Tool {
     if (t.kind === 'station') {
       const s = net.stations.get(t.id);
       if (!s) return [];
-      const p = net.stationPos(s);
+      const ids = this.partner !== null && net.stations.has(this.partner) ? [s.id, this.partner] : [s.id];
+      const data = ids.map((id) => {
+        const p = net.stationPos(net.stations.get(id)!);
+        return toLonLat(p.x, p.y);
+      });
       return [
-        new ScatterplotLayer({ id: 'bulldoze-station', data: [toLonLat(p.x, p.y)], getPosition: (d) => d, getRadius: 12, radiusUnits: 'pixels', filled: false, stroked: true, getLineColor: col, getLineWidth: 3, lineWidthUnits: 'pixels', parameters: DEPTH }),
+        new ScatterplotLayer({ id: 'bulldoze-station', data, getPosition: (d) => d, getRadius: 12, radiusUnits: 'pixels', filled: false, stroked: true, getLineColor: col, getLineWidth: 3, lineWidthUnits: 'pixels', parameters: DEPTH, updateTriggers: { getPosition: ids.join(',') } }),
       ];
     }
     if (!net.edges.has(t.id)) return [];

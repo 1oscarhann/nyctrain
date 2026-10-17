@@ -35,6 +35,8 @@ import { nameStationAt } from '../map/naming';
 import { PlaceNames, tractName } from '../map/placeNames';
 import { compileNetwork, type CompileResult } from '../routes/compile';
 import { RouteTool } from '../routes/routeTool';
+import { stationsAlongRoute, type AlongStation } from '../routes/express';
+import { hexRgb } from '../map/networkLayers';
 import { SimClient } from '../sim/client';
 import { servedStations } from '../sim/growth';
 import type { Alert, CRoute, DayReport, GrowthData, GrowthMonth, GrowthView, ModeState, ServiceOverride, SimState, Snapshot } from '../sim/protocol';
@@ -244,6 +246,7 @@ export class App implements AppContext {
     view.addLayers('flows', () => this.flowLayers());
     view.addLayers('trains', () => this.trainLayers());
     view.addLayers('stations', () => this.stations.layers(view.map.getZoom(), performance.now()));
+    view.addLayers('route-pattern', () => this.routePatternLayers());
     view.addLayers('venue-labels', () => this.chaosLayers.venueLabelLayers(view.map.getZoom()));
     view.addLayers('incidents', () => this.chaosLayers.incidentLayers(performance.now()));
     view.addLayers('construction', () => this.constructionLabels());
@@ -430,7 +433,7 @@ export class App implements AppContext {
     this.network.highlight(this.game.selection);
     this.elevated.update(net, this.view.is3D);
     this.applyStationStats();
-    this.stations.update(this.view.is3D);
+    this.stations.update(this.view.is3D, this.network.quadOffsets);
     this.tools.refreshXray();
     this.view.invalidate();
   }
@@ -528,7 +531,7 @@ export class App implements AppContext {
     this.checkGoals(r);
     this.panel?.dayEnd?.();
     this.applyStationStats();
-    this.stations.update(this.view.is3D);
+    this.stations.update(this.view.is3D, this.network.quadOffsets);
     if (this.overlays.mode !== 'none') this.loadOverlayData(this.overlays.mode);
     if (isNewMonth(r.day + 1) && g.finance.months.length) {
       // The first weekday of January brings the year in review instead of December's report.
@@ -637,6 +640,7 @@ export class App implements AppContext {
   // ------------------------------------------------------------------ selection & panels
   private onSelect(sel: Selection | null): void {
     this.network.highlight(sel);
+    this.view.invalidate();
     this.tools.refreshXray();
     this.toolbar.updateAlerts();
     if (this.tools.active?.id === 'route' && sel && sel.kind !== 'route') this.tools.set('select');
@@ -888,6 +892,54 @@ export class App implements AppContext {
     return this.trains.layers(zoom, (id) => this.game.select({ kind: 'train', id }));
   }
 
+  private patternCache: { along: AlongStation[]; color: string; data: [number, number][] } | null = null;
+
+  /**
+   * Express service (v2): while a route is selected, the stations its line runs past without
+   * stopping get hollow rings in the route colour (the route tool draws its draft's own).
+   */
+  private routePatternLayers(): Layer[] {
+    const sel = this.game.selection;
+    if (sel?.kind !== 'route' || this.tools.active?.id === 'route') return [];
+    const r = this.game.routes.get(sel.id);
+    if (!r) return [];
+    const net = this.game.network;
+    const path = this.game.routes.path(net, r);
+    if (!path.ok) return [];
+    const along = stationsAlongRoute(net, r.id, r.stops, path);
+    if (this.patternCache?.along !== along || this.patternCache.color !== r.color) {
+      const lo = (path.stopS[0] ?? 0) - 1, hi = (path.stopS[path.stopS.length - 1] ?? Infinity) + 1;
+      const data: [number, number][] = [];
+      for (const a of along) {
+        if (a.served || a.s < lo || a.s > hi) continue;
+        const st = net.stations.get(a.station);
+        if (!st) continue;
+        const q = net.stationPos(st);
+        data.push(toLonLat(q.x, q.y));
+      }
+      this.patternCache = { along, color: r.color, data };
+    }
+    const data = this.patternCache.data;
+    if (!data.length) return [];
+    const rgb = hexRgb(r.color);
+    return [
+      new ScatterplotLayer<[number, number]>({
+        id: 'route-pattern-skips',
+        data,
+        getPosition: (d) => d,
+        getRadius: 9,
+        radiusUnits: 'pixels',
+        filled: false,
+        stroked: true,
+        getLineColor: [rgb[0], rgb[1], rgb[2], 255],
+        getLineWidth: 2.5,
+        lineWidthUnits: 'pixels',
+        parameters: DEPTH,
+        updateTriggers: { getLineColor: r.color },
+      }),
+    ];
+  }
+
   private constructionLabels(): Layer[] {
     const net = this.game.network;
     const data: { pos: [number, number]; text: string }[] = [];
@@ -984,9 +1036,9 @@ export class App implements AppContext {
   /** Route bullet, colour and name by id (game routes, else the compiled ones). */
   routeRef = (id: number): RouteRef | undefined => {
     const r = this.game.routes.get(id);
-    if (r) return { id, bullet: r.bullet, color: r.color, name: r.name };
+    if (r) return { id, bullet: r.bullet, color: r.color, name: r.name, ...(r.express ? { express: true } : {}) };
     const c = this.compiled?.net.routes.find((x) => x.id === id);
-    return c ? { id, bullet: c.bullet, color: c.color, name: c.name } : undefined;
+    return c ? { id, bullet: c.bullet, color: c.color, name: c.name, ...(c.express ? { express: true } : {}) } : undefined;
   };
 
   private onAlert(a: Alert): void {

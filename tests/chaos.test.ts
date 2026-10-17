@@ -822,7 +822,8 @@ describe('save v3', () => {
     m.game.routes = game.routes.toData();
     m.game.finance = game.finance.toData();
     const r = applySave(game, m);
-    expect(r.lastReport).toEqual({ day: 2, riders: 5 });
+    // (The v5 → v6 step gives the saved report empty overtakes and cross-platform transfers.)
+    expect(r.lastReport).toEqual({ day: 2, riders: 5, routeOvertakes: {}, crossTransfers: {} });
     expect(r.lastReport?.chaos).toBeUndefined();
     expect(game.chaos.level).toBe('normal');
   });

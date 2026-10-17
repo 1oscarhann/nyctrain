@@ -1,7 +1,356 @@
 # v2 design: express services and four-track trunks
 
-Status: implementation-ready design for **Headway: New York v2**. No source code was changed to write it.
-Code references are to the v1 tree at commit `a27dbfa` as `file:line`.
+Status: in progress. **Construction is implemented** (checklist steps 1–5) and **so are the
+simulation side, saves and scripts** (steps 6–9 and 14: pathfinding, routes, compile, the sim,
+save v6, the headless helpers, `balance scenario=express` and `perf quads=N`, and the interplay
+with city chaos, operations control and Living City); notes for both below. The UI (steps 10–13)
+and the README's controls rows are next. The design below predates London, city
+chaos, operations control and Living City. Its `file:line` references are to the v1 tree at commit
+`a27dbfa` and are stale. **Where the code and this design disagree, trust the code and the task's
+amendments** (saves are v5 → v6, not v2 → v3).
+
+## Implementation notes (construction)
+
+Baseline: the `pre-express` tag. This covers checklist steps 1–5: constants, types, network
+primitives, quad construction, and validation and cost. It finishes the WIP commit `a14f37e`,
+which had the step-1 types and constants and the geometry helpers; I kept all of it. Nothing
+outside `src/construction/` changes behaviour. For a network with no quads, `toData()` is
+byte-for-byte the same (no new keys), costs are multiplied by exactly 1, and `headless-sim days=3`
+gives a byte-identical `dump=`.
+
+### What exists
+
+- **`src/balance.ts` `QUAD`**: the keys from §9, plus `minLength: 200`. An express pair shorter
+  than that, measured between its turnouts or ends, is refused ("Too short for four tracks").
+  The constants are shared by both cities. Costs, levels and the water rule come from
+  `TRACK`/`STATION` and the city's terrain, as for any track.
+- **Types.** `src/construction/types.ts` has `QuadRole`, `QuadTag { g, role, away }`,
+  `TrackNode.twin?`, `TrackEdge.quad?`, `Station.pair?` and `ChainVertex`. `src/routes/types.ts`
+  has `Route.express?`. `src/sim/protocol.ts` has the optional fields from §7 (nothing sets them
+  yet). `src/ui/toolTypes.ts` has `Pointer.alt`, which `ToolManager.pointer` sets from `altKey`;
+  `App`'s synthetic route-tool click passes `false`.
+- **`src/construction/geometry.ts`**: `XY`, `mitre(p, v, q, d)` (null for a turn sharper than
+  about 162°; with `p` or `q` null it gives a square offset), `concentric(r, turn, d)` (0 stays 0;
+  never below 1 m, so validation reports a too-tight inner curve) and `turnSign`. They live here so
+  `network.ts` can keep twins parallel without importing `quad.ts`, which re-exports them.
+- **`src/construction/network.ts`**:
+  - `toData`/`load` deep-copy `quad`. `load` drops malformed tags (a link's `away` is normalised
+    to 0) and dangling or one-way `twin`/`pair` references. `removeEdge` cleans up references the
+    same way (private `dropDangling`).
+  - `splitEdge` gives both halves a copy of the tag.
+  - `addChain(verts, cls, status?)` returns edge ids in order, running a→b along the list.
+    `existing` ends are made anchors when they have track. Other vertices get their explicit `r`
+    (no autoFillet), `twin` (linked both ways) and `leadOf` (an index into `verts`).
+  - `edgeBetween(a, b)`.
+  - `syncTwins(ids)` runs at the end of `moveNode`. `moveNode` is refused when the vertex has a
+    twin that is not a blueprint.
+  - `addStationPair(e1, u1, e2, u2, cars, name, status?)` returns `[platform on e1, platform on
+    e2]`. `linkPair(a, b)` unlinks any previous partners. `removeStation` makes the partner a lone
+    platform.
+- **`src/construction/quad.ts`**:
+  - Types: `QuadOptions { side, autoCrossovers? }`, `QuadResult { ok, fatal?, group, local,
+    express, links, double, edges, problems }`, `EndMode`, `QuadLeg { edge, dir }` (a `PathLeg`
+    is one), `StraightSpan` and `TwinSpec`.
+  - Construction: `addQuadStroke`, `buildTwin`, `addScissors(net, g, edge, uA, uB, cls,
+    onStroke?)` and `scissorsCandidate(net, edge, u, cls)`, which returns `{ ok, g, edge, uA, uB }`
+    or `{ ok: false, reason }`.
+  - Lookups: `partnerPoint`, `locateTagged(net, g, role, pt, tol = 1)`, `quadEndPartner`,
+    `sideOfPartner`, `endModeOf(net, snap, 'start' | 'end')`, `findStraight`, `pointAt`,
+    `otherRole` and `relabel`.
+- **`src/construction/validate.ts`**:
+  - `quadCostFactor(e)`: express ×0.75, link ×0.5, otherwise exactly 1. It is applied in
+    `edgeReport`.
+  - `stationReport(..., ignoreStation, opts: { paired?, partner? })`. `partner` defaults to the
+    `pair` of `ignoreStation`, and `paired` defaults to whether there is a partner. A paired
+    platform costs ×`pairPlatformCostShare`, and the partner is ignored by the spacing rule.
+  - `nearestStationAlongTrack(..., ignore, ignore2 = null)`.
+- **`src/construction/describe.ts`**: `quadLabel(e)` and a "Four-track" row in `edgeTooltip`
+  ("Local pair", "Express pair · shared works ×0.75" or "Turnout or crossover · ×0.5").
+- **`tests/quad.test.ts`** (22 tests, in `test:unit`): §13 tests 1–14 and 23, the network half of
+  24, splits and `edgeBetween`, `findStraight` (both directions and reversed legs), load
+  sanitising, group joining, and two London checks on the real land mask:
+  - a deep quad along the Oxford Street corridor (Marble Arch → Bank) with a cross-platform pair
+    at Oxford Circus;
+  - Bank → London Bridge → Borough under the Thames: both pairs are valid at deep level and both
+    are flagged at cut-and-cover;
+  - a quad fanning off an existing London line (1 turnout lock + 4 scissors locks).
+
+### How to use it (track, station and route tools)
+
+- **Track tool, quad mode.**
+  - Preview: run `addQuadStroke(net.clone(), points, cls, startSnap, endSnap, { side })`.
+    `result.edges` lists every new edge for the per-edge reports. Colour each edge by its tag's
+    role: `double` edges are ordinary track. `fatal` is the red line, and `problems` are the amber
+    ones.
+  - Finish: decide on the clone first and only call `editBlueprint` when the result is ok. A
+    refused stroke restores the network itself (snapshot + `load`), but `editBlueprint` would
+    already have recorded an empty undo step.
+  - Hover text: `endModeOf(net, snap, …)` says whether an end is free, fan or continue, and
+    `quadEndPartner` finds the free end pair.
+- **Crossover mode (X).**
+  - Hover: `scissorsCandidate`. To preview, run `addScissors` on a clone.
+  - Click: `editBlueprint(() => addScissors(net, c.g, c.edge, c.uA, c.uB, cls))`.
+- **Station tool.**
+  - Placement: `partnerPoint(net, hit.edge, hit.u)` gives the other platform's position. Price
+    both platforms with `stationReport(…, null, { paired: true })`, then place them with
+    `addStationPair`.
+  - Link mode: price the new platform with `{ partner: existingId }`, then call `linkPair`.
+  - Once placed, `stationReport(…, s.id)` finds the partner by itself, which is how
+    `blueprintSummary`/`commitBlueprints` already call it.
+- **Routes and compile.** Roles are on `edge.quad.role`. A stroke that continues an *express*
+  free end draws the express pair, and its twin is the local pair. So always read roles from the
+  tags, never from "drawn" or "twin".
+
+### Deviations from the design
+
+1. **Free ends are twinned too.** The design twins only degree-2 vertices. Twinning the ends as
+   well means a dragged free end keeps its partner beside it, so "continue" still finds the pair.
+   `syncTwins` offsets a degree-1 vertex square to its one edge. After a continue, the joined ends
+   become degree-2 anchors and keep their (symmetric) twins. `syncTwins` never moves an anchor or
+   a junction, and a twin that has since become a junction simply stops following (no refusal).
+2. **Ordered paths instead of `locateOnChain`/`edgesAlong`.** The drawn path and the new pair are
+   kept as ordered leg lists, updated from `Network.splitMap` after every connector stroke
+   (`PathTracker`).
+   - The end turnout is placed by path position, taken before any split.
+   - The drawn path is tagged first, so splits inherit the tag, and then untagged outside its
+     turnouts.
+   - Free-end crossovers are both chosen before either is built. The second is re-found with
+     `locateTagged`, as in the design. `addScissors` takes an `onStroke` callback for the trackers.
+3. **Refusals leave nothing behind.** Every `buildTwin` refusal happens before any change.
+   `addQuadStroke` snapshots before allocating the group id and drawing, and restores the snapshot
+   on refusal (`nextId` included; `version` still bumps).
+4. **`QuadOptions.spacing` is dropped.** `partnerPoint`, `quadEndPartner` and `syncTwins` all use
+   `QUAD.spacing`, so a per-stroke spacing would break them.
+5. **The "too short" rule** is `QUAD.minLength` (200 m of express pair), not the design's 50 m gap.
+6. **`findStraight`** checks `canSplitAt` at both ends of the span and slides within a straight
+   piece in 10 m steps, so it also works on track with platforms. The search distance is measured
+   to the junction.
+7. **A continued end's twin lead is projected onto the partner end's axis.** This absorbs any drag
+   error within `partnerTolerance`, so the joint leaves the old track straight.
+8. **Extra refusals:** "A pair can't join its own partner", and "The two four-track ends are on
+   different pairs" (one end continues a local pair and the other an express pair).
+9. **`QuadResult` has `double` and `edges`.** `double` holds the drawn edges between a fan's
+   attachment and its turnout. Both feed the preview.
+10. **`buildTwin` takes whole edges** in travel order (`dir` respected; `u0`/`u1` ignored). The
+    stretch retrofit (§15) must split the path at its two fan points first.
+
+### Gotchas
+
+- **Edge ids change at every connector.** Never hold an edge id across `addStroke` or
+  `addScissors`. Use positions with tag filters (`locateTagged`) or the result arrays.
+- **Tags are replaced, never mutated** (`e.quad = { ...e.quad, g }`); `delete e.quad` is fine. The
+  undo snapshots, preview clones and live network each have their own copies (test 12).
+- **Turnout and scissors geometry:**
+  - A turnout runs J → 40 m lead → 70.5 m diagonal → 40 m lead → X, with r ≈ 551 m (85 km/h).
+    J is a degree-3 anchor on the drawn pair; X is the other pair's end, a degree-2 anchor.
+  - A scissors is two such connectors crossing, with no node between them. Every junction has
+    degree ≤ 3.
+  - The unchanged `mergeLocks` gives 1 lock per turnout and 4 per scissors (tests 5–7, 13).
+- **A fan's turnout starts about 60 m past the attachment point** (40 m lead + 20 m margin), not
+  "150 m in" as the §2.1 hover text says; the express pair itself starts 150 m after that.
+- **Plain v1 pathfinding already handles quads.** It keeps a local route on its pair (the
+  crossovers are longer), and a route with an express platform between two fans uses no local edge
+  between the turnouts (test 7). The pass and link penalties (§4.6) are only needed where a route
+  *skips* platforms. Gate them so ordinary networks keep their paths (amendment 3).
+- **Interchanges.** The two platforms of a pair are 9 m apart, so `computeInterchanges` (200 m)
+  already puts them in one interchange group. The compile engineer should decide how `pair`
+  relates to that.
+- **Pricing a pair.** When a link-mode pair is made, the existing blueprint platform's price drops
+  to 0.8× as well. A built platform's cost is already spent, so it doesn't change.
+- **Speed.**
+  - Preview (`clone()` + `addQuadStroke`): about 3 ms on a 2,000-edge network (the clone alone is
+    1 ms), and 1.2 ms on the perf grid.
+  - `quadEndPartner` is O(nodes), only on snap and finish.
+  - `removeEdge` and `load` add one O(nodes + stations) scan.
+- **Determinism.** There are no random numbers. Group ids come from `nextId`, and `pickEdge` ties
+  go to `Map` insertion order.
+- **Copy.** Distances in refusal and problem messages go through `fmtDistance`, so they follow the
+  units setting ("190 m" / "623 ft").
+
+### Verification (construction)
+
+- `tsc` is clean, and `npm test` passes 247 tests (225 + 22).
+- `headless-sim days=3 dump=` is byte-identical to a fresh run of the `pre-express` worktree.
+- `balance` core and sprawl (days=3, `dump=`) are byte-identical to the tag in both cities.
+
+## Implementation notes (sim)
+
+Checklist steps 6–9 and 14, plus the non-UI plumbing the UI needs, built on the construction notes
+above. Baseline: the `pre-express` tag. **A network with no quads and no express routes runs
+bit-identically to `pre-express`** (amendment 3; how the gate works and what was checked is under
+*Identity*).
+
+### What exists
+
+- **Pathfinding (`src/routes/pathfind.ts`).** `PathCostOptions { passPenalty?, linkPenalty? }`,
+  `findRoutePath(net, cls, stops, usable?, costs?)` and `trackPath(net, A, B, usable?, costs?)`
+  (the cheaper departure direction's merged legs; for the stretch retrofit). `legSearch` carries the
+  track distance of each label alongside its cost, so `RoutePath.length` and `stopS` are distances.
+  The cost model is gated to four-track sections (below).
+- **`src/routes/express.ts`**: `AlongStation`, `stationsAlongPath`, `stationsAlongRoute` (cached per
+  route by network version, stops and path), `serveStops`, `skipStops`, `expressPattern`,
+  `allStopsPattern`, `choosePlatform`, `quadRole`, `partnerOf` and `pairKeyId` (one id per station
+  complex: the lower id of a pair whose platforms are both built, as compile pairs them).
+- **Routes.** `RouteSet.create` sets `express: partial.express ?? false`; `load` sets
+  `express: r.express === true`. `RouteDraft.express` (route tool) is carried by `newDraft`,
+  `editRoute`, `asRoute` and `save`; the `E` key, Alt-click and insert-in-order are UI work.
+- **Compile.** `CStation.pair`/`pairSameDir` only where both platforms are built (headings at the
+  two platforms, dot ≥ 0). `CompiledNetwork.staffedStations = stations − pairs × (2 −
+  pairStaffing)`, only when there is a pair. `CRoute.express: true` only on expresses.
+  `hasExpressService(net)` (protocol.ts): a pair or an express route.
+- **Engine.** `closeDay` uses `staffedStations ?? stations.length` for `stationsOpen`, and adds
+  `routeOvertakes` and `crossTransfers` to the day report **only when `hasExpressService`**.
+  `Commuters.crossTransfersToday()` is read before `dayReport` resets the day.
+- **Interchange helpers** (`src/routes/interchange.ts`): `platformTransfer(a, b, bIndex)` (15 s to
+  the partner, else exactly `transferTime(distance)`) and `transferPenaltyFor(a, bIndex)`.
+- **Transit graph.** `trPen: Float64Array | null`, null without pairs; `run` then keeps the old
+  scalar loop (`+ penalty`), otherwise uses `+ trPen[k]`. `effectiveTransfers(net, legs)`
+  (transitGraph.ts) counts 0.4 across a pair, 1 otherwise.
+- **Commuters.** `bestPath` reports `transfers = effectiveTransfers(...)` and subtracts that many
+  penalties; `arrive` walks 15 s to the partner (else the old `hypot/(1.2·walkSpeed) + 60`) and counts
+  `crossTransfers` by the pair's lower station id.
+- **TrainSim overtake counter.** Inert without pairs (`pairOn`). Tables built in `setNetwork`
+  (`buildPairs`): `pairKey` per station, and per route direction and stop `stopSgn` (travel sign
+  along the pair's reference platform) and `nextPairAt`. `notePair` runs in `arriveAt`; the last
+  pair call per train is in a `Map` by train id (not on `Train`, which is hot), cleared by `toReady`
+  and on every network change. Arrival logs keep 30 min and at most 16 entries per pair and sign.
+  `TrainDayStats.overtakes: Map<routeId, number>`.
+- **Worker.** The `'route'` reply adds `overtakesToday`; `RouteDetail.overtakesToday?` is declared
+  in `routePanel.ts` for the UI.
+- **Saves v6.** `SAVE_VERSION = 6`; one step `5 →`: `routes[].express ??= false`,
+  `lastReport.routeOvertakes ??= {}`, `lastReport.crossTransfers ??= {}`. Quad tags, twins and pairs
+  are optional network fields; `Network.load` drops malformed tags and dangling or one-way references
+  (construction step).
+- **`Game.bulldozeStation(id, { withPartner = true })`**: a pair goes together (refunds both built
+  platforms), refused if a route serves either; `withPartner: false` removes one platform.
+- **Headless (`src/sim/headless.ts`).** `stationNear(..., { role })`, `quadLine(game, pts, level,
+  start?, end?, side?, cls?)` (throws if refused), `nodeSnapNear(game, lonLat)`, `pairNear(game,
+  lonLat, name, cars?) → [local, express]`, `makeRoute(..., control?, express?)`,
+  `buildExpressTestNetwork(game)`, `buildLondonExpressTestNetwork(game)` and
+  `buildPerfNetwork({ quads })`.
+- **Scripts.** `balance scenario=express` (both cities; `localPeak=` / `expressPeak=` override the
+  two routes' peak headways) prints each route's run times, trains, riders, lateness and overtakes and
+  the cross-platform transfers. `perf quads=N` turns N north–south lines into free/free quads (pairs at
+  the terminals and every third stop, an express per line) and prints the overtakes.
+
+### Identity (amendment 3)
+
+- **The pathfinding gate.** Penalties apply only to *unserved platforms on a local- or express-pair
+  edge* and to *entering a run of link edges*. Ordinary track always costs exactly its length, and
+  each cost term is computed as before plus a penalty that is exactly 0 there (`x + 0 === x`), with
+  the distance summed in the same order. So on a network without quads every path, `stopS` and
+  `length` is bit-identical, whatever the route skips. Tests 16 (an ordinary bypass is still not
+  taken) and 17 (deep-equal paths with default and zero penalties) assert it.
+- **Reports.** `routeOvertakes`/`crossTransfers` appear only with a pair or an express route;
+  `staffedStations` and `CStation.pair` only with pairs; the transit graph keeps its scalar loop.
+- **Checked** against a worktree of the tag (`git worktree add <scratchpad>/xq/base pre-express`,
+  `node_modules` symlinked), comparing `dump=` files byte for byte: `headless-sim days=3`;
+  `balance` core and sprawl (8 days) in both cities; `balance scenario=core days=25` in both
+  cities (crossing the 31 Jan month close on Living City's default Steady pace). All identical, and
+  the printed output matches apart from timings. `npm run perf`: the same 40,320 boardings and
+  1,090 waiting in the peak hour.
+
+### Chaos, operations control and Living City
+
+- **Incidents on quad edges** work unchanged: each pair is its own directed tracks, so a stalled
+  local queues locals only and a crawl on the express pair slows expresses only (tests). The
+  watchdog's route groups (shared track or lock) put a quad's local and express in one group
+  through the fan or the shared approach, so an incident on either covers both.
+- **A closed pair: both platforms close.** A cross-platform station is one complex with shared
+  entrances, so police at either platform close both (`firePolice`); the alert carries
+  `partnerStationId`, which `AlertFeed.closedStations`/`activeFor` honour. Police targets and the
+  exposure (`measureExposure().stations`) count a pair once; its busy weight sums both platforms.
+- **Event service** overrides are per route id, so they work on expresses as on locals (test:
+  more express departures, more overtakes, no deadlocks).
+- **Holding.** A train held at a timepoint sits on its own pair's track; the yield rule only looks
+  at its own path's tracks, so an express passes a held local (and the other way round). Terminal
+  holds are off the running track as before. Timepoints follow the stop list (`RouteSet.update`
+  filters them), so skipping a timepoint drops it; `suggestTimepoints` only picks served stops.
+  Recovery and fleet sizing use each route's own compiled run time (the express's is shorter).
+  Regularity is per route and per stop index, so an overtake never reads as bunching (test 27 checks
+  CV and bunching per route).
+- **Fares** are unchanged (billed at the first boarding; a cross-platform transfer is free).
+- **Living City.** `servedStations` lists a pair once, under its lower station id at the midpoint
+  of its platforms, when a route calls at either platform. A platform no route calls at is never
+  served (skipping is leaving it out of the stop list); a local-only stop skipped by the express
+  is served if the local calls there. The station panel looks its value capture up by `pairKeyId`.
+
+### Deviations from the design
+
+1. **Penalties are gated to four-track sections** (above). The design's test 16 (a platform-free
+   ordinary bypass taken by a skipping route) would re-route ordinary networks; it now asserts the
+   opposite on ordinary track, and the bypass behaviour on a quad.
+2. **The link penalty is charged once per connector** (when a path enters a run of link edges), not
+   per link edge: a turnout or a scissors half is three edges (lead, diagonal, lead), and charging
+   each would make a crossover cost 750 m, more than passing one platform (600 m).
+3. **Terminal pairs switch platforms too** in `expressPattern` (to the express platform) and
+   `allStopsPattern` (to the local one), so the two buttons undo each other (test 21); the route
+   still starts and ends at the same station complex.
+4. **Test 31's network has more local-only stops** (23, 28, 42, 50 St, Columbus Circle, 66, 79, 86
+   and 103 St) **and a fourth pair (96 St).** With the design's four local stops between three
+   pairs, changing across the platform never paid: each skipped stop saves about 51 s, while a change
+   costs 15 s + half the express headway + 120 s. With three to four skips between pairs it does
+   (about 6,000 cross-platform transfers on the second day).
+5. **Test 26** is in `tests/express.test.ts` (with its own small fixture), not `tests/sim.test.ts`.
+6. **London** gets its own express scenario (Oxford Street and the City, four pairs, four local-only
+   stops; Bond Street and Chancery Lane are added to the core's line A) and headless test.
+
+### Verification
+
+- `tsc` is clean. `npm test`: **272 tests pass** (245 unit, 27 headless): the 247 before, plus 23 in
+  `tests/express.test.ts` (§13 tests 15–22 and 24–30, chaos, operations control and Living City on
+  four tracks) and 2 headless (test 31 in New York and its London twin).
+- Test 27 reproduces the design's experiment exactly: the express runs A→E in **280 s on the quad
+  against 462 s / 480 s on a shared pair** (scheduled 298 s); at 3-minute headways mean lateness is
+  4.5 s against 45 s; no deadlocks.
+- **Performance** (`npm run perf`, peak game-hour, 3 interleaved runs each on this shared machine):
+  `pre-express` 173 / 223 / 200 ms, now 176 / 140 / 152 ms (same boardings and waiting);
+  `quads=5` (325 stations, 30 routes, 494 trains, 25 pairs, 40 locks, ≈ 440 overtakes by 08:00)
+  255 / 208 / 176 ms, under the 300 ms target. London `quads=5`: 183 ms.
+- **Balance** (12 days, agent scale 10, a new game's operations control, chaos Off), day 11:
+
+  | | New York core | New York express | London core | London express |
+  |---|---|---|---|---|
+  | Capital | $23.3B | $25.7B (+$2.4B) | £24.3B | £26.6B (+£2.3B; £21.6B of bonds, over the £20B cap) |
+  | Trunk run time, local / express | 18.3 min (13 stops) | 18.3 / 14.0 min (13 / 8 stops) | 17.0 min (11 stops) | 18.7 / 15.3 min (13 / 9 stops) |
+  | Trunk trains, local + express | 20 | 11 + 9 | 19 | 11 + 9 |
+  | Riders (network) | 1,349,870 | 1,346,070 | 763,700 | 761,400 |
+  | Trunk riders, local + express | 487,160 | 219,570 + 257,810 | 204,570 | 91,800 + 108,240 |
+  | Lateness, local / express | 103 s (network) | 120 / 191 s | 8 s (network) | 9 / 27 s |
+  | Overtakes per day (express) | — | 170 (local 20) | — | 148 |
+  | Left behind | 824k | 537k | 120 | 150 |
+  | After bond interest | −$0.28M/day | −$0.63M/day | −£2.2M/day | −£2.5M/day |
+
+  The express saves 4.3 minutes end to end in New York (3.4 in London) and relieves crowding (a
+  third fewer left behind), but ridership doesn't rise: each route runs every 5 minutes, and riders
+  wait for their own route (the sim has no "first train of either"), so stations served by both now
+  see a 2.5-minute wait each way instead of 1.25. Cross-platform transfers are 0 in both scenarios
+  for the same reason: with one or two skips between pairs, a change costs more than it saves. The
+  design's fallback (lowering `pairPlatformCostShare` to 0.7 if the scenario lost more than
+  $0.3M/day against the core) would save only about $20k/day here, so the constants are unchanged;
+  this is a service investment that pays only on longer, denser corridors, as §12 says. Keeping the
+  local at the core's headway and adding the express on top (`localPeak=2.5 expressPeak=5`) gives
+  1,358,910 riders (+0.7%) for −$0.77M/day after interest (London 763,420, −£2.7M).
+
+### Gotchas (for the UI)
+
+- `stationsAlongRoute(net, routeId, stops, path)` for the Line list and the skip rings; rebuild the
+  draft's with `stationsAlongPath` after each recompute.
+- `serveStops` returns `{ error }` with the design's "no crossover reaches it" text for stations on
+  the other pair; `skipStops` refuses terminals with the design's text.
+- Day reports from networks without pairs or expresses have no `routeOvertakes`/`crossTransfers`
+  (read them as `?? {}`); saved reports from v5 get `{}`.
+- `Alert.partnerStationId` marks the second closed platform of a pair.
+- Value capture: use `pairKeyId` for a station's levy (`stationLevy`/`stationTracts`).
+
+### Known gaps
+
+- Waiting is per route (no combined frequency at a station two routes serve), which caps what an
+  express adds to ridership in the balance scenarios (above).
+- Overtakes are counted only between two consecutive cross-platform stations both trains call at,
+  and a network edit forgets the pair calls in progress (an overtake right after an edit can be
+  missed).
+- London's express scenario needs more bonds than the cap allows; it is a sandbox measurement.
 
 > **Short version.** A *four-track* ("quad") section is two parallel double-track edges 9 m apart,
 > drawn in one stroke. The drawn line becomes the **local pair**. The tool generates the **express

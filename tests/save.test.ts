@@ -62,8 +62,9 @@ function sampleGrowth(): GrowthData {
 describe('17. migration v4 → v5', () => {
   it('a v4 save joins Living City on Steady with zero value capture and no growth; idempotent', () => {
     const m = migrate(v4Save());
-    expect(SAVE_VERSION).toBe(5);
-    expect(m.version).toBe(5);
+    // (v6 since express service: its step runs on the way.)
+    expect(SAVE_VERSION).toBe(6);
+    expect(m.version).toBe(6);
     expect(m.migratedFrom).toBe(4);
     expect(m.growth).toBeNull();
     expect(m.game.growthPace).toBe('steady');

@@ -2,17 +2,20 @@
  * The track network: nodes, edges and stations, plus the editing operations used by the tools.
  * Pure data + geometry — no rendering, no DOM — so it runs in tests and in the headless sim.
  */
-import { STATION, TRACK, type TrackClass, type TrackLevel } from '../balance';
+import { QUAD, STATION, TRACK, type TrackClass, type TrackLevel } from '../balance';
 import {
   computeEdgeGeom,
+  concentric,
   deflection,
+  mitre,
   otherEnd,
   radiusForTangent,
   sampleAt,
+  turnSign,
   type EdgeGeom,
   type GraphView,
 } from './geometry';
-import type { NetworkData, Snap, Station, Status, StrokePoint, TrackEdge, TrackNode } from './types';
+import type { ChainVertex, NetworkData, QuadTag, Snap, Station, Status, StrokePoint, TrackEdge, TrackNode } from './types';
 
 export class Network implements GraphView {
   nodes = new Map<number, TrackNode>();
@@ -58,7 +61,9 @@ export class Network implements GraphView {
   toData(): NetworkData {
     return {
       nodes: [...this.nodes.values()].map((n) => ({ ...n })),
-      edges: [...this.edges.values()].map((e) => ({ ...e })),
+      // Quad tags are nested objects: copy them, so snapshots, clones and the live network never
+      // share one (an ordinary edge has no `quad` key, so its copy is exactly as before).
+      edges: [...this.edges.values()].map((e) => (e.quad ? { ...e, quad: { ...e.quad } } : { ...e })),
       stations: [...this.stations.values()].map((s) => ({ ...s })),
       nextId: this.nextId,
     };
@@ -76,10 +81,36 @@ export class Network implements GraphView {
     this.stations.clear();
     this.inc.clear();
     for (const nd of d.nodes) this.nodes.set(nd.id, { ...nd });
-    for (const e of d.edges) this.addEdgeRaw({ ...e });
+    for (const e of d.edges) {
+      const c: TrackEdge = { ...e };
+      if (c.quad !== undefined) {
+        const q = sanitizeQuadTag(c.quad);
+        if (q) c.quad = q;
+        else delete c.quad;
+      }
+      this.addEdgeRaw(c);
+    }
     for (const s of d.stations) this.stations.set(s.id, { ...s });
     this.nextId = d.nextId;
+    this.dropDangling();
     this.touch();
+  }
+
+  /**
+   * Four-track references (node `twin`, station `pair`) must point at something that exists and
+   * points back. Clears any that don't (after a load, a removal or an edit that broke one).
+   */
+  private dropDangling(): void {
+    for (const n of this.nodes.values()) {
+      if (n.twin === undefined) continue;
+      const t = this.nodes.get(n.twin);
+      if (!t || t.twin !== n.id || t.id === n.id) delete n.twin;
+    }
+    for (const s of this.stations.values()) {
+      if (s.pair === undefined) continue;
+      const p = this.stations.get(s.pair);
+      if (!p || p.pair !== s.id || p.id === s.id) delete s.pair;
+    }
   }
 
   clone(): Network {
@@ -240,6 +271,8 @@ export class Network implements GraphView {
     for (const ne of [e1, e2]) {
       ne.buildStart = e.buildStart;
       ne.buildEnd = e.buildEnd;
+      // Both halves stay on the same pair of a four-track section (a→b order is kept, so `away` holds).
+      if (e.quad) ne.quad = { ...e.quad };
     }
     e1.cost = (e.cost * u) / L;
     e2.cost = e.cost - e1.cost;
@@ -394,10 +427,16 @@ export class Network implements GraphView {
     }
   }
 
-  /** Drag a blueprint node. Lead nodes slide along their anchor's axis. */
+  /**
+   * Drag a blueprint node. Lead nodes slide along their anchor's axis. A vertex of a four-track
+   * section drags its twin on the other pair along (syncTwins), so the drag is refused while the
+   * twin is built or under construction (once one pair is built the other stays put). A twin that
+   * has since become a junction no longer follows.
+   */
   moveNode(id: number, x: number, y: number): boolean {
     const n = this.nodes.get(id);
     if (!n || !this.nodeEditable(id) || (n.anchor && this.degree(id) > 1)) return false;
+    if (n.twin !== undefined && this.nodes.has(n.twin) && !this.nodeEditable(n.twin)) return false;
     // Leads, and any vertex next to a junction, slide along the junction's axis so track always
     // leaves junctions straight.
     let axis: TrackNode | undefined = n.leadOf !== null ? this.nodes.get(n.leadOf) : undefined;
@@ -424,7 +463,97 @@ export class Network implements GraphView {
     this.touch();
     this.autoFillet(refit);
     this.touch();
+    this.syncTwins(refit);
     return true;
+  }
+
+  /** A twin vertex can be moved to follow its partner: blueprint, not a junction, ends or degree 2. */
+  private twinCanFollow(id: number): boolean {
+    const t = this.nodes.get(id);
+    if (!t || !this.nodeEditable(id)) return false;
+    const deg = this.degree(id);
+    return !(t.anchor && deg > 1) && (deg === 1 || deg === 2);
+  }
+
+  /**
+   * Keep the other pair of a four-track section parallel after the given vertices moved or were
+   * refitted: each one's twin goes to the mitre point at QUAD.spacing on the partner side, with the
+   * concentric radius. The side comes from the edge tags (−away is the partner side in an edge's
+   * own a→b frame), so it holds however far a vertex is dragged. A free end's twin is offset
+   * square to its one edge. Twins that are built or junctions are never moved.
+   */
+  syncTwins(ids: Iterable<number>): void {
+    let moved = false;
+    for (const id of ids) {
+      const n = this.nodes.get(id);
+      if (n?.twin === undefined || (n.anchor && this.degree(id) > 1)) continue;
+      const t = this.nodes.get(n.twin);
+      if (!t || !this.twinCanFollow(t.id)) continue;
+      const inc = this.incident(id);
+      if (inc.length !== 1 && inc.length !== 2) continue;
+      // The side comes from a pair edge (not a connector or untagged track).
+      const k = inc.findIndex((eid) => !!this.edges.get(eid)!.quad?.away);
+      if (k < 0) continue;
+      const e = this.edges.get(inc[k])!;
+      const p = this.nodes.get(otherEnd(e, id))!;
+      const q = inc.length === 2 ? this.nodes.get(otherEnd(this.edges.get(inc[1 - k])!, id))! : null;
+      // Partner side relative to the travel direction p → n: −away in e's a→b frame, flipped if e runs n → p.
+      const sigma = -e.quad!.away * (e.a === p.id ? 1 : -1);
+      const d = sigma * QUAD.spacing;
+      const m = mitre(p, n, q, d);
+      if (!m) continue;
+      t.x = m.x;
+      t.y = m.y;
+      t.r = q && !t.anchor ? concentric(n.r, turnSign(p, n, q), d) : t.r;
+      moved = true;
+    }
+    if (moved) this.touch();
+  }
+
+  /** The edge joining two nodes (the first one, in incidence order), or null. */
+  edgeBetween(a: number, b: number): number | null {
+    for (const eid of this.incident(a)) {
+      const e = this.edges.get(eid)!;
+      if ((e.a === a && e.b === b) || (e.a === b && e.b === a)) return eid;
+    }
+    return null;
+  }
+
+  /**
+   * Add a chain of new blueprint track through the given vertices (the express pair of a quad, in
+   * travel order): `existing` ends are reused (made anchors when they already have track, as a
+   * stroke's snapped ends are); every other vertex is a new node with its explicit fillet radius,
+   * twin (linked both ways) and lead anchor (an index into `verts`). Edges run a→b along the list.
+   * Returns the new edge ids in order. No fillets are recomputed: the radii are the caller's.
+   */
+  addChain(verts: ChainVertex[], cls: TrackClass, status: Status = 'blueprint'): number[] {
+    if (verts.length < 2) return [];
+    const ids: number[] = [];
+    for (let i = 0; i < verts.length; i++) {
+      const v = verts[i];
+      if (v.existing !== undefined && this.nodes.has(v.existing)) {
+        if (this.degree(v.existing) >= 1) this.makeAnchor(v.existing);
+        ids.push(v.existing);
+        continue;
+      }
+      const n = this.newNode(v.x, v.y, v.level, cls);
+      n.r = v.r > 0 ? v.r : 0;
+      ids.push(n.id);
+    }
+    for (let i = 0; i < verts.length; i++) {
+      const v = verts[i];
+      if (v.existing !== undefined) continue;
+      const n = this.nodes.get(ids[i])!;
+      if (v.leadOf !== undefined && ids[v.leadOf] !== undefined) n.leadOf = ids[v.leadOf];
+      if (v.twin !== undefined && this.nodes.has(v.twin)) {
+        n.twin = v.twin;
+        this.nodes.get(v.twin)!.twin = n.id;
+      }
+    }
+    const created: number[] = [];
+    for (let i = 0; i + 1 < ids.length; i++) created.push(this.newEdge(ids[i], ids[i + 1], cls, status).id);
+    this.touch();
+    return created;
   }
 
   setNodeLevel(id: number, level: TrackLevel): void {
@@ -474,6 +603,8 @@ export class Network implements GraphView {
         n.anchor = false;
       }
     }
+    // Twins and cross-platform partners of anything removed.
+    this.dropDangling();
     this.touch();
     return removed;
   }
@@ -496,8 +627,39 @@ export class Network implements GraphView {
     return s;
   }
 
+  /** Remove a station; its cross-platform partner (if any) becomes a lone platform. */
   removeStation(id: number): void {
+    const s = this.stations.get(id);
+    if (s?.pair !== undefined) {
+      const p = this.stations.get(s.pair);
+      if (p && p.pair === id) delete p.pair;
+    }
     this.stations.delete(id);
+    this.touch();
+  }
+
+  /**
+   * A cross-platform station on a four-track section: one platform on each pair, with the same
+   * name, linked through `pair`. Returns [the platform on e1, the one on e2].
+   */
+  addStationPair(e1: number, u1: number, e2: number, u2: number, cars: number, name: string, status: Status = 'blueprint'): [Station, Station] {
+    const a = this.addStation(e1, u1, cars, name, status);
+    const b = this.addStation(e2, u2, cars, name, status);
+    this.linkPair(a.id, b.id);
+    return [a, b];
+  }
+
+  /** Link two platforms as a cross-platform pair (any previous partners become lone platforms). */
+  linkPair(a: number, b: number): void {
+    const sa = this.stations.get(a), sb = this.stations.get(b);
+    if (!sa || !sb || a === b) return;
+    for (const s of [sa, sb]) {
+      if (s.pair === undefined) continue;
+      const old = this.stations.get(s.pair);
+      if (old && old.pair === s.id) delete old.pair;
+    }
+    sa.pair = b;
+    sb.pair = a;
     this.touch();
   }
 
@@ -557,4 +719,16 @@ function leadLength(A: TrackNode, sign: number, tx: number, ty: number, prefRadi
     L = Math.max(TRACK.leadMinLength, Math.min(want, dist * 0.45));
   }
   return L;
+}
+
+const QUAD_ROLES = new Set(['local', 'express', 'link']);
+
+/** A well-formed copy of a quad tag from saved data, or null if it is not one. */
+function sanitizeQuadTag(q: unknown): QuadTag | null {
+  if (!q || typeof q !== 'object') return null;
+  const t = q as Partial<QuadTag>;
+  if (typeof t.g !== 'number' || !Number.isFinite(t.g)) return null;
+  if (typeof t.role !== 'string' || !QUAD_ROLES.has(t.role)) return null;
+  if (t.away !== -1 && t.away !== 0 && t.away !== 1) return null;
+  return { g: t.g, role: t.role, away: t.role === 'link' ? 0 : t.away };
 }
