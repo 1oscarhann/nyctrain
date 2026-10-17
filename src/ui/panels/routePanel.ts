@@ -16,7 +16,7 @@ import { suggestTimepoints } from '../../routes/control';
 import { carSaleValue, fleetPlan, purchaseFleet } from '../../routes/fleet';
 import type { RouteTool } from '../../routes/routeTool';
 import { allStopsPattern, expressPattern, serveStops, skipStops, stationsAlongRoute, type AlongStation } from '../../routes/express';
-import { lineRows, OVERTAKES_TIP, overtakesValue, routeOnQuad, SERVICE_TIP, skipsText, type LineRow } from '../express';
+import { lineRows, OVERTAKES_TIP, overtakesValue, pairWord, routeOnQuad, SERVICE_TIP, skipsText, type LineRow } from '../express';
 import { maxCarsFor } from '../../routes/routeSet';
 import { PERIOD_IDS, ROUTE_COLORS, type PeriodId, type Route, type RouteControl } from '../../routes/types';
 import type { RouteRegularityDetail } from '../../sim/protocol';
@@ -396,7 +396,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
     tip(kind, r.express ? 'Express' : 'Local', r.express ? SERVICE_TIP.express : SERVICE_TIP.local);
     const pattern = h('button', { class: 'hw-btn small', onclick: () => editStops({ stops: expressPattern(net, r.stops) }, 'Express pattern', true) }, 'Express pattern');
     tip(pattern, 'Express pattern', SERVICE_TIP.pattern);
-    const all = h('button', { class: 'hw-btn small', onclick: () => editStops({ stops: path.ok ? allStopsPattern(net, r.cls, r.stops, path) : [...r.stops] }, 'All stops') }, 'All stops');
+    const all = h('button', { class: 'hw-btn small', onclick: () => editStops({ stops: path.ok ? allStopsPattern(net, r.cls, r.stops, path) : [...r.stops] }, 'All stops', false) }, 'All stops');
     tip(all, 'All stops', SERVICE_TIP.allStops);
     const skips = skipsText(along.filter(inLine));
     serviceSec.append(
@@ -555,7 +555,7 @@ export function routeEditor(app: App, tool: RouteTool): Panel {
   if (d.stops.length >= 2 && (d.express || routeOnQuad(net, d.stops) || tool.along.some((a) => a.partner !== undefined))) {
     const pat = h('button', { class: 'hw-btn small', onclick: () => { d.stops = expressPattern(net, d.stops); d.express = true; tool.recompute(); } }, 'Express pattern');
     attachTip(pat, app.tooltip, 'Express pattern', undefined, SERVICE_TIP.pattern);
-    const all = h('button', { class: 'hw-btn small', disabled: !tool.path?.ok, onclick: () => { if (tool.path?.ok && d.cls) { d.stops = allStopsPattern(net, d.cls, d.stops, tool.path); tool.recompute(); } } }, 'All stops');
+    const all = h('button', { class: 'hw-btn small', disabled: !tool.path?.ok, onclick: () => { if (tool.path?.ok && d.cls) { d.stops = allStopsPattern(net, d.cls, d.stops, tool.path); d.express = false; tool.recompute(); } } }, 'All stops');
     attachTip(all, app.tooltip, 'All stops', undefined, SERVICE_TIP.allStops);
     kindRow.append(h('span', { class: 'lbl' }, 'Pattern'), h('div', { class: 'ctl' }, pat, all));
   }
@@ -576,7 +576,7 @@ export function routeEditor(app: App, tool: RouteTool): Panel {
           { class: `list-item line-row${a.served ? '' : ' skipped'}` },
           h('span', { class: 'line-mark' }),
           h('span', { class: 'hw-muted num', style: 'width:18px' }, a.served ? String(i + 1) : ''),
-          h('span', { class: 'grow' }, s?.name ?? '?', !a.served ? h('span', { class: 'line-tag' }, a.where === 'beside' ? ' on the other pair' : ' passes') : null),
+          h('span', { class: 'grow' }, s?.name ?? '?', !a.served ? h('span', { class: 'line-tag' }, a.where === 'beside' ? ` on the ${pairWord(net, a.station) ?? 'other'} pair` : ' passes') : null),
           a.served
             ? h('button', { class: 'hw-btn ghost small', onclick: () => { d.stops.splice(i, 1); tool.recompute(); } }, '✕')
             : h('button', {

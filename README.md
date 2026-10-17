@@ -96,6 +96,13 @@ Open Government Licence v3.0.
 | Menu → City growth | Off / Steady / Boom (applies from the next month end; a toast confirms) |
 | H | Holding on / off for the selected route (a toast confirms) |
 | Clock toggle (route panel stop list) | Timepoint: trains may be held there to even out gaps (shown while holding is on) |
+| Q (Track tool) | Two or four tracks; works mid-stroke |
+| F (Track tool, four tracks) | Flip the side the express pair runs on; works mid-stroke |
+| X (Track tool, four tracks) | Scissors crossover placement on / off (Esc also leaves it) |
+| Shift-click (Station tool, four tracks) | One platform on the pair under the cursor (a local-only stop) instead of a cross-platform station |
+| E (Route tool) | Local or express draft |
+| Alt-click (Route tool) | The other platform of a cross-platform station |
+| Shift-click (Bulldoze) | Only this platform of a cross-platform station (the other stays as a lone platform) |
 
 All toolbar buttons have tooltips that show their shortcut.
 
@@ -111,13 +118,13 @@ src/
   cities/         New York and London: regions, goals, copy, naming style; applyCity() switches everything
   core/           geo (local metres around City Hall), calendar (weekdays only), city chaos calendar and weather, units, game state, goals
   data/           world loading, tract index, land mask
-  map/            MapLibre style recolouring, network/station/elevated layers, overlays (city growth: growthMath.ts), naming and tract names (placeNames.ts), city chaos markers
-  construction/   track graph with arc fillets, levels and ramps, validation and costs, tools
-  routes/         route pathfinding on track, compilation for the sim, fleet sizing and car sales, operations control settings, route tool, event service estimates
+  map/            MapLibre style recolouring, network/station/elevated layers (four-track pair push, cross-platform capsules), overlays (city growth: growthMath.ts), naming and tract names (placeNames.ts), city chaos markers
+  construction/   track graph with arc fillets, levels and ramps, validation and costs, four-track sections and crossovers (quad.ts), tools
+  routes/         route pathfinding on track, compilation for the sim, fleet sizing and car sales, operations control settings, express patterns (express.ts), route tool, event service estimates
   trains/         kinematics (run profiles), interpolated train layer
   sim/            worker, engine, train sim (moving block, merge locks, holding), regularity, commuters, mode choice, transit graph, city chaos (incidents, event trips), city growth (growth.ts)
   economy/        finance: daily settlement, monthly reports, bonds, bankruptcy, value capture; fares, credit rating and bond market, year in review
-  ui/             app shell, panels, charts, tutorial, menus, city chaos (alert feed, news ticker, Service alerts), Living City text (livingCity.ts)
+  ui/             app shell, panels, charts, tutorial, menus, city chaos (alert feed, news ticker, Service alerts), Living City text (livingCity.ts), four-track and express text (express.ts)
   save/           save format, migrations, IndexedDB store, export and import
 scripts/          data pipeline, headless sim, balance tuning, performance check
 tests/            Vitest unit tests and the headless simulation tests
@@ -145,8 +152,8 @@ commuters are rebuilt from the data, scaled by the saved growth, when the save i
 ## Testing each part
 
 ```bash
-npm test                 # all 272 tests (unit + headless, both cities)
-npm run test:unit        # 245: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+npm test                 # all 283 tests (unit + headless, both cities)
+npm run test:unit        # 256: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
                          # chaos (calendar, weather, incidents, train-sim hooks and the watchdog's scope, event
                          # trips, event service, save v3 with today's level), chaos UI (alert text, feed and
                          # ticker order, announcements, cancelled service, wrap-up toasts, London wording and £),
@@ -169,7 +176,10 @@ npm run test:unit        # 245: geometry, costs, ramps, water, pathfinding, logi
                          # keeps its paths), stations along a path, skip/serve and the patterns, compile,
                          # cross-platform transfers, overtaking against a shared pair (280 s against 462 s),
                          # incidents, closures, event service, holding, timepoints and value capture on four
-                         # tracks, save v6
+                         # tracks, save v6; and their UI: the pair push on the map and its sign whichever way a
+                         # chain is drawn, the four-track, crossover, station and bulldoze texts (connectors by
+                         # kind, units and currency in both cities), link candidates, the Line list, the
+                         # Overtakes card, the merged station figures and the route tool's insert-in-order
 npm run test:headless    # 27: 3 days on the test network (with regularity and fares by band and period),
                          # holding against no holding, holding next to Wild chaos and event service, chaos end
                          # to end (closures, event agents, determinism, snow, breakdowns, Off is inert, mid-day
@@ -249,6 +259,20 @@ To check each milestone by hand in `npm run dev`:
    since 2030 and rings the value-capture district; **V** raises the new development. Click a
    tract for its growth, index chart and value capture, a station for the value capture paid
    through it, and open Finances for the month's payment. Menu → City growth switches the pace.
+10. **Four tracks and express service:** press **T**, then **Q**, and draw a line off the end of
+    existing track and on into open map. The preview shows the local pair green, the express pair
+    cyan (pushed apart a few pixels, as the map draws them) and the turnout and scissors grey, with
+    each pair's length and cost and the connectors ("1 turnout, 1 scissors"); **F** flips the
+    express side. Start the next stroke on the free end ("Click to extend the four-track section").
+    **X** places more scissors. With **S**, a click on a four-track section places a cross-platform
+    station (one capsule across both pairs), Shift-click a local-only stop, and a click opposite a
+    lone platform adds its partner. Build; unrouted, a quad shows four thin rails. Press **R** for a
+    local at every station, then **R**, **E** for an express: click its terminals, then the pairs
+    (each goes in path order; Alt-click takes the local platform). Skip to the morning: express
+    trains have a light casing and pass the locals; the route panel has *Service* (Local / Express,
+    **Express pattern**, **All stops**), the Line list with **Skip** / **Stop here** and the
+    *Overtakes yesterday* card, and the station panel shows a pair as one station with its
+    cross-platform transfers. **B** on a pair demolishes both platforms (Shift: one).
 
 ## Balance
 
@@ -378,7 +402,10 @@ like clockwork (headway CV 0.04), so nothing is held there with chaos Off.
 boardings, 1,090 waiting; 176 / 140 / 152 ms against 173 / 223 / 200 ms for the code before it, in
 interleaved runs). `perf -- quads=5` (325 stations, 30 routes, 494 trains, 25 cross-platform pairs,
 40 merge locks, about 440 overtakes by 08:00) takes 176–255 ms (London 183 ms), within the 300 ms
-target.
+target. Re-measured after the UI (which adds no sim work): 157 / 148 ms for the code before it
+against 147 / 175 ms, and 212 ms for `quads=5`. On the main thread, the track tool's four-track
+preview (a clone, the stroke, every new edge's report and the tooltip) takes about 1.2 ms per mouse
+move on that grid (p90 4 ms).
 
 **Living City.** The peak hour never crosses a month, so it is unchanged: 40,320 boardings and
 1,090 waiting as before, 220–266 ms against 211–265 ms for the code before Living City in
@@ -863,3 +890,15 @@ about month 17–19 on Steady (extrapolated) and month 6–7 on Boom.
   get a neighbourhood name instead of cross streets. Use Rename.
 - Bulldozing is not undoable (undo covers blueprint edits). Built track or stations used by a
   route must be removed from the route first.
+- Four-track junctions are *flying*, as every junction is: a scissors crossover's two connectors
+  cross with no conflict between them, a fan's diverging move never blocks the opposite direction,
+  and only converging moves take a merge lock (one per turnout, four per scissors). Real flat
+  crossovers would cost a little capacity at busy fans.
+- At a fan the route bundle on the express pair steps from the shared track's offset to its pair's
+  push over the turnout (a few pixels' kink at mid zooms). The pairs are 9 m apart, so the map pushes
+  them a few pixels further apart at every zoom; a pair's route lines, trains, local-only stops and
+  capsule ends follow the push, while clicks still pick by distance in metres (which is always the
+  side the cursor is on).
+- Riders wait for one route: at a station both a local and an express serve, nobody takes "the first
+  train of either", so an express on a 5-minute headway beside a 5-minute local doesn't add the
+  ridership a combined 2.5-minute service would (see the express balance rows).

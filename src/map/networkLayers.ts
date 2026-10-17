@@ -205,7 +205,7 @@ export class NetworkLayers {
       id: 'hw-hilite',
       source: HILITE_SOURCE,
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': AMBER, 'line-opacity': 0.28, 'line-width': W(11), 'line-blur': 4 },
+      paint: { 'line-color': AMBER, 'line-opacity': 0.28, 'line-width': W(11), 'line-blur': 4, 'line-offset': pairOff },
     });
 
     // ---- built track without routes
@@ -420,11 +420,13 @@ export class NetworkLayers {
     const net = this.game.network;
     const features: Feature<LineString>[] = [];
     const addEdge = (eid: number, s0 = 0, s1?: number) => {
-      if (!net.edges.has(eid)) return;
+      const e = net.edges.get(eid);
+      if (!e) return;
       const g = net.geom(eid);
       features.push({
         type: 'Feature',
-        properties: {},
+        // Drawn a→b, so a four-track pair's push is its own a→b offset (the last update's).
+        properties: { pairOff: pairOffsetAB(e, this.quadOffsets) },
         geometry: { type: 'LineString', coordinates: toLonLatLine(slicePolyline(g.xs, g.ys, g.cum, s0, s1 ?? g.length)) },
       });
     };

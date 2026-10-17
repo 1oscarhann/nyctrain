@@ -10,12 +10,13 @@
  */
 import { PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
+import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
 import { LEVELS, QUAD, TRACK, type TrackClass, type TrackLevel } from '../balance';
 import { toLonLat } from '../core/geo';
 import { fmtDistance, fmtMoney, fmtPerDistance, fmtSpeed } from '../core/units';
 import type { AppContext } from '../ui/context';
 import { h } from '../ui/dom';
-import { crossoverTip, QUAD_COLORS, quadHoverTip, quadStrokeTip, SIDE_LABEL, strokeRoles } from '../ui/express';
+import { crossoverTip, PREVIEW_PAIR_PX, QUAD_COLORS, quadHoverTip, quadStrokeTip, SIDE_LABEL, strokeRoles } from '../ui/express';
 import type { Pointer, Tool } from '../ui/toolTypes';
 import { cap, edgeTooltip } from './describe';
 import type { Network } from './network';
@@ -25,6 +26,7 @@ import type { QuadRole, Snap, StrokePoint } from './types';
 import { edgeReport, LEVEL_NAMES, type EdgeReport } from './validate';
 
 const GREEN: [number, number, number, number] = [76, 208, 138, 255];
+const offsetExt = new PathStyleExtension({ offset: true });
 const RED: [number, number, number, number] = [255, 93, 93, 255];
 const AMBER: [number, number, number, number] = [255, 194, 74, 255];
 
@@ -475,10 +477,14 @@ export class TrackTool implements Tool {
         const role = roles?.get(id);
         const ok = reports[i].ok && !refused;
         const color = !ok ? RED : role ? QUAD_COLORS[role] : GREEN;
-        return { path: this.pathOf(net, id), ok, color, link: role === 'link' };
+        // A pair is pushed away from the other one (paths run a→b, deck.gl's offset is to the right).
+        const t = role === 'local' || role === 'express' ? net.edges.get(id)?.quad : undefined;
+        const off = t ? t.away * PREVIEW_PAIR_PX : 0;
+        return { path: this.pathOf(net, id), ok, color, link: role === 'link', off, width: role === 'link' ? 2.5 : 4 };
       });
+      type D = (typeof data)[number];
       out.push(
-        new PathLayer({
+        new PathLayer<D, PathStyleExtensionProps<D>>({
           id: 'track-preview-casing',
           data,
           getPath: (d) => d.path,
@@ -487,17 +493,21 @@ export class TrackTool implements Tool {
           widthUnits: 'pixels',
           capRounded: true,
           jointRounded: true,
+          getOffset: (d) => d.off / 7,
+          extensions: [offsetExt],
           parameters: DEPTH,
         }),
-        new PathLayer({
+        new PathLayer<D, PathStyleExtensionProps<D>>({
           id: 'track-preview',
           data,
           getPath: (d) => d.path,
           getColor: (d) => d.color,
-          getWidth: (d) => (d.link ? 2.5 : 4),
+          getWidth: (d) => d.width,
           widthUnits: 'pixels',
           capRounded: true,
           jointRounded: true,
+          getOffset: (d) => d.off / d.width,
+          extensions: [offsetExt],
           parameters: DEPTH,
         }),
       );

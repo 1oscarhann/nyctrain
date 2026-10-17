@@ -4,10 +4,10 @@
  * tools' cross-platform texts, and the route panel's Service section and Line list. Pure, no DOM:
  * distances follow the units setting and money the city's currency, in both cities.
  */
-import { QUAD, type TrackClass, type TrackLevel } from '../balance';
+import { MAP, QUAD, type TrackClass, type TrackLevel } from '../balance';
 import { cap } from '../construction/describe';
 import type { Network } from '../construction/network';
-import { quadEndPartner, type QuadResult } from '../construction/quad';
+import { partnerPoint, quadEndPartner, type QuadResult } from '../construction/quad';
 import type { QuadRole, Station } from '../construction/types';
 import { LEVEL_NAMES, type EdgeReport } from '../construction/validate';
 import { fmtCount, fmtDistance, fmtMoney, fmtSpeed } from '../core/units';
@@ -17,6 +17,13 @@ import type { Route } from '../routes/types';
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 export const SIDE_LABEL: Record<1 | -1, string> = { 1: 'right', [-1]: 'left' } as Record<1 | -1, string>;
+
+/**
+ * Track and station tool previews push each pair of a four-track section this many px away from
+ * the other, as the map does for a pair carrying one route (NetworkLayers' quadOffsets): 9 m is
+ * under a pixel at city zooms, so the pairs would otherwise draw on top of each other.
+ */
+export const PREVIEW_PAIR_PX = MAP.routeLineWidthPx / 2 + QUAD.pairGapPx / 2;
 
 /** Preview colours by part of a four-track stroke (§2.1). */
 export const QUAD_COLORS = {
@@ -37,27 +44,46 @@ export function strokeRoles(res: QuadResult): Map<number, QuadRole | 'double'> {
   return m;
 }
 
-/** Connectors among link edges: runs of link edges sharing nodes (a turnout is one, a scissors two). */
-export function connectorCount(net: Network, links: readonly number[]): number {
+/**
+ * The connectors among some link edges, by kind. A connector is a run of link edges sharing nodes
+ * (lead, diagonal, lead). A turnout ends on a pair's end node (degree 2: the other pair starts
+ * there); a scissors is two connectors that cross with no node between them, each ending on
+ * junctions (degree 3) at both ends.
+ */
+export function connectorKinds(net: Network, links: readonly number[]): { turnouts: number; scissors: number } {
   const set = new Set(links);
   const seen = new Set<number>();
-  let n = 0;
+  let turnouts = 0, halves = 0;
   for (const id of links) {
     if (seen.has(id) || !net.edges.has(id)) continue;
-    n++;
     const stack = [id];
     seen.add(id);
+    // The run's outer nodes: those not shared with another link edge of the run.
+    const touches = new Map<number, number>();
     while (stack.length) {
       const e = net.edges.get(stack.pop()!)!;
-      for (const node of [e.a, e.b])
+      for (const node of [e.a, e.b]) {
+        touches.set(node, (touches.get(node) ?? 0) + 1);
         for (const o of net.incident(node))
           if (set.has(o) && !seen.has(o)) {
             seen.add(o);
             stack.push(o);
           }
+      }
     }
+    const ends = [...touches].filter(([, k]) => k === 1).map(([node]) => node);
+    if (ends.some((node) => net.degree(node) < 3)) turnouts++;
+    else halves++;
   }
-  return n;
+  return { turnouts, scissors: Math.ceil(halves / 2) };
+}
+
+/** "1 turnout, 2 scissors" (the track tool's preview). */
+export function connectorText(k: { turnouts: number; scissors: number }): string {
+  const parts: string[] = [];
+  if (k.turnouts) parts.push(`${k.turnouts} turnout${k.turnouts > 1 ? 's' : ''}`);
+  if (k.scissors) parts.push(`${k.scissors} scissors`);
+  return parts.join(', ');
 }
 
 /** Hover text of the track tool in four-track mode before the first click (§2.1). */
@@ -102,8 +128,8 @@ export function quadStrokeTip(net: Network, res: QuadResult, reports: Map<number
   if (res.double.length) lines.push(row('Double track', `${fmtDistance(dbl.length)} · ${fmtMoney(dbl.cost)}`));
   lines.push(row('Local pair', `${fmtDistance(loc.length)} · ${fmtMoney(loc.cost)}`));
   lines.push(row(`Express pair <span class="hw-muted" style="opacity:.7">×${QUAD.secondPairCostFactor}</span>`, `${fmtDistance(exp.length)} · ${fmtMoney(exp.cost)}`));
-  const n = connectorCount(net, res.links);
-  if (n) lines.push(row('Turnouts/crossovers', `${n} · ${fmtMoney(lnk.cost)}`));
+  const k = connectorKinds(net, res.links);
+  if (k.turnouts || k.scissors) lines.push(row('Turnouts/crossovers', `${connectorText(k)} · ${fmtMoney(lnk.cost)}`));
   // Tightest curve on either pair (the inner one on a bend).
   let tight: { r: number; v: number; role: 'local' | 'express' } | null = null;
   for (const role of ['local', 'express'] as const)
@@ -140,6 +166,29 @@ export type StationHoverMode =
   | { kind: 'pair'; partnerEdge: number; partnerU: number }
   | { kind: 'link'; existing: Station }
   | { kind: 'single' };
+
+/**
+ * A lone platform on the other pair of the same four-track section whose opposite point on the
+ * hovered pair lies within QUAD.pairLinkDistance of (x, y): the new platform pairs up with it,
+ * aligned opposite it.
+ */
+export function linkCandidate(net: Network, edge: number, x: number, y: number): { existing: Station; edge: number; u: number } | null {
+  const t = net.edges.get(edge)?.quad;
+  if (!t || t.role === 'link') return null;
+  let best: { existing: Station; edge: number; u: number; d: number } | null = null;
+  for (const s of net.stations.values()) {
+    if (s.pair !== undefined) continue;
+    const q = net.edges.get(s.edge)?.quad;
+    if (!q || q.g !== t.g || q.role === t.role || q.role === 'link') continue;
+    const p = net.stationPos(s);
+    if (Math.hypot(p.x - x, p.y - y) > QUAD.pairLinkDistance + QUAD.spacing) continue;
+    const pp = partnerPoint(net, s.edge, s.u);
+    if (!pp) continue;
+    const d = Math.hypot(pp.x - x, pp.y - y);
+    if (d <= QUAD.pairLinkDistance && (!best || d < best.d)) best = { existing: s, edge: pp.edge, u: pp.u, d };
+  }
+  return best && { existing: best.existing, edge: best.edge, u: best.u };
+}
 
 /** Station tool tooltip on a four-track section. Costs are already summed by the caller. */
 export function stationQuadTip(o: {
@@ -246,8 +295,8 @@ export const OVERTAKES_TIP = 'How many times this route’s trains passed anothe
 export const SERVICE_TIP = {
   local: 'Calls at the local platform of cross-platform stations. Round bullet.',
   express: 'Calls at the express platform of cross-platform stations and is drawn with a lozenge bullet. Its trains have a light outline on the map.',
-  pattern: 'Local platforms of cross-platform stations become their express platforms, and local-only stops on four-track sections are dropped. Terminals stay.',
-  allStops: 'Stop at every station along the line, at the local platform of cross-platform stations. Terminals stay.',
+  pattern: 'Local platforms of cross-platform stations become their express platforms, and local-only stops on four-track sections are dropped. Terminals stay. The route runs as an express.',
+  allStops: 'Stop at every station along the line, at the local platform of cross-platform stations. Terminals stay. The route runs as a local.',
 };
 
 /** True when a route runs on any four-track section (the Service buttons have something to do). */

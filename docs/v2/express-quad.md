@@ -1,10 +1,10 @@
 # v2 design: express services and four-track trunks
 
-Status: in progress. **Construction is implemented** (checklist steps 1–5) and **so are the
-simulation side, saves and scripts** (steps 6–9 and 14: pathfinding, routes, compile, the sim,
-save v6, the headless helpers, `balance scenario=express` and `perf quads=N`, and the interplay
-with city chaos, operations control and Living City); notes for both below. The UI (steps 10–13)
-and the README's controls rows are next. The design below predates London, city
+Status: **implemented** (checklist steps 1–15): construction (steps 1–5), the simulation side,
+saves and scripts (steps 6–9 and 14: pathfinding, routes, compile, the sim, save v6, the headless
+helpers, `balance scenario=express` and `perf quads=N`, and the interplay with city chaos,
+operations control and Living City), and the UI and README (steps 10–13 and 15); implementation
+notes for all three below. The stretch items (§15) are not built. The design below predates London, city
 chaos, operations control and Living City. Its `file:line` references are to the v1 tree at commit
 `a27dbfa` and are stale. **Where the code and this design disagree, trust the code and the task's
 amendments** (saves are v5 → v6, not v2 → v3).
@@ -351,6 +351,187 @@ bit-identically to `pre-express`** (amendment 3; how the gate works and what was
   and a network edit forgets the pair calls in progress (an overtake right after an edit can be
   missed).
 - London's express scenario needs more bonds than the cap allows; it is a sandbox measurement.
+
+## Implementation notes (UI)
+
+Checklist steps 10–13 and 15 (the README), built on the construction and sim notes above. This
+finishes the work in WIP commit `d075e17`: the track and station tools, pair-aware bulldozing, the
+station panel and most of the route UI and rendering were there, and I kept all of it. The UI
+adds no sim work. Everything works in both cities: copy goes through `fmtDistance`/`fmtMoney`,
+so it follows the units setting (which defaults per city) and the city's currency, and station
+names come from the city's own naming.
+
+### What exists
+
+- **`src/ui/express.ts`** (pure, no DOM; tested): `SIDE_LABEL`; `PREVIEW_PAIR_PX` (3.5 px, the
+  push of a pair carrying one route); `QUAD_COLORS` and `strokeRoles(res)` for the preview;
+  `connectorKinds(net, links)` → `{ turnouts, scissors }` and `connectorText`; `quadHoverTip`,
+  `quadStrokeTip`, `crossoverTip`; `linkCandidate(net, edge, x, y)`; `stationQuadTip`;
+  `bulldozePairTip`; `pairWord`; the route panel's `lineRows`, `skipsText`, `overtakesValue`,
+  `OVERTAKES_TIP`, `SERVICE_TIP` and `routeOnQuad`; `StationDetail` and `mergeDetails`.
+- **Track tool** (`trackTool.ts`): `tracks: 2 | 4` (**Q**), `side` (**F**) and `crossing` (**X**,
+  four tracks only; **Esc** or **X** leaves it, **Q** back to two tracks clears it), with
+  `setTracks`/`setSide`/`setCrossing` and the options card rows. Q and F work mid-stroke (the
+  preview is rebuilt from the same points).
+  - Preview: `addQuadStroke` on a clone, every new edge reported. The local pair is green, the
+    express pair cyan and connectors pale grey (thinner), anything invalid red; the pairs are pushed
+    `PREVIEW_PAIR_PX` apart in pixels as the map draws them (deck.gl `PathStyleExtension` offset).
+    A refused stroke draws the plain stroke in red with the reason.
+  - Tooltip: double track before a fan's turnout, each pair's length and cost, "Turnouts/crossovers
+    1 turnout, 1 scissors · £63.2M", the tightest curve and its pair, the total, the first error
+    (red), problems (amber) and the keys.
+  - Hover before the first click: open map, a free four-track end ("Click to extend the four-track
+    section"), or other track (fan).
+  - Finish: decided on a clone first, then one `editBlueprint` (one undo step); a refusal toasts
+    "Can't build four tracks here" and keeps drawing. When the refusing click was an end snap, that
+    end is dropped so another end can be tried.
+  - Crossover mode: the hovered pair edge's `scissorsCandidate`, previewed with `addScissors` on a
+    clone (cached by network version, edge and position); a click is one `editBlueprint`.
+  - Dragging a blueprint vertex moves its twin (`syncTwins`); when the twin is built the drag is
+    refused with a red tip.
+- **Station tool**: on a four-track pair a click places a cross-platform station (both platforms
+  priced `{ paired: true }`, one catchment at the midpoint, both platform highlights on their
+  pushed pairs), next to a lone platform on the other pair it adds the partner (`linkCandidate`,
+  aligned opposite it, priced `{ partner }`, same name), and Shift-click places one platform.
+- **Bulldoze**: a pair is demolished together (both highlighted, the confirm names both platforms
+  and the total refund); Shift-click takes one platform (`Game.bulldozeStation(id, { withPartner })`).
+  `MapView` disables MapLibre's box zoom, which swallowed the click after every Shift+mouseup.
+- **Station panel**: a pair is one station — the kicker says "cross-platform", route chips say
+  which platform each route uses, the figures are both platforms' (two `'station'` queries merged
+  with `mergeDetails`, boardings and waiting summed, the higher crowding), a *Cross-platform
+  transfers* card (`report.crossTransfers[lower id]`), *Platforms* "local + express · 8 cars", the
+  value capture once (by `pairKeyId`), the status of the least-built platform, and **Rename**
+  renames both. The select tool's hover sums the pair's boardings.
+- **Route tool**: **E** (or the editor's *Runs as* control) toggles the draft; a click on a pair
+  picks `choosePlatform(…, draft.express, alt)`; **Alt-click** on a served pair switches its
+  platform; a click on a station the draft runs past goes in path order (`insertStop` in
+  `routes/express.ts`: the clicked platform if the track reaches it, else the one the line passes,
+  else the design's "no crossover reaches it" toast). Skipped stations get hollow amber rings.
+  The editor has the Line list (skipped rows with **Stop here**), *Pattern* buttons and "Skips N
+  stations".
+- **Route panel**: the lozenge in the header and "Express ·" in the kicker. A *Service* section
+  (when the route is an express, stops on four tracks or passes a pair): *Runs as* Local / Express,
+  **Express pattern** (also makes it an express) and **All stops** (also makes it a local). The stop
+  list is now the *Line* list: every station between the terminals in direction-0 order, served
+  rows with **Skip** (terminals say "terminal"), skipped rows muted with "passes" or "on the local
+  pair" and **Stop here**. Each edit is checked by pathfinding and the fleet purchase and reverted
+  with a toast on failure, and applies at once. An *Overtakes yesterday* card (yesterday's
+  `routeOvertakes`, else today's count from the worker).
+- **Bullets**: `bullet(color, text, size, express)` renders the lozenge (`.bullet.express`, §2.4)
+  at every call site: route panel, editor and list, station panel, train panel, Service alerts and
+  the event service editor, the finance Fleet tab (`RouteRef.express`).
+- **Rendering**:
+  - `networkLayers.ts`: `quadOffsets` and `pairOffsetAB` as designed.
+  - Track features carry `quad` and `pairOff`; `built()` excludes quads, and `hw-quad-{level}`
+    draws unrouted built pairs as two thin rails each (four in all).
+  - `pairOff` (zoom-scaled) also offsets construction hatching, blueprints, invalid blueprints and
+    the selection glow.
+  - Route features and `routeOffsets` are the pair's push plus the interline offset, so trains sit
+    on their pair with no train-layer change. `elevated3d` uses the same offsets, routed or not.
+  - `stationLayers.ts`: one capsule per pair (`PairDatum`) from one pair's bundle to the other's at
+    every zoom, its label offset clear of the capsule, sized by both platforms' boardings, crowding
+    and "CLOSED" if either platform is closed. A pair is one node of an interchange's pills. A lone
+    platform on a pair is drawn on its pair's push.
+  - `trainLayer.ts`: expresses get the light casing.
+  - `App`: `stations.update(is3D, network.quadOffsets)` after each network render and day end; the
+    `route-pattern` provider rings the selected route's skipped stations in its colour, cached on
+    the along list; `onSelect` invalidates the view.
+
+### Operations and city chaos in the UI
+
+- The *Service* edits and the Line list's **Skip** / **Stop here** change the stop list at once, like
+  **Edit stops & style**. Frequency, train length and *Operations* stay in the panel's draft, applied
+  together by **Apply**; that draft survives the panel rebuilding after a stop edit (`mergeDraft`).
+- Timepoint clocks appear on served stops only, so a skipped station can't be a timepoint.
+  Skipping a timepoint drops it (`RouteSet.update`), and **Suggest** only picks served stops
+  (checked in the browser: London's local got Oxford Circus and Holborn at their local platforms,
+  the express Oxford Circus at its express platform).
+- A closed pair shows "CLOSED" on the capsule with a red outline, and the station panel banner
+  shows for either platform's alert (`partnerStationId`).
+
+### Deviations from the design
+
+1. **All stops also makes the route a local**, and **Express pattern** an express, so the two buttons
+   undo each other's stops *and* kind. The design doesn't say what happens to the flag.
+2. **"Turnouts/crossovers 1 turnout, 1 scissors"** instead of a count of connector paths. A
+   scissors is two crossing connectors, so a plain count read "4" for a free/free quad.
+3. **Previews and lone platforms are pushed like the map.** The design pushes only route bundles,
+   rails, blueprints and capsule ends. At city zooms 9 m is under a pixel, so without the push the
+   preview's local pair hides under the express pair, and a local-only stop sits between the bundles.
+4. **The Service section appears only where it applies** (an express, a stop on four tracks, or a
+   pair along the line), so ordinary routes' panels are as before.
+5. **The Line list replaces the stop list in place** ("Line · 10 stops, skips 2 · 6.9 km") and shows
+   only stations between the terminals. The path's terminal run-outs never add stations.
+6. **A refused four-track stroke keeps drawing**, and drops the end it couldn't attach to.
+7. **`linkCandidate` moved to `ui/express.ts`** and the route tool's insert-in-order logic to
+   `insertStop` (`routes/express.ts`), so both can be tested without deck.gl.
+8. **The selection glow is pushed onto the pair** too, so a selected express glows on its own pair.
+9. `PREVIEW_PAIR_PX` is shared by the track and station tool previews.
+
+### Gotchas
+
+- Clicks pick by distance in metres (`pickEdge`, `StationLayers.pick`). Because the pixel push has
+  the same sign as the metric spacing, the nearer pair is always the one the cursor is drawn over.
+- Zoom-dependent positions (capsules, pushed lone platforms, label offsets) use
+  `updateTriggers: [version, round(zoom·20)]`.
+- On some Linux desktops the window manager takes Alt+drag/Alt+click; the route tool's Alt-click
+  then never reaches the page. An express draft can still use a local platform by clicking it
+  after switching the draft to Local with **E**, then back.
+- `stationsAlongRoute` caches per route by network version, stops and path length. The route panel
+  and the `route-pattern` provider share it.
+
+### Verification (UI)
+
+- `tsc` is clean. `npm test`: **283 tests pass**, the 272 before plus 11 in `tests/expressUi.test.ts`:
+  - the pair push's sign through `orientEdges` on a chain drawn either way, for both sides;
+  - `quadOffsets` widening with a bundle;
+  - connectors by kind;
+  - the stroke, hover, crossover, station and bulldoze texts in both cities' units and currency;
+  - `linkCandidate`;
+  - the Line list, Service and Overtakes helpers, `insertStop` and `mergeDetails`.
+- **In a browser** (Chromium with SwiftShader through Playwright, a Vite dev server, the real tools
+  with mouse and keyboard, sandbox):
+  - **New York, Second Avenue** (Houston to 96 St):
+    - a free/free deep quad ("2 scissors · $84.2M"), F mid-stroke, and an extra scissors with X;
+    - five pairs and five local-only stops (Shift);
+    - Shift-bulldoze of one platform of a pair, then link mode to put it back;
+    - Build, a local at all ten stops, then an express (E, terminals, then a pair inserted in order:
+      "Click to stop at E 21st St & 2nd Av (express platform) (inserted in order)");
+    - day 2 at 08:30: *Overtakes yesterday* 19–23, 100 cross-platform transfers at 21 St, Skip and
+      Stop here on the local;
+    - the station panel of a pair, express trains with the light casing, 3D;
+    - save, then load from the title screen (38 quad edges, 10 twins, 10 paired platforms, the
+      express flag kept).
+  - **London, Paddington to Whitechapel** (km and £ throughout):
+    - double track at both ends; a quad fanning off the west end ("1 turnout, 1 scissors"); a
+      "continue" stroke from its free end to a fan into the east double track (one group throughout);
+    - pairs (Marble Arch, Oxford Circus, Holborn) and local-only stops (Bond Street, Tottenham Court
+      Road, St Paul's);
+    - unrouted four-rail rendering and the fan's turnout;
+    - a built pair demolished with the confirm ("Demolish both platforms of …? You get back
+      £66.6M"), then placed again;
+    - a local and an express (Alt-click shows "Click to add Oxford Circus (local platform)");
+    - **Express pattern** → **All stops** on the local (express, 6 stops → local, 9 stops);
+      **Suggest** timepoints on both;
+    - a day: 194 express overtakes, the station panel, the routes list with its lozenge, a closed
+      capsule, 3D;
+    - save and load.
+  - **Interactions** (New York): Q mid-stroke; one undo step per quad (Ctrl+Z, Ctrl+Shift+Z); dragging
+    a middle vertex 280 m (its twin follows and stays 9.000 m away, no invalid edges); a too-short
+    stroke refused with the toast while drawing continues; Esc; X and Esc; E twice in the route tool
+    (the editor's control and the lozenge follow).
+- **Identity:** UI-only changes, re-checked against the `pre-express` worktree after all changes.
+  The `dump=` files are byte-identical for `headless-sim days=3`, `balance` core and sprawl (8 days)
+  in both cities, and core `days=25` in both cities (day 18 carries the 31 Jan growth month). The
+  printed output matches apart from timings and the dump path.
+- **Performance:** the sim is unchanged by the UI. `npm run perf` peak hour, interleaved, on this shared machine:
+  - `pre-express`: 157 / 148 ms; now: 147 / 175 ms, with the same 40,320 boardings and 1,090 waiting.
+  - `perf -- quads=5` (325 stations, 494 trains, 25 pairs, 40 locks, 441 overtakes by 08:00): 212 ms.
+  - On the main thread, the four-track preview (clone, stroke, every new edge's report, roles,
+    connectors and the tooltip) takes 1.15 ms median (p90 4.0 ms) per mouse move on the `quads=5`
+    grid.
+  - The pushed station positions are one multiply-add per lone platform on a pair and only rerun on
+    zoom steps.
 
 > **Short version.** A *four-track* ("quad") section is two parallel double-track edges 9 m apart,
 > drawn in one stroke. The drawn line becomes the **local pair**. The tool generates the **express

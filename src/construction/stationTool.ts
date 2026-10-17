@@ -8,12 +8,13 @@
  */
 import { PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
+import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
 import { QUAD, STATION, TRACK, type TrackClass } from '../balance';
 import { toLonLat } from '../core/geo';
 import { fmtDistance, fmtMoney } from '../core/units';
 import type { AppContext } from '../ui/context';
 import { h } from '../ui/dom';
-import { stationQuadTip, type StationHoverMode } from '../ui/express';
+import { linkCandidate, PREVIEW_PAIR_PX, stationQuadTip, type StationHoverMode } from '../ui/express';
 import type { Pointer, Tool } from '../ui/toolTypes';
 import { cap } from './describe';
 import { platformLength } from './network';
@@ -21,8 +22,6 @@ import { pickEdge } from './pick';
 import { partnerPoint } from './quad';
 import { slicePolyline } from '../map/polyline';
 import { LEVEL_NAMES, stationReport, type StationReport } from './validate';
-import type { Network } from './network';
-import type { Station } from './types';
 
 interface Hover {
   edge: number;
@@ -39,28 +38,7 @@ interface Hover {
   error?: string;
 }
 
-/**
- * A lone platform on the other pair of the same four-track section whose opposite point on the
- * hovered pair lies within QUAD.pairLinkDistance of (x, y): the new platform pairs up with it,
- * aligned opposite it.
- */
-export function linkCandidate(net: Network, edge: number, x: number, y: number): { existing: Station; edge: number; u: number } | null {
-  const t = net.edges.get(edge)?.quad;
-  if (!t || t.role === 'link') return null;
-  let best: { existing: Station; edge: number; u: number; d: number } | null = null;
-  for (const s of net.stations.values()) {
-    if (s.pair !== undefined) continue;
-    const q = net.edges.get(s.edge)?.quad;
-    if (!q || q.g !== t.g || q.role === t.role || q.role === 'link') continue;
-    const p = net.stationPos(s);
-    if (Math.hypot(p.x - x, p.y - y) > QUAD.pairLinkDistance + QUAD.spacing) continue;
-    const pp = partnerPoint(net, s.edge, s.u);
-    if (!pp) continue;
-    const d = Math.hypot(pp.x - x, pp.y - y);
-    if (d <= QUAD.pairLinkDistance && (!best || d < best.d)) best = { existing: s, edge: pp.edge, u: pp.u, d };
-  }
-  return best && { existing: best.existing, edge: best.edge, u: best.u };
-}
+const offsetExt = new PathStyleExtension({ offset: true });
 
 export class StationTool implements Tool {
   readonly id = 'station' as const;
@@ -189,9 +167,12 @@ export class StationTool implements Tool {
     if (!hv) return [];
     const net = this.ctx.game.network;
     const P = platformLength(this.cars[hv.cls], hv.cls);
+    // On four tracks each platform sits on its pair as the map draws it: pushed away from the other pair.
     const platform = (edge: number, u: number) => {
       const g = net.geom(edge);
-      return slicePolyline(g.xs, g.ys, g.cum, Math.max(0, u - P / 2), Math.min(g.length, u + P / 2)).map(([x, y]) => toLonLat(x, y));
+      const t = net.edges.get(edge)?.quad;
+      const off = t && t.role !== 'link' ? t.away * PREVIEW_PAIR_PX : 0;
+      return { path: slicePolyline(g.xs, g.ys, g.cum, Math.max(0, u - P / 2), Math.min(g.length, u + P / 2)).map(([x, y]) => toLonLat(x, y)), off };
     };
     const plats = [platform(hv.edge, hv.u)];
     let centre = net.stationPos({ edge: hv.edge, u: hv.u } as never) as { x: number; y: number };
@@ -204,6 +185,8 @@ export class StationTool implements Tool {
     }
     const col: [number, number, number, number] = hv.ok ? [76, 208, 138, 255] : [255, 93, 93, 255];
     const DEPTH = { depthCompare: 'always', depthWriteEnabled: false } as const;
+    type Plat = (typeof plats)[number];
+    const width = plats.length > 1 ? 6 : 10;
     return [
       new ScatterplotLayer({
         id: 'station-catchment',
@@ -219,16 +202,18 @@ export class StationTool implements Tool {
         parameters: DEPTH,
         updateTriggers: { getFillColor: hv.ok, getLineColor: hv.ok },
       }),
-      new PathLayer({
+      new PathLayer<Plat, PathStyleExtensionProps<Plat>>({
         id: 'station-platform',
         data: plats,
-        getPath: (d) => d,
+        getPath: (d) => d.path,
         getColor: col,
-        getWidth: plats.length > 1 ? 7 : 10,
+        getWidth: width,
         widthUnits: 'pixels',
         capRounded: true,
+        getOffset: (d) => d.off / width,
+        extensions: [offsetExt],
         parameters: DEPTH,
-        updateTriggers: { getColor: hv.ok, getWidth: plats.length },
+        updateTriggers: { getColor: hv.ok, getWidth: plats.length, getOffset: plats.length },
       }),
     ];
   }

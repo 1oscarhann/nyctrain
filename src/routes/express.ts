@@ -199,6 +199,20 @@ export function serveStops(net: Network, cls: TrackClass, stops: readonly number
   return { stops: next };
 }
 
+/**
+ * The route tool's click on a station the draft already runs past: stop there in path order, at
+ * the platform clicked (a pair's express or local one, as choosePlatform picked it) when the
+ * track allows, else at the platform the line passes (serveStops).
+ */
+export function insertStop(net: Network, cls: TrackClass, stops: readonly number[], path: RoutePath, stationId: number): { stops: number[] } | { error: string } {
+  const res = serveStops(net, cls, stops, path, stationId);
+  if ('error' in res) return res;
+  const p = partnerOf(net, stationId);
+  if (p === null || res.stops.includes(stationId)) return res;
+  const want = res.stops.map((x) => (x === p ? stationId : x));
+  return findRoutePath(net, cls, want).ok ? { stops: want } : res;
+}
+
 /** Stop serving a station (either platform of a pair). Terminals can't be skipped. */
 export function skipStops(net: Network, stops: readonly number[], stationId: number): { stops: number[] } | { error: string } {
   const p = partnerOf(net, stationId);

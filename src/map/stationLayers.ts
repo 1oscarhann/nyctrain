@@ -30,6 +30,12 @@ interface StationDatum {
   radius: number;
   crowding: number;
   progress: number;
+  /**
+   * A lone platform on a four-track pair (a local-only stop) sits on its pair's route bundle,
+   * which the map pushes a few px away from the other pair: local metres, the unit vector to the
+   * pushed side, and the quad group.
+   */
+  push?: { x: number; y: number; ax: number; ay: number; g: number };
 }
 
 interface PillDatum {
@@ -122,6 +128,9 @@ export class StationLayers {
       const [lon, lat] = toLonLat(p.x, p.y);
       const z = is3D ? Math.max(0, net.heightAt(s.edge, s.u)) : 0;
       const dd: StationDatum = { id: s.id, pos: [lon, lat, z], name: s.name, status: s.status, radius: 5, crowding: 0, progress: progress(s, this.game.time) };
+      const t = net.edges.get(s.edge)?.quad;
+      // `away` is to the right of the edge's a→b heading (h); its right normal is (hy, −hx).
+      if (t && t.role !== 'link' && t.away) dd.push = { x: p.x, y: p.y, ax: t.away * p.hy, ay: -t.away * p.hx, g: t.g };
       data.push(dd);
       drawnAs.set(s.id, dd);
     }
@@ -207,6 +216,14 @@ export class StationLayers {
       const reach = (p.half + (this.quadQ.get(p.g) ?? MAP.routeLineWidthPx / 2 + QUAD.pairGapPx / 2) * lineScale(zoom) * metresPerPixel(zoom)) * pxPerM;
       return [d.radius + 6 + reach * Math.abs(p.nx), 0];
     };
+    // Lone platforms on a four-track pair follow their pair's push (zoom-dependent).
+    const posOf = (d: StationDatum): [number, number, number] => {
+      const q = d.push;
+      if (!q) return d.pos;
+      const m = (this.quadQ.get(q.g) ?? MAP.routeLineWidthPx / 2 + QUAD.pairGapPx / 2) * lineScale(zoom) * metresPerPixel(zoom);
+      const [lon, lat] = toLonLat(q.x + q.ax * m, q.y + q.ay * m);
+      return [lon, lat, d.pos[2]];
+    };
     const pairLine = (d: PairDatum): [number, number, number, number] =>
       this.closed.has(d.id) || this.closed.has(d.b) ? [255, 93, 93, 255] : d.status === 'construction' ? [255, 194, 74, 255] : d.status === 'blueprint' ? [255, 255, 255, 160] : [22, 27, 33, 255];
     return [
@@ -261,17 +278,17 @@ export class StationLayers {
       new ScatterplotLayer<StationDatum>({
         id: 'station-crowd',
         data: all.filter((d) => d.crowding > 0.6 && d.status === 'built'),
-        getPosition: (d) => d.pos,
+        getPosition: posOf,
         getRadius: (d) => d.radius + 4 + pulse * 6,
         radiusUnits: 'pixels',
         getFillColor: (d) => (d.crowding > 1 ? [255, 93, 93, 90 + 80 * pulse] : [255, 194, 74, 70 + 70 * pulse]),
         parameters: DEPTH_OFF,
-        updateTriggers: { getRadius: [this.version, Math.round(pulse * 20)], getFillColor: [this.version, Math.round(pulse * 20)] },
+        updateTriggers: { getPosition: [this.version, zKey], getRadius: [this.version, Math.round(pulse * 20)], getFillColor: [this.version, Math.round(pulse * 20)] },
       }),
       new ScatterplotLayer<StationDatum>({
         id: 'stations',
         data: this.data,
-        getPosition: (d) => d.pos,
+        getPosition: posOf,
         getRadius: (d) => d.radius,
         radiusUnits: 'pixels',
         stroked: true,
@@ -281,13 +298,13 @@ export class StationLayers {
         lineWidthUnits: 'pixels',
         pickable: true,
         parameters: DEPTH_OFF,
-        updateTriggers: { getFillColor: this.version, getLineColor: this.version, getLineWidth: this.version, getRadius: this.version, getPosition: this.version },
+        updateTriggers: { getFillColor: this.version, getLineColor: this.version, getLineWidth: this.version, getRadius: this.version, getPosition: [this.version, zKey] },
       }),
       showLabels &&
         new TextLayer<StationDatum>({
           id: 'station-labels',
           data: all,
-          getPosition: (d) => d.pos,
+          getPosition: posOf,
           getText: (d) => (d.status === 'construction' ? `${d.name} · ${Math.floor(d.progress * 100)}%` : this.closed.has(d.id) || this.closed.has((d as PairDatum).b ?? -1) ? `${d.name} • CLOSED` : d.name),
           getSize: 12.5,
           getColor: (d) => (d.status === 'blueprint' ? [231, 235, 239, 150] : this.closed.has(d.id) || this.closed.has((d as PairDatum).b ?? -1) ? [255, 93, 93, 255] : [231, 235, 239, 255]),
@@ -301,7 +318,7 @@ export class StationLayers {
           outlineColor: [22, 27, 33, 230],
           characterSet: 'auto',
           parameters: DEPTH_OFF,
-          updateTriggers: { getText: [this.version, Math.floor(this.game.time / 3600)], getColor: this.version, getPixelOffset: [this.version, zKey], getPosition: this.version },
+          updateTriggers: { getText: [this.version, Math.floor(this.game.time / 3600)], getColor: this.version, getPixelOffset: [this.version, zKey], getPosition: [this.version, zKey] },
         }),
     ].filter(Boolean) as Layer[];
   }

@@ -17,7 +17,7 @@ import { hexRgb } from '../map/networkLayers';
 import type { AppContext } from '../ui/context';
 import type { Pointer, Tool } from '../ui/toolTypes';
 import { findRoutePath } from './pathfind';
-import { choosePlatform, partnerOf, quadRole, serveStops, stationsAlongPath, type AlongStation } from './express';
+import { choosePlatform, insertStop, partnerOf, quadRole, stationsAlongPath, type AlongStation } from './express';
 import { defaultHeadways } from './routeSet';
 import type { PeriodId, Route, RoutePath } from './types';
 import { purchaseFleet, fleetPlan } from './fleet';
@@ -266,13 +266,12 @@ export class RouteTool implements Tool {
     else if (i >= 0) d.stops.splice(i, 1);
     else if (past && this.path) {
       // The path already runs past it: stop there in path order.
-      const res = serveStops(net, d.cls, d.stops, this.path, sid);
+      const res = insertStop(net, d.cls, d.stops, this.path, sid);
       if ('error' in res) {
         this.ctx.toast(`Can't stop at ${s.name}`, res.error, 'red');
         return;
       }
-      d.stops = res.stops.map((x) => (x !== sid && partnerOf(net, sid) === x ? sid : x));
-      if (findRoutePath(net, d.cls, d.stops).ok === false) d.stops = res.stops;
+      d.stops = res.stops;
     } else if (p.shift) d.stops.unshift(sid);
     else d.stops.push(sid);
     if (d.stops.length === 0) d.cls = d.editing !== null ? d.cls : null;
