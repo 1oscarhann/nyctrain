@@ -12,10 +12,12 @@
  */
 import { QUAD, type TrackClass } from '../balance';
 import { fmtDistance } from '../core/units';
-import { concentric, mitre, sampleAt, turnSign, type XY } from './geometry';
+import { concentric, mitre, otherEnd, sampleAt, turnSign, type XY } from './geometry';
 import type { Network } from './network';
 import { pickEdge } from './pick';
-import type { ChainVertex, QuadRole, QuadTag, Snap, StrokePoint } from './types';
+import { partnerCoverage } from './validate';
+import { trackPath } from '../routes/pathfind';
+import type { ChainVertex, QuadRole, QuadTag, Snap, StrokePoint, TrackNode } from './types';
 
 export { concentric, mitre, turnSign } from './geometry';
 
@@ -274,6 +276,11 @@ export function addQuadStroke(net: Network, points: StrokePoint[], cls: TrackCla
   if (points.length < 2) return refused('Too short for four tracks');
   const sm = endModeOf(net, startSnap, 'start');
   const em = endModeOf(net, endSnap, 'end');
+  // From one end of a bulldozed gap in a pair to the other: rebuild that stretch along the other pair.
+  if (startSnap.kind === 'node' && endSnap.kind === 'node' && sm.kind !== 'continue' && em.kind !== 'continue') {
+    const ga = gapTag(net, startSnap.node), gb = gapTag(net, endSnap.node);
+    if (ga && gb && ga.g === gb.g && ga.role === gb.role) return repairPair(net, startSnap.node, endSnap.node, cls);
+  }
   if (sm.kind === 'continue' && endSnap.kind === 'node' && endSnap.node === sm.partner) return refused("A pair can't join its own partner");
   if (em.kind === 'continue' && startSnap.kind === 'node' && startSnap.node === em.partner) return refused("A pair can't join its own partner");
   let side: 1 | -1 = opt.side;
@@ -530,4 +537,159 @@ export function scissorsCandidate(net: Network, edge: number, u: number, cls: Tr
     }
   }
   return { ok: false, reason: 'Crossovers need straight, level track clear of platforms' };
+}
+
+// ---------------------------------------------------------------------------------- repairs
+
+/**
+ * The pair of a four-track section that a track end belongs to: a node whose track is all one
+ * pair (local or express) of one group. Read before a stroke attaches there.
+ */
+export function gapTag(net: Network, nodeId: number): { g: number; role: 'local' | 'express' } | null {
+  const inc = net.incident(nodeId);
+  if (!inc.length) return null;
+  let tag: { g: number; role: 'local' | 'express' } | null = null;
+  for (const eid of inc) {
+    const t = net.edges.get(eid)?.quad;
+    if (!t) return null; // ordinary track here (a fan's junction): not the end of a pair
+    if (t.role === 'link') continue;
+    if (tag && (tag.g !== t.g || tag.role !== t.role)) return null;
+    tag = { g: t.g, role: t.role };
+  }
+  return tag;
+}
+
+/** A track end where a stretch of one pair is missing (the hover hint offers to restore it). */
+export function isGapEnd(net: Network, nodeId: number): boolean {
+  if (!gapTag(net, nodeId) || quadEndPartner(net, nodeId)) return false;
+  return net.incident(nodeId).filter((eid) => net.edges.get(eid)!.quad!.role !== 'link').length === 1;
+}
+
+/**
+ * A two-track stroke between two ends of one pair of a four-track section (the gap left after a
+ * stretch of it was bulldozed) rejoins that pair: each new edge that runs alongside the group's
+ * other pair (at least half its length, see partnerCoverage) takes the pair's tag, with the side
+ * the other pair is on, so the section draws, routes and pairs platforms as four tracks again.
+ * Edges that wander off stay ordinary double track. Vertices are not re-twinned: they are where
+ * the player clicked, and the surviving pair is usually built (a built twin would freeze them).
+ * Returns how many edges were tagged.
+ */
+export function rejoinPair(net: Network, tag: { g: number; role: 'local' | 'express' }, edges: readonly number[]): number {
+  let n = 0;
+  for (const id of edges) {
+    const e = net.edges.get(id);
+    if (!e || e.quad) continue;
+    let best: QuadTag | null = null;
+    let cov = 0.5;
+    for (const away of [1, -1] as const) {
+      e.quad = { g: tag.g, role: tag.role, away };
+      const c = partnerCoverage(net, id);
+      if (c >= cov) [best, cov] = [{ ...e.quad }, c];
+    }
+    if (best) {
+      e.quad = best;
+      n++;
+    } else delete e.quad;
+  }
+  if (n) net.touch();
+  return n;
+}
+
+/**
+ * Rebuild a missing stretch of one pair of a four-track section (bulldozed) between two of its
+ * ends `a` and `b`, as the exact parallel of the other pair: the gap's vertices are the mitred,
+ * concentric twins of the other pair's vertices between the points opposite a and b, so the
+ * section is four tracks again, as drawn (tags, twins, the side). An end that was a curve vertex
+ * gets its concentric fillet back; a junction or turnout end stays an anchor. The track tool's
+ * four-track stroke from one end of a gap to the other calls this. Refused (nothing changed) when
+ * the ends aren't of one pair or the other pair doesn't run unbroken between them.
+ */
+export function repairPair(net: Network, a: number, b: number, cls: TrackClass): QuadResult {
+  const ta = gapTag(net, a), tb = gapTag(net, b);
+  if (!ta || !tb || ta.g !== tb.g || ta.role !== tb.role || a === b) return refused('These ends are not one pair of a four-track section');
+  const g = ta.g, role = ta.role, other = otherRole(role);
+  const onOther = (id: number) => {
+    const t = net.edges.get(id)?.quad;
+    return !!t && t.g === g && t.role === other;
+  };
+  // Where each end's counterpart is on the other pair: its twin vertex, else the point opposite.
+  const opposite = (id: number): { edge: number; u: number; x: number; y: number } | null => {
+    const n = net.nodes.get(id)!;
+    const t = n.twin !== undefined ? net.nodes.get(n.twin) : undefined;
+    if (t) {
+      const e = net.incident(t.id).find(onOther);
+      if (e !== undefined) return { edge: e, u: net.edges.get(e)!.a === t.id ? 0 : net.geom(e).length, x: t.x, y: t.y };
+    }
+    const own = net.incident(id).find((eid) => net.edges.get(eid)?.quad?.role === role);
+    if (own === undefined) return null;
+    return partnerPoint(net, own, net.edges.get(own)!.a === id ? 0 : net.geom(own).length);
+  };
+  const A = net.nodes.get(a)!, B = net.nodes.get(b)!;
+  const own = (id: number) => {
+    const t = net.edges.get(id)?.quad;
+    return !!t && t.g === g && t.role === role;
+  };
+  {
+    // Not a gap if the pair already runs between them.
+    const ea = net.incident(a).find(own)!, eb = net.incident(b).find(own)!;
+    const at = (e: number, id: number) => ({ edge: e, u: net.edges.get(e)!.a === id ? 0 : net.geom(e).length });
+    if (trackPath(net, at(ea, a), at(eb, b), own, { passPenalty: 0, linkPenalty: 0 })) return refused(`The ${role} pair already runs between these ends`);
+  }
+  const oa = opposite(a), ob = opposite(b);
+  // (A twin is at most a mitre's offset away; a point opposite, QUAD.spacing.)
+  if (!oa || !ob || Math.hypot(A.x - oa.x, A.y - oa.y) > 60 || Math.hypot(B.x - ob.x, B.y - ob.y) > 60) return refused('No other pair runs beside these ends');
+  const legs = trackPath(net, oa, ob, onOther, { passPenalty: 0, linkPenalty: 0 });
+  if (!legs || !legs.length) return refused('The other pair is broken between these ends too: redraw the section');
+  const node = (id: number) => net.nodes.get(id)!;
+  const startOf = (l: QuadLeg) => (l.dir === 0 ? net.edges.get(l.edge)!.a : net.edges.get(l.edge)!.b);
+  const endOf = (l: QuadLeg) => (l.dir === 0 ? net.edges.get(l.edge)!.b : net.edges.get(l.edge)!.a);
+  // Which side of the other pair (in its travel direction) the missing pair runs on: from the
+  // first leg's chord (edge geometry starts mid-fillet, so chords between vertices, as mitre uses).
+  const S = node(startOf(legs[0])), N = node(endOf(legs[0]));
+  const side: 1 | -1 = (N.y - S.y) * (A.x - S.x) - (N.x - S.x) * (A.y - S.y) >= 0 ? 1 : -1;
+  const d = side * QUAD.spacing;
+  // The twin chain: a, the twins of the other pair's vertices between the legs, b.
+  const v: ChainVertex[] = [{ x: A.x, y: A.y, level: A.level, r: 0, existing: a }];
+  for (let i = 0; i + 1 < legs.length; i++) {
+    const p = node(startOf(legs[i])), n = node(endOf(legs[i])), q = node(endOf(legs[i + 1]));
+    let m = mitre(p, n, q, d);
+    if (!m) return refused('Too sharp a turn for four tracks');
+    // A lead of the other pair's junction opposite an end is a lead of that end, on its axis.
+    let leadOf: number | undefined;
+    for (const [k, E, O] of [[0, A, startOf(legs[0])], [-1, B, endOf(legs[legs.length - 1])]] as const) {
+      if (n.leadOf !== O || !E.anchor) continue;
+      const [hx, hy] = net.departHeading(net.incident(E.id)[0], E.id);
+      const along: number = (m.x - E.x) * hx + (m.y - E.y) * hy;
+      m = { x: E.x + hx * along, y: E.y + hy * along };
+      leadOf = k;
+    }
+    const tw = n.twin !== undefined && net.nodes.has(n.twin) ? undefined : n.id;
+    v.push({ ...m, level: n.level, r: concentric(n.r, turnSign(p, n, q), d), ...(tw !== undefined ? { twin: tw } : {}), ...(leadOf !== undefined ? { leadOf } : {}) });
+  }
+  v.push({ x: B.x, y: B.y, level: B.level, r: 0, existing: b });
+  for (const x of v) if (x.leadOf === -1) x.leadOf = v.length - 1;
+  // Ends that were curve vertices (they still have their twin) join as vertices with a fillet.
+  const join = new Set<number>();
+  const curveEnd: [TrackNode, TrackNode][] = [];
+  for (const E of [A, B]) {
+    const T = E.twin !== undefined ? net.nodes.get(E.twin) : undefined;
+    if (T && !E.anchor && net.degree(E.id) === 1 && net.degree(T.id) === 2 && !T.anchor) {
+      join.add(E.id);
+      curveEnd.push([E, T]);
+    }
+  }
+  const edges = net.addChain(v, cls, 'blueprint', join);
+  setTag(net, edges, { g, role, away: side });
+  for (const [E, T] of curveEnd) {
+    // T's neighbours in the travel order `side` is measured in: from outside the gap into it at
+    // a's end, from inside it out at b's end.
+    const pathEdge = E === A ? legs[0].edge : legs[legs.length - 1].edge;
+    const outer = net.incident(T.id).find((eid) => eid !== pathEdge);
+    if (outer === undefined) continue;
+    const far = (eid: number) => node(otherEnd(net.edges.get(eid)!, T.id));
+    const [p, q] = E === A ? [far(outer), far(pathEdge)] : [far(pathEdge), far(outer)];
+    E.r = concentric(T.r, turnSign(p, T, q), d);
+  }
+  net.touch();
+  return { ok: true, group: g, local: role === 'local' ? edges : [], express: role === 'express' ? edges : [], links: [], double: [], edges, problems: [] };
 }

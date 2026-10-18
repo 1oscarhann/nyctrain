@@ -66,7 +66,8 @@ export class RouteSet {
     if (c && c.key === key) return c.path;
     // Prefer built track: a route keeps running on what exists while a shortcut is planned or
     // under construction, and switches over once it opens. Otherwise show the planned path.
-    const built = findRoutePath(net, r.cls, r.stops, (id) => net.edges.get(id)?.status === 'built');
+    // (Four tracks: only built platforms count as ones the route runs past.)
+    const built = findRoutePath(net, r.cls, r.stops, (id) => net.edges.get(id)?.status === 'built', { platform: (s) => s.status === 'built' });
     const path = built.ok ? built : findRoutePath(net, r.cls, r.stops);
     this.cache.set(r.id, { key, path });
     return path;

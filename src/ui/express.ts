@@ -7,7 +7,7 @@
 import { MAP, QUAD, type TrackClass, type TrackLevel } from '../balance';
 import { cap } from '../construction/describe';
 import type { Network } from '../construction/network';
-import { partnerPoint, quadEndPartner, type QuadResult } from '../construction/quad';
+import { gapTag, isGapEnd, partnerPoint, quadEndPartner, type QuadResult } from '../construction/quad';
 import type { QuadRole, Station } from '../construction/types';
 import { LEVEL_NAMES, type EdgeReport } from '../construction/validate';
 import { fmtCount, fmtDistance, fmtMoney, fmtSpeed } from '../core/units';
@@ -90,6 +90,10 @@ export function connectorText(k: { turnouts: number; scissors: number }): string
 export function quadHoverTip(net: Network, snap: { kind: 'none' } | { kind: 'node'; node: number } | { kind: 'edge'; edge: number; u: number }, level: TrackLevel, side: 1 | -1): string {
   if (snap.kind === 'none') return `<div class="hw-muted">Click to start four-track ${LEVEL_NAMES[level]} · express pair on the ${SIDE_LABEL[side]} (<span class="kbd">F</span> flips)</div>`;
   if (snap.kind === 'node' && quadEndPartner(net, snap.node)) return `<div class="hw-green">Click to extend the four-track section</div>`;
+  if (snap.kind === 'node' && isGapEnd(net, snap.node)) {
+    const role = gapTag(net, snap.node)!.role;
+    return `<div class="hw-green">Click, then the other end of the gap, to restore the ${role} pair along the ${role === 'local' ? 'express' : 'local'} pair</div>`;
+  }
   return `<div class="hw-muted">Click to branch four tracks off here · the express pair splits off through a turnout</div>`;
 }
 
@@ -334,4 +338,50 @@ export function mergeDetails(ds: readonly StationDetail[]): StationDetail {
     from: flows('from'),
     to: flows('to'),
   };
+}
+
+/**
+ * Edges under construction that get a progress label on the map. On a four-track section the two
+ * pairs run 9 m apart with about the same midpoints, so an express edge whose local partner (at
+ * its midpoint) is under construction too is labelled once, by the local edge; connectors are
+ * labelled only when no pair of their group is (they sit inside the four-track box).
+ */
+export function constructionLabelEdges(net: Network): number[] {
+  const building = new Set<number>();
+  const groups = new Set<number>();
+  for (const e of net.edges.values()) {
+    if (e.status !== 'construction') continue;
+    building.add(e.id);
+    if (e.quad && e.quad.role !== 'link') groups.add(e.quad.g);
+  }
+  const out: number[] = [];
+  for (const id of building) {
+    const t = net.edges.get(id)!.quad;
+    if (t?.role === 'link' && groups.has(t.g)) continue;
+    if (t?.role === 'express') {
+      const p = partnerPoint(net, id, net.geom(id).length / 2);
+      if (p && building.has(p.edge)) continue;
+    }
+    out.push(id);
+  }
+  return out;
+}
+
+/** Two stop lists are the same, in order. */
+export function sameStopList(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/**
+ * A Service edit (Skip, Stop here, Local / Express, Express pattern, All stops) that would change
+ * nothing: the same stops and the same kind. The route panel then edits nothing and restarts no trains.
+ */
+export function serviceEditNoop(r: Pick<Route, 'stops' | 'express'>, stops: readonly number[], express?: boolean): boolean {
+  return sameStopList(stops, r.stops) && (express === undefined || express === !!r.express);
+}
+
+/** Bulldoze tool: hovering one pair of a four-track section says how to put it back. */
+export function bulldozePairEdgeHint(role: QuadRole | undefined): string {
+  if (role !== 'local' && role !== 'express') return '';
+  return `<div class="hw-muted">The ${role} pair of a four-track section: to put it back, draw four tracks (<span class="kbd">Q</span>) from one end of the gap to the other</div>`;
 }

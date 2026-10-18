@@ -30,9 +30,9 @@ import {
   type PairGeometry,
   type TransitCostInput,
 } from './modeChoice';
-import type { CompiledNetwork, CRoute, DayReport, EventDayInfo, EventOutcome, LiveStats, ModeState, ServiceOverride } from './protocol';
+import { hasExpressService, type CompiledNetwork, type CRoute, type DayReport, type EventDayInfo, type EventOutcome, type LiveStats, type ModeState, type ServiceOverride } from './protocol';
 import { effectiveTransfers, TransitGraph } from './transitGraph';
-import { periodIndex, type PassengerHooks, type Train } from './trainSim';
+import { periodIndex, TState, type PassengerHooks, type Train } from './trainSim';
 
 const MAX_LEGS = 5;
 // Agent trip state
@@ -49,6 +49,26 @@ const E_PLATFORM = 2;
 const E_ARRIVE = 3;
 const E_GIVEUP = 4;
 const E_RETURN = 5;
+
+/**
+ * Express service (v2) boarding tables, built per network only when it has express service (a
+ * cross-platform pair or an express route): without one, riders board exactly as before.
+ */
+interface ExpressBoarding {
+  /** Station complex of each compiled station: the lower index of a cross-platform pair, else itself. */
+  complex: Int32Array;
+  /** Per route and direction: station complex → stop index. */
+  cstop: Map<number, number>[][];
+  /**
+   * Per boarding platform: the other routes' boarding platforms at the same station complex (one
+   * of the two routes an express, both heading on to a shared complex), at the same station and
+   * across the island at the pair's other platform.
+   */
+  sibSame: (number[] | null)[];
+  sibAcross: (number[] | null)[];
+  /** Any cross-platform pair (riders on board may step across to a faster train). */
+  pairs: boolean;
+}
 
 export interface EngineCb {
   busy?(label: string | null): void;
@@ -431,6 +451,8 @@ export class Commuters implements PassengerHooks {
   private routeById = new Map<number, number>();
   private stationById = new Map<number, number>();
   private queues: number[][] = [];
+  /** Express service (v2): first-train-of-either boarding and cross-platform switching; null without it. */
+  private xp: ExpressBoarding | null = null;
   private qHead: Int32Array = new Int32Array(0);
   private qLive: Int32Array = new Int32Array(0);
   private fares: FarePolicy;
@@ -941,6 +963,7 @@ export class Commuters implements PassengerHooks {
     this.stationById = new Map(net.stations.map((s, i) => [s.id, i]));
     this.stopIndex = net.routes.map((r) => r.dirs.map((d) => new Map(Array.from(d.stopStation, (si, k) => [net.stations[si].id, k]))));
     this.graph = net.routes.length ? new TransitGraph(net) : null;
+    this.xp = this.graph && hasExpressService(net) ? buildExpressBoarding(net, this.graph) : null;
     const P = this.graph?.P ?? 0;
     this.queues = Array.from({ length: P }, () => []);
     this.qHead = new Int32Array(P);
@@ -1451,6 +1474,8 @@ export class Commuters implements PassengerHooks {
       }
     }
     train.load -= off.length;
+    // Express service: riders on board step across a cross-platform pair to a faster train.
+    if (this.xp?.pairs) this.crossPlatform(train, route, stopIdx, t);
     const board = this.board(train, route, stopIdx, t, false);
     return { alight: off.length * this.scale, board: board * this.scale };
   }
@@ -1518,6 +1543,9 @@ export class Commuters implements PassengerHooks {
       const hour = Math.floor((t % SECONDS_PER_DAY) / 3600);
       this.stationHourly[stationIdx * 24 + hour] += this.scale;
     }
+    // Express service: riders waiting for another route here board too when this train gets them
+    // there about as soon ("first train of either").
+    if (this.xp && train.load < capAgents) boarded += this.boardSiblings(train, route, stopIdx, t, !countLeft, capAgents, peak);
     // Compact the queue occasionally.
     if (head > 512 && head > q.length / 2) {
       this.queues[p] = q.slice(head);
@@ -1534,6 +1562,133 @@ export class Commuters implements PassengerHooks {
       }
     }
     return boarded;
+  }
+
+  /**
+   * Express service (v2), common lines: riders waiting on the platforms of other routes at this
+   * station complex (the same station, or across the island at a cross-platform pair, only while
+   * the train has just arrived) board this train when it calls at their stop's complex later and
+   * its scheduled ride there is no longer than their own route's plus the wait for it (half its
+   * headway): a local takes riders the express would have, for a short hop, and the express takes
+   * the local's riders bound for a stop both serve. Returns how many boarded.
+   */
+  private boardSiblings(train: Train, route: CRoute, stopIdx: number, t: number, atArrival: boolean, capAgents: number, peak: number): number {
+    const xp = this.xp!, graph = this.graph!, net = this.net!;
+    const p = graph.base[train.route][train.dir] + stopIdx;
+    const dir = route.dirs[train.dir];
+    const cst = xp.cstop[train.route][train.dir];
+    const here = dir.stopStation[stopIdx];
+    const period = periodIndex(t);
+    const ft = this.fareTable, day = this.day;
+    let boarded = 0;
+    for (const list of atArrival ? [xp.sibSame[p], xp.sibAcross[p]] : [xp.sibSame[p]]) {
+      if (!list) continue;
+      for (const q of list) {
+        if (train.load >= capAgents) return boarded;
+        if (this.qLive[q] <= 0) continue;
+        const rq = net.routes[graph.platRoute[q]];
+        const dq = rq.dirs[graph.platDir[q]];
+        const kq = graph.platStop[q];
+        const stopsQ = this.stopIndex[graph.platRoute[q]][graph.platDir[q]];
+        const hw = rq.headways[period];
+        const wait = hw > 0 ? Math.min(COMMUTERS.waitCap, hw / 2) : COMMUTERS.waitCap;
+        const queue = this.queues[q];
+        for (let i = this.qHead[q]; i < queue.length && train.load < capAgents; i++) {
+          const a = queue[i];
+          if (this.aState[a] !== S_WAIT || this.aPlat[a] !== q) continue;
+          const o = (a * MAX_LEGS + this.aLeg[a]) * 3;
+          const want = this.aLegs[o + 2];
+          const ka = stopsQ.get(want);
+          const si = this.stationById.get(want);
+          if (ka === undefined || ka <= kq || si === undefined) continue;
+          const k = cst.get(xp.complex[si]);
+          if (k === undefined || k <= stopIdx) continue;
+          if (dir.schedArrive[k] - dir.schedArrive[stopIdx] > dq.schedArrive[ka] - dq.schedArrive[kq] + wait) continue;
+          this.leaveQueue(a);
+          this.aState[a] = S_RIDE;
+          if (!this.aBoarded[a]) {
+            const cell = this.aBand[a] * 2 + peak;
+            const f = ft[cell];
+            day.fareRevenue += f;
+            day.fareCellTrips[cell]++;
+            day.fareCellRevenue[cell] += f;
+          }
+          this.aBoarded[a] = 1;
+          if (a >= this.A) day.eventBoard++;
+          // The leg now rides this route, to its call at that complex.
+          this.aLegs[o] = route.id;
+          this.aLegs[o + 2] = net.stations[dir.stopStation[k]].id;
+          (train.buckets[k] ??= []).push(a);
+          train.load++;
+          boarded++;
+          const ride = dir.schedArrive[k] - dir.schedArrive[stopIdx];
+          this.aCrowd[a] += (ride / 60) * COMMUTERS.crowdingWeight * Math.max(0, (train.load * this.scale) / route.capComfort - 1) * this.wx.crowd;
+          day.routeBoard.set(route.id, (day.routeBoard.get(route.id) ?? 0) + 1);
+          const hour = Math.floor((t % SECONDS_PER_DAY) / 3600);
+          this.stationHourly[here * 24 + hour] += this.scale;
+        }
+      }
+    }
+    return boarded;
+  }
+
+  /**
+   * Express service (v2), across the platform: a train has just called at one platform of a
+   * cross-platform pair while another route's train dwells at the other (long enough to step
+   * across). Riders on either who are bound for a station complex the other train reaches sooner
+   * by its timetable, by more than the step across and QUAD.switchGain, change trains: the local's
+   * riders to the express that caught it up, and back where a local is the quicker way.
+   */
+  private crossPlatform(train: Train, route: CRoute, stopIdx: number, t: number): void {
+    const net = this.net!;
+    const ps = net.stations[route.dirs[train.dir].stopStation[stopIdx]].pair;
+    if (ps === undefined || ps < 0) return;
+    for (const x of this.trains()) {
+      if (x === train || x.state !== TState.Dwelling || x.route === train.route || x.until - t < QUAD.crossPlatformTransfer) continue;
+      const rx = net.routes[x.route];
+      if (!rx || rx.dirs[x.dir].stopStation[x.stop] !== ps) continue;
+      this.switchTrains(train, route, stopIdx, x, rx, x.stop, t);
+      this.switchTrains(x, rx, x.stop, train, route, stopIdx, t);
+    }
+  }
+
+  /** Move riders from train f (at stop kf) to train g (at stop kg) across a pair, where g gets them there sooner. */
+  private switchTrains(f: Train, rf: CRoute, kf: number, g: Train, rg: CRoute, kg: number, t: number): void {
+    const xp = this.xp!, net = this.net!;
+    const df = rf.dirs[f.dir], dg = rg.dirs[g.dir];
+    const cst = xp.cstop[g.route][g.dir];
+    const cap = Math.floor(rg.capCrush / this.scale);
+    const gain = QUAD.crossPlatformTransfer + QUAD.switchGain;
+    const fromId = net.stations[df.stopStation[kf]].id, toId = net.stations[dg.stopStation[kg]].id;
+    const key = Math.min(fromId, toId);
+    const hour = Math.floor((t % SECONDS_PER_DAY) / 3600);
+    for (let k = kf + 1; k < df.stopStation.length && g.load < cap; k++) {
+      const b = f.buckets[k];
+      if (!b || !b.length) continue;
+      const kx = cst.get(xp.complex[df.stopStation[k]]);
+      if (kx === undefined || kx <= kg) continue;
+      const rideF = df.schedArrive[k] - df.schedArrive[kf];
+      const rideG = dg.schedArrive[kx] - dg.schedArrive[kg];
+      if (rideG + gain >= rideF) continue;
+      const n = Math.min(b.length, cap - g.load);
+      const moved = b.splice(0, n);
+      f.load -= n;
+      const dest = (g.buckets[kx] ??= []);
+      for (const a of moved) {
+        dest.push(a);
+        g.load++;
+        // Crowding: the rest of the ride is on g now.
+        const was = (rideF / 60) * COMMUTERS.crowdingWeight * Math.max(0, (f.load * this.scale) / rf.capComfort - 1) * this.wx.crowd;
+        const now = (rideG / 60) * COMMUTERS.crowdingWeight * Math.max(0, (g.load * this.scale) / rg.capComfort - 1) * this.wx.crowd;
+        this.aCrowd[a] = Math.max(0, this.aCrowd[a] - was) + now;
+        const o = (a * MAX_LEGS + this.aLeg[a]) * 3;
+        this.aLegs[o] = rg.id;
+        this.aLegs[o + 2] = net.stations[dg.stopStation[kx]].id;
+      }
+      this.day.crossTransfers.set(key, (this.day.crossTransfers.get(key) ?? 0) + n);
+      this.day.routeBoard.set(rg.id, (this.day.routeBoard.get(rg.id) ?? 0) + n);
+      this.stationHourly[dg.stopStation[kg] * 24 + hour] += n * this.scale;
+    }
   }
 
   evacuate(train: Train, t: number): void {
@@ -2221,3 +2376,56 @@ function newDayStats(day: number) {
 }
 
 export { S_HOME, S_WORK, S_DONE };
+
+/**
+ * Express service (v2): the boarding tables (see ExpressBoarding). Siblings of a boarding platform
+ * are the boarding platforms of other routes at its station or across the pair, where one of the
+ * two routes is an express and both call at some station complex further on.
+ */
+function buildExpressBoarding(net: CompiledNetwork, graph: TransitGraph): ExpressBoarding {
+  const S = net.stations.length;
+  const complex = new Int32Array(S);
+  let pairs = false;
+  net.stations.forEach((s, i) => {
+    const pr = s.pair !== undefined && s.pair >= 0 ? s.pair : -1;
+    if (pr >= 0) pairs = true;
+    complex[i] = pr >= 0 ? Math.min(i, pr) : i;
+  });
+  const cstop = net.routes.map((r) =>
+    r.dirs.map((d) => {
+      const m = new Map<number, number>();
+      d.stopStation.forEach((si, k) => {
+        if (!m.has(complex[si])) m.set(complex[si], k);
+      });
+      return m;
+    }),
+  );
+  const P = graph.P;
+  const sibSame: (number[] | null)[] = new Array(P).fill(null);
+  const sibAcross: (number[] | null)[] = new Array(P).fill(null);
+  const ahead = (ri: number, d: number, k: number): Set<number> => {
+    const st = net.routes[ri].dirs[d].stopStation;
+    const out = new Set<number>();
+    for (let j = k + 1; j < st.length; j++) out.add(complex[st[j]]);
+    return out;
+  };
+  for (let p = 0; p < P; p++) {
+    if (!graph.canBoard[p]) continue;
+    const st = graph.platStation[p];
+    const rp = graph.platRoute[p];
+    const mine = ahead(rp, graph.platDir[p], graph.platStop[p]);
+    const pr = net.stations[st].pair;
+    for (const [s2, out] of [[st, sibSame], [pr !== undefined && pr >= 0 ? pr : -1, sibAcross]] as const) {
+      if (s2 < 0) continue;
+      for (const q of graph.stationBoard[s2]) {
+        const rq = graph.platRoute[q];
+        if (rq === rp || !(net.routes[rp].express || net.routes[rq].express)) continue;
+        let shared = false;
+        for (const c of ahead(rq, graph.platDir[q], graph.platStop[q])) if (mine.has(c)) shared = true;
+        if (!shared) continue;
+        (out[p] ??= []).push(q);
+      }
+    }
+  }
+  return { complex, cstop, sibSame, sibAcross, pairs };
+}

@@ -4,7 +4,8 @@
  * life cycle, chaos Off being inert, a London venue event, and the browser's message order (a
  * network edit followed at once by a skip).
  */
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { CHAOS_BY_CITY, TRAINS } from '../src/balance';
 import { applyCity } from '../src/cities';
 import { CLEAR, eventsForDay } from '../src/core/cityCalendar';
@@ -18,6 +19,11 @@ import { buildTestNetwork, createHeadlessGame, drawLine, makeRoute, midtownArena
 import type { Alert, DayChaosInfo, DayReport, FromWorker, ModeState, ToWorker } from '../src/sim/protocol';
 import { TState, type Train } from '../src/sim/trainSim';
 import { loadLandFromDisk, loadWorldFromDisk } from '../scripts/nodeData';
+
+// Multi-day headless runs: a few seconds each on a quiet machine, but several times that when the
+// three headless files run in parallel on a busy 4-core one. Every test in this file gets the
+// headless budget rather than the unit tests' 20 s default.
+vi.setConfig({ testTimeout: 180_000 });
 
 const H = 3600;
 const D = 86400;

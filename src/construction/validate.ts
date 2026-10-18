@@ -3,7 +3,7 @@
  */
 import { QUAD, STATION, TRACK, TRAINS, type TrackClass, type TrackLevel } from '../balance';
 import { fmtDistance } from '../core/units';
-import { curveSpeed, minRadiusOver, otherEnd } from './geometry';
+import { curveSpeed, minRadiusOver, otherEnd, projectOnPolyline, sampleAt } from './geometry';
 import { platformLength, type Network } from './network';
 import type { TrackEdge } from './types';
 
@@ -46,11 +46,65 @@ export function classMult(cls: TrackClass): number {
 
 /**
  * Four-track sections (v2): the second pair shares excavation, structure and right of way, and
- * turnouts and crossovers sit inside the four-track box. Exactly 1 for ordinary track.
+ * turnouts and crossovers sit inside the four-track box. Exactly 1 for ordinary track. The
+ * shared-works discount holds only where the other pair is really there: an express edge pays
+ * full price for the share of its length with no local pair alongside (one bulldozed, say), and
+ * a connector is discounted only while its group still has both pairs.
  */
-export function quadCostFactor(e: TrackEdge): number {
+export function quadCostFactor(net: Network, e: TrackEdge): number {
   const r = e.quad?.role;
-  return r === 'express' ? QUAD.secondPairCostFactor : r === 'link' ? QUAD.linkCostFactor : 1;
+  if (r === 'express') return 1 - (1 - QUAD.secondPairCostFactor) * partnerCoverage(net, e.id);
+  if (r === 'link') {
+    const g = quadGroups(net).get(e.quad!.g);
+    return g && g.local.length && g.express.length ? QUAD.linkCostFactor : 1;
+  }
+  return 1;
+}
+
+/** Pair edges of each quad group, by role (cached per network version). */
+const groupCache = new WeakMap<Network, { version: number; groups: Map<number, { local: number[]; express: number[] }> }>();
+function quadGroups(net: Network): Map<number, { local: number[]; express: number[] }> {
+  const c = groupCache.get(net);
+  if (c && c.version === net.version) return c.groups;
+  const groups = new Map<number, { local: number[]; express: number[] }>();
+  for (const e of net.edges.values()) {
+    const t = e.quad;
+    if (!t || t.role === 'link') continue;
+    let g = groups.get(t.g);
+    if (!g) groups.set(t.g, (g = { local: [], express: [] }));
+    g[t.role].push(e.id);
+  }
+  groupCache.set(net, { version: net.version, groups });
+  return groups;
+}
+
+/**
+ * Share (0…1) of a pair edge's length that has the other pair of its group alongside: sampled
+ * about every 20 m, a point QUAD.spacing to the partner side lies within QUAD.partnerTolerance of
+ * an other-role edge. Exactly 1 on an intact four-track section.
+ */
+export function partnerCoverage(net: Network, edgeId: number): number {
+  const t = net.edges.get(edgeId)?.quad;
+  if (!t || t.role === 'link' || t.away === 0) return 0;
+  const others = quadGroups(net).get(t.g)?.[t.role === 'local' ? 'express' : 'local'] ?? [];
+  if (!others.length) return 0;
+  const g = net.geom(edgeId);
+  const n = Math.max(3, Math.ceil(g.length / 20));
+  const tol = QUAD.partnerTolerance;
+  let hit = 0;
+  for (let i = 0; i < n; i++) {
+    const p = sampleAt(g.xs, g.ys, g.cum, ((i + 0.5) / n) * g.length);
+    const x = p.x - t.away * QUAD.spacing * p.hy, y = p.y + t.away * QUAD.spacing * p.hx;
+    for (const id of others) {
+      const o = net.geom(id);
+      if (x < o.minX - tol || x > o.maxX + tol || y < o.minY - tol || y > o.maxY + tol) continue;
+      if (projectOnPolyline(o.xs, o.ys, o.cum, x, y).d <= tol) {
+        hit++;
+        break;
+      }
+    }
+  }
+  return hit / n;
 }
 
 export function edgeReport(net: Network, edgeId: number, terrain: Terrain): EdgeReport {
@@ -143,7 +197,7 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
     const what = badWaterLevel === 'elevated' || badWaterLevel === 'deep' ? 'This ramp' : `${cap(LEVEL_NAMES[badWaterLevel])} track`;
     errors.push(`${what} can't cross water — use elevated (bridge) or deep tunnel over the water`);
   }
-  cost *= classMult(e.cls) * quadCostFactor(e);
+  cost *= classMult(e.cls) * quadCostFactor(net, e);
   return {
     ok: errors.length === 0,
     errors,

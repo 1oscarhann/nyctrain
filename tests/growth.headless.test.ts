@@ -2,7 +2,8 @@
  * Living City on live sims (slow): Commuters.commuteBenefit on the New York test network and a
  * small London line, and one growth month from those benefits (docs/v2/living-city.md §3.2–3.5).
  */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
 import { createHash } from 'node:crypto';
 import { VALUE_CAPTURE } from '../src/balance';
 import { applyCity } from '../src/cities';
@@ -20,6 +21,11 @@ import { applySave, buildSave } from '../src/save/serialize';
 import { migrate } from '../src/save/migrate';
 import type { SaveFile } from '../src/save/format';
 import { loadLandFromDisk, loadWorldFromDisk } from '../scripts/nodeData';
+
+// Multi-day headless runs: a few seconds each on a quiet machine, but several times that when the
+// three headless files run in parallel on a busy 4-core one. Every test in this file gets the
+// headless budget rather than the unit tests' 20 s default.
+vi.setConfig({ testTimeout: 180_000 });
 
 afterAll(() => {
   applyCity('nyc');

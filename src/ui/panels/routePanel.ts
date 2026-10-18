@@ -16,7 +16,7 @@ import { suggestTimepoints } from '../../routes/control';
 import { carSaleValue, fleetPlan, purchaseFleet } from '../../routes/fleet';
 import type { RouteTool } from '../../routes/routeTool';
 import { allStopsPattern, expressPattern, serveStops, skipStops, stationsAlongRoute, type AlongStation } from '../../routes/express';
-import { lineRows, OVERTAKES_TIP, overtakesValue, pairWord, routeOnQuad, SERVICE_TIP, skipsText, type LineRow } from '../express';
+import { lineRows, OVERTAKES_TIP, overtakesValue, pairWord, routeOnQuad, sameStopList, SERVICE_TIP, serviceEditNoop, skipsText, type LineRow } from '../express';
 import { maxCarsFor } from '../../routes/routeSet';
 import { PERIOD_IDS, ROUTE_COLORS, type PeriodId, type Route, type RouteControl } from '../../routes/types';
 import type { RouteRegularityDetail } from '../../sim/protocol';
@@ -220,6 +220,12 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
       app.toast(`Can't change ${r.name}`, res.error, 'red');
       return;
     }
+    const sameStops = sameStopList(res.stops, r.stops);
+    if (serviceEditNoop(r, res.stops, express)) {
+      // Nothing changes (e.g. Express pattern on a route that already runs it): no edit, no restart.
+      app.toast(done ? `${done}: nothing to change` : 'Nothing to change', `${r.name} already runs this pattern`, 'amber');
+      return;
+    }
     const before = { stops: [...r.stops], express: !!r.express, control: structuredClone(r.control) };
     game.routes.update(r.id, { stops: res.stops, ...(express !== undefined ? { express } : {}) });
     const p2 = game.routes.path(game.network, r);
@@ -235,7 +241,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
       return;
     }
     if (res2.cost) app.toast('Trains bought', fmtMoney(res2.cost), 'amber');
-    else if (done) app.toast(done, `${r.name} · trains restart on the new pattern`, 'green');
+    else if (done) app.toast(done, sameStops ? r.name : `${r.name} · trains restart on the new pattern`, 'green');
     game.events.emit('routes', undefined);
     game.select({ kind: 'route', id: r.id });
   };

@@ -3,7 +3,8 @@
  * Manhattan up the West Side to Upper Manhattan, plus a line from Midtown that shares the West
  * Side trunk and runs under the East River into Brooklyn — run for 3 in-game days at full speed.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
 import { loadLandFromDisk, loadWorldFromDisk } from '../scripts/nodeData';
 import { buildExpressTestNetwork, buildLondonExpressTestNetwork, buildTestNetwork, createHeadlessGame, runDays, startEngine, stepUntil, type HeadlessRun } from '../src/sim/headless';
 import type { Game } from '../src/core/game';
@@ -15,6 +16,11 @@ import type { Alert, DayReport } from '../src/sim/protocol';
 import { fmtMoney } from '../src/core/units';
 import { fareAt, type FarePolicy } from '../src/economy/fares';
 import { defaultControl, legacyControl, suggestTimepoints } from '../src/routes/control';
+
+// Multi-day headless runs: a few seconds each on a quiet machine, but several times that when the
+// three headless files run in parallel on a busy 4-core one. Every test in this file gets the
+// headless budget rather than the unit tests' 20 s default.
+vi.setConfig({ testTimeout: 180_000 });
 
 describe('headless simulation', () => {
   it('runs 3 days on the test network with plausible, finite results', () => {

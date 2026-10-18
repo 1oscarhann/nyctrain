@@ -93,6 +93,7 @@ export class Network implements GraphView {
     for (const s of d.stations) this.stations.set(s.id, { ...s });
     this.nextId = d.nextId;
     this.dropDangling();
+    this.dropImplausible();
     this.touch();
   }
 
@@ -110,6 +111,38 @@ export class Network implements GraphView {
       if (s.pair === undefined) continue;
       const p = this.stations.get(s.pair);
       if (!p || p.pair !== s.id || p.id === s.id) delete s.pair;
+    }
+  }
+
+  /**
+   * After a load: four-track references must also make geometric sense (a corrupted or edited
+   * save). Twins are at most a mitre's offset apart (QUAD.spacing / cos(θ/2) for the sharpest turn
+   * a quad allows, under 60 m); a cross-platform pair is one platform on each pair of one group
+   * (opposite roles) and opposite each other, within the distance the station tool links pairs at.
+   */
+  private dropImplausible(): void {
+    for (const n of this.nodes.values()) {
+      if (n.twin === undefined) continue;
+      const t = this.nodes.get(n.twin);
+      if (t && Math.hypot(t.x - n.x, t.y - n.y) > TWIN_MAX) {
+        delete n.twin;
+        delete t.twin;
+      }
+    }
+    for (const s of this.stations.values()) {
+      if (s.pair === undefined) continue;
+      const p = this.stations.get(s.pair);
+      if (!p) continue;
+      const ta = this.edges.get(s.edge)?.quad, tb = this.edges.get(p.edge)?.quad;
+      let ok = !!ta && !!tb && ta.g === tb.g && ta.role !== 'link' && tb.role !== 'link' && ta.role !== tb.role;
+      if (ok) {
+        const a = this.stationPos(s), b = this.stationPos(p);
+        ok = Math.hypot(a.x - b.x, a.y - b.y) <= Math.hypot(QUAD.spacing, QUAD.pairLinkDistance) + QUAD.partnerTolerance;
+      }
+      if (!ok) {
+        delete s.pair;
+        delete p.pair;
+      }
     }
   }
 
@@ -440,6 +473,15 @@ export class Network implements GraphView {
     // Leads, and any vertex next to a junction, slide along the junction's axis so track always
     // leaves junctions straight.
     let axis: TrackNode | undefined = n.leadOf !== null ? this.nodes.get(n.leadOf) : undefined;
+    if (!axis && n.twin !== undefined) {
+      // Four tracks: next to a fan, the other pair's turnout end is a fixed anchor further along
+      // (not opposite the junction), so only a slide along that junction's axis keeps both pairs
+      // straight and parallel there; the other side, if a junction too, is opposite its partner
+      // junction (a scissors) and turns the same on both pairs. Between two fans it can't move.
+      const fans = this.fanAnchors(id);
+      if (fans.length > 1) return false;
+      axis = fans[0];
+    }
     if (!axis) {
       for (const eid of this.incident(id)) {
         const o = this.nodes.get(otherEnd(this.edges.get(eid)!, id))!;
@@ -467,6 +509,46 @@ export class Network implements GraphView {
     return true;
   }
 
+  /**
+   * Why a four-track vertex can't be dragged (null if it can): its twin is built or under
+   * construction, or it sits between two fan junctions (both pairs must leave each straight, and
+   * their chords there differ in length, so no position but the current one keeps them parallel).
+   */
+  quadDragBlock(id: number): 'built' | 'pinned' | null {
+    const n = this.nodes.get(id);
+    if (!n || n.twin === undefined || !this.nodes.has(n.twin)) return null;
+    if (!this.nodeEditable(n.twin)) return 'built';
+    return n.leadOf === null && this.fanAnchors(id).length > 1 ? 'pinned' : null;
+  }
+
+  /**
+   * Junction neighbours of a four-track vertex whose counterpart on the twin's side is a fixed
+   * anchor that is not opposite it: a fan's turnout junction, with the other pair's turnout end
+   * QUAD.turnoutLength further along. Sliding off such a junction's axis would turn the two pairs'
+   * chords by different angles (they have different lengths), kinking the other pair there.
+   */
+  private fanAnchors(id: number): TrackNode[] {
+    const n = this.nodes.get(id)!;
+    const t = n.twin !== undefined ? this.nodes.get(n.twin) : undefined;
+    if (!t) return [];
+    const tn = this.incident(t.id).map((eid) => this.nodes.get(otherEnd(this.edges.get(eid)!, t.id))!);
+    const out: TrackNode[] = [];
+    for (const eid of this.incident(id)) {
+      const A = this.nodes.get(otherEnd(this.edges.get(eid)!, id))!;
+      if (!A.anchor || this.degree(A.id) < 2) continue;
+      // The twin's neighbour on A's side: the one nearest where A's counterpart would be.
+      const ex = A.x + (t.x - n.x), ey = A.y + (t.y - n.y);
+      let B: TrackNode | undefined;
+      let bd = Infinity;
+      for (const m of tn) {
+        const d = Math.hypot(m.x - ex, m.y - ey);
+        if (d < bd) [B, bd] = [m, d];
+      }
+      if (B && B.anchor && this.degree(B.id) >= 2 && Math.hypot(B.x - A.x, B.y - A.y) > QUAD.spacing + QUAD.partnerTolerance) out.push(A);
+    }
+    return out;
+  }
+
   /** A twin vertex can be moved to follow its partner: blueprint, not a junction, ends or degree 2. */
   private twinCanFollow(id: number): boolean {
     const t = this.nodes.get(id);
@@ -484,6 +566,8 @@ export class Network implements GraphView {
    */
   syncTwins(ids: Iterable<number>): void {
     let moved = false;
+    /** Twins given a concentric fillet, with what made it (for the fit check below). */
+    const curved: { n: TrackNode; t: TrackNode; turn: number; d: number }[] = [];
     for (const id of ids) {
       const n = this.nodes.get(id);
       if (n?.twin === undefined || (n.anchor && this.degree(id) > 1)) continue;
@@ -504,8 +588,28 @@ export class Network implements GraphView {
       if (!m) continue;
       t.x = m.x;
       t.y = m.y;
-      t.r = q && !t.anchor ? concentric(n.r, turnSign(p, n, q), d) : t.r;
+      if (q && !t.anchor) {
+        const turn = turnSign(p, n, q);
+        t.r = concentric(n.r, turn, d);
+        if (t.r > 0) curved.push({ n, t, turn, d });
+      }
       moved = true;
+    }
+    // A twin's fillet must also fit its own chords. Next to a fan the other pair's chord ends at
+    // the turnout's far end, QUAD.turnoutLength short of the junction the drawn chord ends at, so a
+    // vertex dragged close to a fan could curve the other pair past that anchor: shrink both
+    // fillets (concentric still) until the twin's fits.
+    for (const { n, t, turn, d } of curved) {
+      const inc = this.incident(t.id);
+      if (inc.length !== 2) continue;
+      const [a, b] = inc.map((eid) => this.nodes.get(otherEnd(this.edges.get(eid)!, t.id))!);
+      const th = vertexDeflection(a, t, b);
+      if (th < TRACK.straightEpsilon) continue;
+      const tan = Math.tan(th / 2);
+      const avail = Math.min(Math.hypot(a.x - t.x, a.y - t.y) - fixedTangent(this, a), Math.hypot(b.x - t.x, b.y - t.y) - fixedTangent(this, b));
+      if (t.r * tan <= avail + 1e-6) continue;
+      n.r = Math.max(1, Math.max(0, avail) / tan - turn * d);
+      t.r = concentric(n.r, turn, d);
     }
     if (moved) this.touch();
   }
@@ -525,14 +629,16 @@ export class Network implements GraphView {
    * stroke's snapped ends are); every other vertex is a new node with its explicit fillet radius,
    * twin (linked both ways) and lead anchor (an index into `verts`). Edges run a→b along the list.
    * Returns the new edge ids in order. No fillets are recomputed: the radii are the caller's.
+   * Existing ends listed in `join` become ordinary vertices of the chain instead (a repaired
+   * four-track gap whose end was a curve vertex: the caller sets its fillet).
    */
-  addChain(verts: ChainVertex[], cls: TrackClass, status: Status = 'blueprint'): number[] {
+  addChain(verts: ChainVertex[], cls: TrackClass, status: Status = 'blueprint', join?: ReadonlySet<number>): number[] {
     if (verts.length < 2) return [];
     const ids: number[] = [];
     for (let i = 0; i < verts.length; i++) {
       const v = verts[i];
       if (v.existing !== undefined && this.nodes.has(v.existing)) {
-        if (this.degree(v.existing) >= 1) this.makeAnchor(v.existing);
+        if (this.degree(v.existing) >= 1 && !join?.has(v.existing)) this.makeAnchor(v.existing);
         ids.push(v.existing);
         continue;
       }
@@ -722,6 +828,8 @@ function leadLength(A: TrackNode, sign: number, tx: number, ty: number, prefRadi
 }
 
 const QUAD_ROLES = new Set(['local', 'express', 'link']);
+/** Farthest apart two twin vertices can be: the mitre offset at the sharpest turn a quad allows (≈ 57 m). */
+const TWIN_MAX = 60;
 
 /** A well-formed copy of a quad tag from saved data, or null if it is not one. */
 function sanitizeQuadTag(q: unknown): QuadTag | null {
@@ -730,5 +838,7 @@ function sanitizeQuadTag(q: unknown): QuadTag | null {
   if (typeof t.g !== 'number' || !Number.isFinite(t.g)) return null;
   if (typeof t.role !== 'string' || !QUAD_ROLES.has(t.role)) return null;
   if (t.away !== -1 && t.away !== 0 && t.away !== 1) return null;
+  // A pair edge has a side (its partner lies at −away); one without is not a pair of anything.
+  if (t.role !== 'link' && t.away === 0) return null;
   return { g: t.g, role: t.role, away: t.role === 'link' ? 0 : t.away };
 }

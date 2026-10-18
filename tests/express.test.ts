@@ -785,3 +785,115 @@ describe('save v6', () => {
 
 // Keep STATION referenced for platform-length reasoning in failure messages.
 void STATION;
+
+// ------------------------------------------------------------------------------------------
+// Riders on an express trunk (review fixes): the first train of either at a station both routes
+// serve, and the change across the platform to an express dwelling there. A synthetic city of
+// two or three tracts along a quad, no real data.
+import { toLonLat } from '../src/core/geo';
+import { buildWorld } from '../src/data/world';
+import { encodeOD } from '../src/data/odFormat';
+import { runDays } from '../src/sim/headless';
+import { Commuters } from '../src/sim/commuters';
+
+function dIdOf(game: Game, name: string): number {
+  return [...game.network.stations.values()].find((s) => s.name === name)!.id;
+}
+
+/**
+ * Approach (−2000,0)–(0,0) with S0 at −1500; a quad fanning from (0,0) to a free end at (9000,0);
+ * pairs A 2000, C 5500, E 8200; local-only B 3000, B2 4200, D 6400, D2 7300. The local calls
+ * everywhere (every 4 min at the peak), the express at S0, A, C and E (every 6 min).
+ */
+function trunkCity(od: { h: number; w: number; n: number }[], tracts: [number, number][]) {
+  const tr = tracts.map(([x, y], i) => {
+    const [lon, lat] = toLonLat(x, y);
+    return { id: `T${i}`, borough: 'Queens', lat, lon, radius: 300, residents: 2000, jobs: 2000 };
+  });
+  const enc = encodeOD(tracts.length, od.map((r) => ({ h: r.h, w: r.w, se: [r.n, r.n, r.n] as [number, number, number] })));
+  const world = buildWorld({ version: 1, synthetic: true, year: 2023, source: 'test', bands: ['low', 'mid', 'high'], tracts: tr }, enc.buffer.slice(enc.byteOffset, enc.byteOffset + enc.byteLength) as ArrayBuffer);
+  const game = new Game(world, dry, { sandbox: true, fare: 3 });
+  const net = game.network;
+  net.addStroke([P(-2000, 0), P(0, 0)], 'heavy', none, none);
+  const q = addQuadStroke(net, [P(0, 0), P(9000, 0)], 'heavy', { kind: 'node', node: nodeAt(net, 0, 0) }, none, { side: 1 });
+  if (!q.ok) throw new Error(q.fatal);
+  const S0 = platformAt(net, -1500, 0, null, 'S0');
+  const A = pairAt(net, 2000, 'A'), C = pairAt(net, 5500, 'C'), E = pairAt(net, 8200, 'E');
+  const B = platformAt(net, 3000, 0, 'local', 'B'), B2 = platformAt(net, 4200, 0, 'local', 'B2');
+  const D = platformAt(net, 6400, 0, 'local', 'D'), D2 = platformAt(net, 7300, 0, 'local', 'D2');
+  game.build(true);
+  const local = route(game, 'Local', [S0, A[0], B, B2, C[0], D, D2, E[0]], false, { am: 4, pm: 4 });
+  const express = route(game, 'Express', [S0, A[1], C[1], E[1]], true, { am: 6, pm: 6 });
+  return { game, local, express, st: { S0, A, B, C, E } };
+}
+
+describe('riders on an express trunk', () => {
+  it('a rider waiting for the express takes a local that gets there about as soon (the first train of either)', () => {
+    // Everyone travels S0 → E; the timetable plans them all on the express.
+    const x = trunkCity([{ h: 0, w: 1, n: 300 }], [[-1500, 400], [8200, 400]]);
+    const run = runDays(x.game, 2, { agentScale: 1 });
+    const c = run.engine.commuters!;
+    for (let g = 0; g < c.G; g++) {
+      const p = c.pathAM[g];
+      if (!p) continue;
+      expect(p.legs.length).toBe(3);
+      expect(p.legs[0]).toBe(x.express.id);
+    }
+    const r = run.reports[1];
+    // The local is 3 skipped stops (≈ 150 s) slower, under half the express's 6-minute headway:
+    // riders board whichever comes first, so the local carries some of them.
+    expect(r.routeRiders[x.local.id]).toBeGreaterThan(0);
+    expect(r.routeRiders[x.express.id]).toBeGreaterThan(r.routeRiders[x.local.id] * 0.3);
+    expect(r.deadlocks).toBe(0);
+  });
+
+  it('a rider on the local steps across to the express dwelling at a cross-platform station', () => {
+    // The local calls at C while the express dwells across the platform: riders bound for E (the
+    // express skips D and D2, ≈ 100 s quicker) change trains; riders for D stay on.
+    const x = trunkCity([{ h: 0, w: 1, n: 50 }], [[3000, 400], [8200, 400]]);
+    const net = compileNetwork(x.game).net;
+    const c = new Commuters(x.game.world, { agentScale: 1, seed: 1885, fares: x.game.fares });
+    c.setNetwork(net, 6 * 3600);
+    const ri = net.routes.findIndex((r) => r.id === x.local.id), rx = net.routes.findIndex((r) => r.id === x.express.id);
+    const L = net.routes[ri], X = net.routes[rx];
+    const si = (id: number) => net.stations.findIndex((s) => s.id === id);
+    const kL = (id: number) => Array.from(L.dirs[0].stopStation).indexOf(si(id));
+    const kX = (id: number) => Array.from(X.dirs[0].stopStation).indexOf(si(id));
+    const train = (route: number, r: CRoute, stop: number, id: number): Train => ({
+      id, route, routeId: r.id, dir: 0, s: r.dirs[0].stopS[stop], v: 0, state: TState.Dwelling, stop, until: 0, schedStart: 0, late: 0,
+      buckets: r.dirs[0].stopS.length ? Array.from(r.dirs[0].stopS, () => [] as number[]) : [], load: 0, elem: 0, lim: 0, locks: [], stoppedSince: 0, lastS: 0, holdUntil: 0, holdNext: 0, incident: 0, out: 0,
+    });
+    const t = 7 * 3600;
+    const local = train(ri, L, kL(x.st.C[0]), 1);
+    const express = train(rx, X, kX(x.st.C[1]), 2);
+    express.until = t + 25;
+    // Five riders for E and three for D on the local.
+    local.buckets[kL(x.st.E[0])] = [0, 1, 2, 3, 4];
+    local.buckets[kL(dIdOf(x.game, 'D'))] = [5, 6, 7];
+    local.load = 8;
+    c.setTrains(() => [local, express]);
+    c.arrive(local, L, local.stop, t);
+    expect(express.buckets[kX(x.st.E[1])]).toEqual([0, 1, 2, 3, 4]);
+    expect(local.buckets[kL(x.st.E[0])]).toEqual([]);
+    expect(local.buckets[kL(dIdOf(x.game, 'D'))]).toEqual([5, 6, 7]);
+    expect([local.load, express.load]).toEqual([3, 5]);
+    expect(c.crossTransfersToday()).toEqual({ [Math.min(x.st.C[0], x.st.C[1])]: 5 });
+    // An express about to leave (under the step across) takes nobody; a local is never the quicker way to E.
+    const c2 = new Commuters(x.game.world, { agentScale: 1, seed: 1885, fares: x.game.fares });
+    c2.setNetwork(net, 6 * 3600);
+    const l2 = train(ri, L, kL(x.st.C[0]), 1), x2 = train(rx, X, kX(x.st.C[1]), 2);
+    x2.until = t + QUAD.crossPlatformTransfer - 1;
+    l2.buckets[kL(x.st.E[0])] = [0, 1];
+    l2.load = 2;
+    c2.setTrains(() => [l2, x2]);
+    c2.arrive(l2, L, l2.stop, t);
+    expect(x2.load).toBe(0);
+    x2.until = t + 60;
+    x2.buckets[kX(x.st.E[1])] = [3];
+    x2.load = 1;
+    c2.arrive(l2, L, l2.stop, t);
+    expect(x2.buckets[kX(x.st.E[1])]).toEqual([3, 0, 1]);
+    expect(l2.load).toBe(0);
+  });
+});
+});

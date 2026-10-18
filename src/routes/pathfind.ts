@@ -7,6 +7,7 @@
  */
 import type { Network } from '../construction/network';
 import { otherEnd } from '../construction/geometry';
+import type { Station } from '../construction/types';
 import type { PathLeg, RoutePath } from './types';
 import { QUAD, type TrackClass } from '../balance';
 
@@ -25,6 +26,12 @@ export interface StopPos {
 export interface PathCostOptions {
   passPenalty?: number;
   linkPenalty?: number;
+  /**
+   * Which unserved platforms a route pays to pass (default: all). RouteSet's search on built track
+   * counts only built platforms: a planned or half-built stop no train can call at must not move a
+   * running route onto the other pair.
+   */
+  platform?: (s: Station) => boolean;
 }
 
 /**
@@ -55,7 +62,7 @@ function costModel(net: Network, stops: readonly number[], o: PathCostOptions): 
   const plat = new Map<number, number[]>();
   if (pass > 0) {
     for (const s of net.stations.values()) {
-      if (served.has(s.id)) continue;
+      if (served.has(s.id) || (o.platform && !o.platform(s))) continue;
       const role = net.edges.get(s.edge)?.quad?.role;
       if (role !== 'local' && role !== 'express') continue;
       const l = plat.get(s.edge);

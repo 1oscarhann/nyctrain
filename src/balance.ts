@@ -179,6 +179,12 @@ export const QUAD = {
   crossPlatformTransfer: 15,
   /** Share of the transfer penalty felt across a platform. */
   crossPlatformPenaltyFactor: 0.4,
+  /**
+   * A rider on board steps across a cross-platform station to another route's train dwelling
+   * there when it reaches their stop this many seconds sooner, beyond the step across (the train
+   * is already in: no wait). About one skipped stop's worth.
+   */
+  switchGain: 45,
   /** Route pathfinding: metres added for running through a platform the route does not serve. */
   passPenalty: 600,
   /** Route pathfinding: metres added for each turnout or crossover used. */

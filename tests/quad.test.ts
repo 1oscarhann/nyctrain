@@ -17,17 +17,21 @@ import {
   addScissors,
   concentric,
   findStraight,
+  gapTag,
+  isGapEnd,
   locateTagged,
   mitre,
   partnerPoint,
   quadEndPartner,
+  rejoinPair,
+  repairPair,
   scissorsCandidate,
   turnSign,
   type QuadResult,
 } from '../src/construction/quad';
 import { quadLabel } from '../src/construction/describe';
 import type { NetworkData, StrokePoint } from '../src/construction/types';
-import { edgeReport, stationCost, stationReport, type Terrain } from '../src/construction/validate';
+import { edgeReport, partnerCoverage, stationCost, stationReport, type Terrain } from '../src/construction/validate';
 import type { World } from '../src/data/world';
 import { compileNetwork } from '../src/routes/compile';
 import { findRoutePath } from '../src/routes/pathfind';
@@ -430,6 +434,217 @@ describe('quad strokes', () => {
     expect(back.edges.get(e0.id)!.quad).toBeUndefined();
     expect(back.edges.get(e1.id)!.quad).toBeDefined();
     expect(back.stations.get(5000)!.pair).toBeUndefined();
+  });
+});
+
+// ------------------------------------------------------------------------------------------
+// Review fixes: the shared-works price needs the other pair, drags beside a fan, load sanitising
+// of tags, twins and pairs, and putting a bulldozed stretch of one pair back.
+describe('four-track repairs and guards', () => {
+  it('the express pair pays ×0.75 only where the local pair runs alongside; connectors only while both pairs exist', () => {
+    const net = new Network();
+    const r = addQuadStroke(net, [P(0, 0), P(6000, 0)], 'heavy', none, none, { side: 1 });
+    expect(r.ok).toBe(true);
+    const plainCost = (id: number) => {
+      const c = net.clone();
+      for (const e of c.edges.values()) delete e.quad;
+      return edgeReport(c, id, dry).cost;
+    };
+    const ratio = (id: number) => edgeReport(net, id, dry).cost / plainCost(id);
+    for (const id of r.express) {
+      expect(partnerCoverage(net, id)).toBe(1);
+      expect(ratio(id)).toBeCloseTo(QUAD.secondPairCostFactor, 9);
+    }
+    // Bulldoze the long local edge in the middle (blueprints go for free): the express edge beside
+    // it is plain double track now and is priced like it.
+    const mid = r.local.reduce((a, b) => (net.geom(a).length >= net.geom(b).length ? a : b));
+    const across = r.express.reduce((a, b) => (net.geom(a).length >= net.geom(b).length ? a : b));
+    net.removeEdge(mid);
+    expect(partnerCoverage(net, across)).toBe(0);
+    expect(ratio(across)).toBeCloseTo(1, 9);
+    // The rest of the local pair still runs beside the short express edges near the ends.
+    const short = r.express.find((id) => id !== across && net.edges.has(id) && partnerCoverage(net, id) === 1);
+    expect(short).toBeDefined();
+    expect(ratio(short!)).toBeCloseTo(QUAD.secondPairCostFactor, 9);
+    // Every local edge gone: connectors pay full price too.
+    for (const id of r.local) net.removeEdge(id);
+    const link = r.links.find((id) => net.edges.has(id));
+    if (link !== undefined) expect(ratio(link)).toBeCloseTo(1, 9);
+    for (const id of r.express) if (net.edges.has(id)) expect(ratio(id)).toBeCloseTo(1, 9);
+  });
+
+  it('half the local pair gone: the express edge pays for the share with no partner (prorated)', () => {
+    const net = new Network();
+    net.addStroke([P(-1000, 0), P(0, 0)], 'heavy', none, none);
+    net.addStroke([P(5000, 0), P(6000, 0)], 'heavy', none, none);
+    const r = addQuadStroke(net, [P(0, 0), P(5000, 0)], 'heavy', { kind: 'node', node: nodeAt(net, 0, 0) }, { kind: 'node', node: nodeAt(net, 5000, 0) }, { side: 1 });
+    expect(r.ok).toBe(true);
+    const x = r.express.reduce((a, b) => (net.geom(a).length >= net.geom(b).length ? a : b));
+    const before = edgeReport(net, x, dry).cost;
+    // Split the local pair at its middle and drop one half.
+    const hit = locateTagged(net, r.group, 'local', { x: 2500, y: 0 })!;
+    net.splitEdge(hit.edge, hit.u);
+    const half = locateTagged(net, r.group, 'local', { x: 2000, y: 0 })!;
+    net.removeEdge(half.edge);
+    const share = partnerCoverage(net, x);
+    expect(share).toBeGreaterThan(0.2);
+    expect(share).toBeLessThan(0.8);
+    expect(edgeReport(net, x, dry).cost / before).toBeCloseTo((1 - (1 - QUAD.secondPairCostFactor) * share) / QUAD.secondPairCostFactor, 9);
+  });
+
+  it('dragging a vertex next to a fan turnout keeps the express pair straight and parallel there', () => {
+    const net = new Network();
+    net.addStroke([P(-1000, 0), P(0, 0)], 'heavy', none, none);
+    const r = addQuadStroke(net, [P(0, 0), P(900, 0), P(1900, 500)], 'heavy', { kind: 'node', node: nodeAt(net, 0, 0) }, none, { side: 1 });
+    expect(r.ok).toBe(true);
+    expect(allOk(net, [...net.edges.keys()])).toEqual([]);
+    const corner = nodeAt(net, 900, 0);
+    // Between the fan's junction and the free end's scissors: it slides along the fan junction's
+    // axis (both pairs leave the fan straight), and its twin follows.
+    expect(net.quadDragBlock(corner)).toBeNull();
+    expect(net.moveNode(corner, 930, 80)).toBe(true);
+    expect(net.nodes.get(corner)!.y).toBeCloseTo(0, 6);
+    expect(allOk(net, [...net.edges.keys()])).toEqual([]);
+    // Parallel along the whole express pair (its first edge from the turnout's end included).
+    for (const s of samples(net, r.express, 200)) {
+      const o = { x: s.x - W * s.hy, y: s.y + W * s.hx };
+      expect(distToEdges(net, r.local, o.x, o.y)).toBeLessThan(0.5);
+    }
+    for (const id of r.express) expect(partnerCoverage(net, id)).toBe(1);
+  });
+
+  it('a vertex pinned between two fans cannot move (with a reason); other drags beside a fan stay valid', () => {
+    const net = new Network();
+    net.addStroke([P(-1000, 0), P(0, 0)], 'heavy', none, none);
+    net.addStroke([P(1900, 500), P(2900, 1000)], 'heavy', none, none);
+    const r = addQuadStroke(net, [P(0, 0), P(900, 0), P(1900, 500)], 'heavy', { kind: 'node', node: nodeAt(net, 0, 0) }, { kind: 'node', node: nodeAt(net, 1900, 500) }, { side: 1 });
+    expect(r.ok).toBe(true);
+    const corner = nodeAt(net, 900, 0);
+    expect(net.quadDragBlock(corner)).toBe('pinned');
+    const before = net.toData();
+    expect(net.moveNode(corner, 930, 80)).toBe(false);
+    expect(net.toData()).toEqual(before);
+    // Its twin on the express pair is pinned the same way.
+    expect(net.quadDragBlock(net.nodes.get(corner)!.twin!)).toBe('pinned');
+  });
+
+  it('a fillet dragged close to a fan shrinks to fit the other pair, so the pairs stay parallel', () => {
+    const net = new Network();
+    net.addStroke([P(-1000, 0), P(0, 0)], 'heavy', none, none);
+    const r = addQuadStroke(net, [P(0, 0), P(900, 0), P(1900, 500), P(3500, 500)], 'heavy', { kind: 'node', node: nodeAt(net, 0, 0) }, none, { side: 1 });
+    expect(r.ok).toBe(true);
+    const corner = nodeAt(net, 900, 0);
+    // About 190 m past the turnout's far end: the drawn fillet would overrun the express chord.
+    expect(net.moveNode(corner, 400, 0)).toBe(true);
+    expect(allOk(net, [...net.edges.keys()])).toEqual([]);
+    for (const s of samples(net, r.express, 200)) {
+      const o = { x: s.x - W * s.hy, y: s.y + W * s.hx };
+      expect(distToEdges(net, r.local, o.x, o.y)).toBeLessThan(0.5);
+    }
+  });
+
+  it('load drops pair tags without a side, and twins and cross-platform pairs that make no geometric sense', () => {
+    const net = new Network();
+    addQuadStroke(net, [P(0, 0), P(2000, 0)], 'heavy', none, none, { side: 1 });
+    net.addStroke([P(0, 3000), P(7000, 3000)], 'heavy', none, none);
+    const d = net.toData();
+    const plainEdge = d.edges.find((e) => !e.quad)!;
+    // A pair tag with away 0 on plain track, and two platforms 7 km apart linked as a pair.
+    plainEdge.quad = { g: 999, role: 'express', away: 0 };
+    d.stations.push(
+      { id: 6000, edge: plainEdge.id, u: 500, cars: 8, name: 'W', nameAuto: false, status: 'built', buildStart: 0, buildEnd: 0, cost: 0, pair: 6001 },
+      { id: 6001, edge: plainEdge.id, u: 6500, cars: 8, name: 'E', nameAuto: false, status: 'built', buildStart: 0, buildEnd: 0, cost: 0, pair: 6000 },
+    );
+    // Two real platforms opposite each other stay a pair.
+    const loc = d.edges.find((e) => e.quad?.role === 'local' && e.b !== undefined)!;
+    const tmp = Network.fromData(d);
+    const at = tmp.geom(loc.id).length / 2;
+    const pp = partnerPoint(tmp, loc.id, at)!;
+    d.stations.push(
+      { id: 6002, edge: loc.id, u: at, cars: 8, name: 'L', nameAuto: false, status: 'built', buildStart: 0, buildEnd: 0, cost: 0, pair: 6003 },
+      { id: 6003, edge: pp.edge, u: pp.u, cars: 8, name: 'L', nameAuto: false, status: 'built', buildStart: 0, buildEnd: 0, cost: 0, pair: 6002 },
+    );
+    // A twin link between nodes kilometres apart.
+    const tw = d.nodes.filter((n) => n.twin !== undefined);
+    const far = d.nodes.find((n) => n.twin === undefined && Math.hypot(n.x - tw[0].x, n.y - tw[0].y) > 1000)!;
+    const oldPartner = tw[0].twin!;
+    tw[0].twin = far.id;
+    far.twin = tw[0].id;
+    d.nodes.find((n) => n.id === oldPartner)!.twin = undefined;
+    const back = Network.fromData(d);
+    expect(back.edges.get(plainEdge.id)!.quad).toBeUndefined();
+    expect(back.stations.get(6000)!.pair).toBeUndefined();
+    expect(back.stations.get(6001)!.pair).toBeUndefined();
+    expect(back.stations.get(6002)!.pair).toBe(6003);
+    expect(back.stations.get(6003)!.pair).toBe(6002);
+    expect(back.nodes.get(tw[0].id)!.twin).toBeUndefined();
+    expect(back.nodes.get(far.id)!.twin).toBeUndefined();
+  });
+
+  it('four tracks from one end of a bulldozed gap to the other rebuild that stretch exactly', () => {
+    for (const role of ['express', 'local'] as const) {
+      const game = stubGame();
+      const net = game.network;
+      const r = addQuadStroke(net, [P(0, 0), P(1500, 0), P(2400, 900), P(3500, 900)], 'heavy', none, none, { side: 1 });
+      expect(r.ok).toBe(true);
+      game.build(true);
+      // The edge through the 45° bend's far side: both ends are curve vertices with fillets.
+      const list = role === 'express' ? r.express : r.local;
+      const victim = list.find((id) => {
+        const e = net.edges.get(id)!;
+        return net.nodes.get(e.a)!.twin !== undefined && net.nodes.get(e.b)!.twin !== undefined && net.nodes.get(e.a)!.r > 0;
+      })!;
+      const e = net.edges.get(victim)!;
+      const len = net.geom(victim).length;
+      const radii = [net.nodes.get(e.a)!.r, net.nodes.get(e.b)!.r];
+      const [a, b] = [e.a, e.b];
+      expect(game.bulldozeEdge(victim).ok).toBe(true);
+      expect(isGapEnd(net, a) && isGapEnd(net, b)).toBe(true);
+      expect(gapTag(net, a)).toEqual({ g: r.group, role });
+      const res = game.editBlueprint(() => addQuadStroke(net, [P(net.nodes.get(a)!.x, net.nodes.get(a)!.y), P(net.nodes.get(b)!.x, net.nodes.get(b)!.y)], 'heavy', { kind: 'node', node: a }, { kind: 'node', node: b }, { side: 1 }));
+      expect(res.ok).toBe(true);
+      expect(res.edges.length).toBe(1);
+      const n = res.edges[0];
+      expect(net.edges.get(n)!.quad).toEqual({ g: r.group, role, away: role === 'express' ? 1 : -1 });
+      expect(net.geom(n).length).toBeCloseTo(len, 6);
+      expect([net.nodes.get(a)!.r, net.nodes.get(b)!.r]).toEqual(radii);
+      expect(partnerCoverage(net, n)).toBe(1);
+      expect(allOk(net, [...net.edges.keys()])).toEqual([]);
+      // Now there is no gap: another repair is refused.
+      expect(repairPair(net, a, b, 'heavy').ok).toBe(false);
+    }
+  });
+
+  it('two tracks drawn along a gap take the pair\'s tag where they run beside the other pair', () => {
+    const game = stubGame();
+    const net = game.network;
+    const r = addQuadStroke(net, [P(0, 0), P(6000, 0)], 'heavy', none, none, { side: 1 });
+    game.build(true);
+    const victim = r.express.reduce((x, y) => (net.geom(x).length >= net.geom(y).length ? x : y));
+    const e = net.edges.get(victim)!;
+    const [a, b] = [e.a, e.b];
+    expect(game.bulldozeEdge(victim).ok).toBe(true);
+    const tag = gapTag(net, a)!;
+    expect(tag).toEqual(gapTag(net, b));
+    const ids = net.addStroke([P(net.nodes.get(a)!.x, net.nodes.get(a)!.y), P(net.nodes.get(b)!.x, net.nodes.get(b)!.y)], 'heavy', { kind: 'node', node: a }, { kind: 'node', node: b });
+    expect(rejoinPair(net, tag, ids)).toBe(ids.length);
+    for (const id of ids) {
+      expect(net.edges.get(id)!.quad).toEqual({ g: r.group, role: 'express', away: 1 });
+      expect(partnerCoverage(net, id)).toBe(1);
+    }
+    // A stroke that wanders off the other pair stays ordinary track.
+    const game2 = stubGame();
+    const net2 = game2.network;
+    const r2 = addQuadStroke(net2, [P(0, 0), P(6000, 0)], 'heavy', none, none, { side: 1 });
+    game2.build(true);
+    const v2 = r2.express.reduce((x, y) => (net2.geom(x).length >= net2.geom(y).length ? x : y));
+    const e2 = net2.edges.get(v2)!;
+    const [a2, b2] = [net2.nodes.get(e2.a)!, net2.nodes.get(e2.b)!];
+    expect(game2.bulldozeEdge(v2).ok).toBe(true);
+    const tag2 = gapTag(net2, a2.id)!;
+    const ids2 = net2.addStroke([P(a2.x, a2.y), P((a2.x + b2.x) / 2, -600), P(b2.x, b2.y)], 'heavy', { kind: 'node', node: a2.id }, { kind: 'node', node: b2.id });
+    rejoinPair(net2, tag2, ids2);
+    expect(ids2.some((id) => !net2.edges.get(id)!.quad)).toBe(true);
   });
 });
 

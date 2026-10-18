@@ -17,7 +17,7 @@ import { hexRgb } from '../map/networkLayers';
 import type { AppContext } from '../ui/context';
 import type { Pointer, Tool } from '../ui/toolTypes';
 import { findRoutePath } from './pathfind';
-import { choosePlatform, insertStop, partnerOf, quadRole, stationsAlongPath, type AlongStation } from './express';
+import { choosePlatform, insertStop, partnerOf, pathErrorHint, quadRole, stationsAlongPath, switchPlatform, type AlongStation } from './express';
 import { defaultHeadways } from './routeSet';
 import type { PeriodId, Route, RoutePath } from './types';
 import { purchaseFleet, fleetPlan } from './fleet';
@@ -131,7 +131,7 @@ export class RouteTool implements Tool {
     const out: string[] = [];
     if (!d) return out;
     if (d.stops.length < 2) out.push('Click at least two stations');
-    if (this.path && !this.path.ok) out.push(this.path.error ?? 'No path');
+    if (this.path && !this.path.ok) out.push(pathErrorHint(this.ctx.game.network, d.stops, this.path.error ?? 'No path'));
     const net = this.ctx.game.network;
     for (const sid of d.stops) {
       const s = net.stations.get(sid);
@@ -229,12 +229,18 @@ export class RouteTool implements Tool {
       const partner = partnerOf(net, sid);
       const role = quadRole(net, sid);
       const plat = partner !== null && (role === 'local' || role === 'express') ? ` (${role} platform)` : '';
-      const altHint = partner !== null ? ` · <span class="hw-muted">Alt-click: ${role === 'express' ? 'local' : 'express'} platform</span>` : '';
+      // What an Alt-click would pick, worded from the platform a plain click picks (so it reads the
+      // same while Alt is held); not repeated while Alt is down.
+      const altRole = raw === null ? null : quadRole(net, choosePlatform(net, raw, !!d?.express, true));
+      const altHint = partner !== null && !p.alt && altRole ? ` · <span class="hw-muted">Alt-click: ${altRole} platform</span>` : '';
       let msg: string;
       const at = this.stopIndexOf(sid);
+      // A served pair: Alt-click moves the stop to the pair's other platform (each time).
+      const other = at >= 0 && d ? partnerOf(net, d.stops[at]) : null;
+      const otherRole = other !== null ? quadRole(net, other) : null;
       if (d?.cls && d.cls !== cls) msg = `<div class="reason hw-red">${s.name} is on ${cls} metro track</div>`;
-      else if (at >= 0 && d && d.stops[at] !== sid && p.alt) msg = `<div class="hw-green">Click to use the ${role ?? 'other'} platform at ${s.name}</div>`;
-      else if (at >= 0) msg = `<div class="hw-amber">Click to remove ${s.name}</div>`;
+      else if (at >= 0 && p.alt && other !== null) msg = `<div class="hw-green">Click to use the ${otherRole ?? 'other'} platform at ${s.name}</div>`;
+      else if (at >= 0) msg = `<div class="hw-amber">Click to remove ${s.name}</div>${other !== null ? `<div class="hw-muted">Alt-click: use the ${otherRole ?? 'other'} platform</div>` : ''}`;
       else if (!p.shift && this.runsPast(sid)) msg = `<div class="hw-green">Click to stop at ${s.name}${plat} (inserted in order)</div>${altHint ? `<div>${altHint.slice(3)}</div>` : ''}`;
       else msg = `<div class="hw-green">Click to add ${s.name}${plat}${altHint}${d?.stops.length ? ` · <span class="hw-muted">Shift-click adds at the start</span>` : ''}</div>`;
       this.ctx.tip(msg, p.px);
@@ -262,7 +268,8 @@ export class RouteTool implements Tool {
     }
     const i = this.stopIndexOf(sid);
     const past = i < 0 && !p.shift && this.path?.ok ? this.runsPast(sid) : null;
-    if (i >= 0 && d.stops[i] !== sid && p.alt) d.stops[i] = sid; // Alt-click on a served pair: switch platform
+    const switched = i >= 0 && p.alt ? switchPlatform(net, d.stops, sid) : null;
+    if (switched) d.stops = switched; // Alt-click on a served pair: the other platform (and back)
     else if (i >= 0) d.stops.splice(i, 1);
     else if (past && this.path) {
       // The path already runs past it: stop there in path order.

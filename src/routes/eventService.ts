@@ -35,12 +35,23 @@ export function routesNearVenue(net: CompiledNetwork, x: number, y: number, r: n
   return out.sort((a, b) => a.dist - b.dist || a.routeId - b.routeId);
 }
 
-/** Stations within r metres of (x, y), nearest first. */
+/**
+ * Stations within r metres of (x, y), nearest first. A cross-platform pair (v2) is one station: its
+ * nearer platform.
+ */
 export function stationsNear(net: CompiledNetwork, x: number, y: number, r: number): { id: number; name: string; dist: number }[] {
-  return net.stations
-    .map((s) => ({ id: s.id, name: s.name, dist: Math.hypot(s.x - x, s.y - y) }))
+  const all = net.stations
+    .map((s, i) => ({ id: s.id, name: s.name, dist: Math.hypot(s.x - x, s.y - y), key: s.pair !== undefined && s.pair >= 0 ? Math.min(i, s.pair) : i }))
     .filter((s) => s.dist <= r)
     .sort((a, b) => a.dist - b.dist);
+  const seen = new Set<number>();
+  const out: { id: number; name: string; dist: number }[] = [];
+  for (const s of all) {
+    if (seen.has(s.key)) continue;
+    seen.add(s.key);
+    out.push({ id: s.id, name: s.name, dist: s.dist });
+  }
+  return out;
 }
 
 const STEP = 15 * 60;

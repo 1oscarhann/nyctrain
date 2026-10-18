@@ -21,7 +21,7 @@ import type { Pointer, Tool } from '../ui/toolTypes';
 import { cap, edgeTooltip } from './describe';
 import type { Network } from './network';
 import { pickEdge, pickNode, snapForTrack, type SnapResult } from './pick';
-import { addQuadStroke, addScissors, scissorsCandidate, type QuadResult } from './quad';
+import { addQuadStroke, addScissors, gapTag, isGapEnd, rejoinPair, scissorsCandidate, type QuadResult } from './quad';
 import type { QuadRole, Snap, StrokePoint } from './types';
 import { edgeReport, LEVEL_NAMES, type EdgeReport } from './validate';
 
@@ -164,7 +164,8 @@ export class TrackTool implements Tool {
       } else if (this.hover.snap.kind === 'edge') {
         this.ctx.tip(edgeTooltip(this.ctx.game, this.hover.snap.edge) + `<div class="hw-muted" style="margin-top:4px">Click to branch off here</div>`, p.px);
       } else if (this.hover.snap.kind === 'node') {
-        this.ctx.tip(`<div class="hw-green">Click to extend from here</div>`, p.px);
+        const gap = isGapEnd(net, this.hover.snap.node) ? gapTag(net, this.hover.snap.node) : null;
+        this.ctx.tip(`<div class="hw-green">Click to extend from here</div>${gap ? `<div class="hw-muted">Four tracks (<span class="kbd">Q</span>) from here to the gap's other end restore the ${gap.role} pair exactly</div>` : ''}`, p.px);
       } else {
         this.ctx.tip(`<div class="hw-muted">Click to start ${LEVEL_NAMES[this.level]} track</div>`, p.px);
       }
@@ -367,7 +368,16 @@ export class TrackTool implements Tool {
       else if (res.problems.length) this.ctx.toast('Four tracks planned', res.problems[0], 'amber');
       return true;
     }
-    game.editBlueprint(() => game.network.addStroke(pts, this.cls, start, endSnap));
+    // Two tracks between two ends of one pair of a four-track section (a bulldozed gap) rejoin it.
+    const net = game.network;
+    const ga = start.kind === 'node' ? gapTag(net, start.node) : null;
+    const gb = endSnap.kind === 'node' ? gapTag(net, endSnap.node) : null;
+    const rejoin = ga && gb && ga.g === gb.g && ga.role === gb.role ? ga : null;
+    game.editBlueprint(() => {
+      const ids = net.addStroke(pts, this.cls, start, endSnap);
+      if (rejoin) rejoinPair(net, rejoin, ids);
+      return ids;
+    });
     this.cancel();
     const sum = game.blueprintSummary();
     if (sum.invalid.length) this.ctx.toast('Some segments need fixing', sum.invalid[0].reason, 'amber');
@@ -395,7 +405,13 @@ export class TrackTool implements Tool {
     }
     const game = this.ctx.game;
     if (!game.network.moveNode(pr.id, p.x, p.y)) {
-      this.ctx.tip(`<div class="reason hw-red">The other pair is already built: this vertex can't move</div>`, p.px);
+      const why = game.network.quadDragBlock(pr.id);
+      this.ctx.tip(
+        why === 'pinned'
+          ? `<div class="reason hw-red">This vertex sits between two four-track junctions: both pairs leave each one straight, so it can't move. Redraw the section to change it</div>`
+          : `<div class="reason hw-red">The other pair is already built: this vertex can't move</div>`,
+        p.px,
+      );
       return;
     }
     game.afterNetworkChange();

@@ -9,7 +9,7 @@ import { TRACK } from '../balance';
 import { toLonLat } from '../core/geo';
 import { fmtMoney } from '../core/units';
 import type { AppContext } from '../ui/context';
-import { bulldozePairTip } from '../ui/express';
+import { bulldozePairEdgeHint, bulldozePairTip } from '../ui/express';
 import type { Pointer, Tool } from '../ui/toolTypes';
 import { pickEdge } from './pick';
 
@@ -84,7 +84,8 @@ export class BulldozeTool implements Tool {
           : e.status === 'blueprint'
             ? `<div class="hw-green">Click to remove blueprint (free)</div>`
             : `<div class="hw-amber">Click to demolish · refund ${fmtMoney(refund)}</div>`) +
-          (stationsOn.length ? `<div class="hw-muted">Also removes ${stationsOn.length} station${stationsOn.length > 1 ? 's' : ''}</div>` : ''),
+          (stationsOn.length ? `<div class="hw-muted">Also removes ${stationsOn.length} station${stationsOn.length > 1 ? 's' : ''}</div>` : '') +
+          (this.blocked ? '' : bulldozePairEdgeHint(e.quad?.role)),
         p.px,
       );
     }

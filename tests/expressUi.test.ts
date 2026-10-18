@@ -18,13 +18,17 @@ import type { QuadRole, StrokePoint } from '../src/construction/types';
 import { edgeReport, type EdgeReport, type Terrain } from '../src/construction/validate';
 import type { World } from '../src/data/world';
 import { orientEdges, pairOffsetAB, quadOffsets } from '../src/map/networkLayers';
-import { insertStop, stationsAlongPath } from '../src/routes/express';
+import { choosePlatform, insertStop, pathErrorHint, stationsAlongPath, switchPlatform } from '../src/routes/express';
+import { stationsNear } from '../src/routes/eventService';
+import { compileNetwork } from '../src/routes/compile';
 import { findRoutePath } from '../src/routes/pathfind';
 import { defaultHeadways } from '../src/routes/routeSet';
 import type { Route } from '../src/routes/types';
 import {
+  bulldozePairEdgeHint,
   bulldozePairTip,
   connectorKinds,
+  constructionLabelEdges,
   connectorText,
   crossoverTip,
   linkCandidate,
@@ -35,6 +39,7 @@ import {
   quadHoverTip,
   quadStrokeTip,
   routeOnQuad,
+  serviceEditNoop,
   skipsText,
   stationQuadTip,
   strokeRoles,
@@ -354,5 +359,109 @@ describe('express UI: route panel and route tool (§2.3)', () => {
       from: [{ tract: 8, count: 11 }, { tract: 7, count: 10 }],
       to: [{ tract: 3, count: 4 }, { tract: 9, count: 4 }],
     });
+  });
+});
+
+describe('express UI: review fixes', () => {
+  it('Alt-click on a served pair switches its platform each time; a plain click still removes it', () => {
+    const x = patternQuad([1500, 2500]);
+    const net = x.net;
+    // The express draft stops at C's express platform; Alt-click picks the local one, then back.
+    let stops = [x.A[1], x.C[1], x.E[1]];
+    expect(choosePlatform(net, x.C[1], true, true)).toBe(x.C[0]);
+    stops = switchPlatform(net, stops, x.C[0])!;
+    expect(stops).toEqual([x.A[1], x.C[0], x.E[1]]);
+    // A second Alt-click (choosePlatform still picks the local platform, the one it now uses).
+    stops = switchPlatform(net, stops, choosePlatform(net, x.C[1], true, true))!;
+    expect(stops).toEqual([x.A[1], x.C[1], x.E[1]]);
+    // Either platform of the complex finds the stop; a lone platform or a station off the route has nothing to switch.
+    expect(switchPlatform(net, stops, x.C[0])).toEqual([x.A[1], x.C[0], x.E[1]]);
+    expect(switchPlatform(net, [x.A[0], x.B, x.E[0]], x.B)).toBeNull();
+    expect(switchPlatform(net, stops, x.D)).toBeNull();
+  });
+
+  it('a path error on four tracks adds the crossover hint; on ordinary track it reads as before', () => {
+    const x = patternQuad();
+    expect(pathErrorHint(x.net, [x.A[1], x.C[0]], 'No connected track from A to C')).toMatch(/^No connected track from A to C\. On four tracks trains change pairs only at a crossover: use the other platform \(Alt-click\) or add crossovers \(Track tool, 4 tracks, X\)$/);
+    const game = stubGame();
+    game.network.addStroke([P(0, 0), P(2000, 0)], 'heavy', none, none);
+    const e = [...game.network.edges.keys()][0];
+    const s1 = game.network.addStation(e, 300, 8, 'S1').id, s2 = game.network.addStation(e, 1700, 8, 'S2').id;
+    expect(pathErrorHint(game.network, [s1, s2], 'No path')).toBe('No path');
+  });
+
+  it('a blueprint local-only stop never moves a running local onto the express pair (built track, built platforms)', () => {
+    // The quad of tests 15–22 with scissors at 1500 and 2500, pairs A, C, E and no local-only stops.
+    const game = stubGame();
+    const net = game.network;
+    expect(addQuadStroke(net, [P(0, 0), P(6000, 0)], 'heavy', none, none, { side: 1 }).ok).toBe(true);
+    for (const at of [1500, 2500]) {
+      const h = pickEdge(net, at, 0, 5, (id) => net.edges.get(id)?.quad?.role === 'local')!;
+      const c = scissorsCandidate(net, h.edge, h.u, 'heavy');
+      if (!c.ok) throw new Error(c.reason);
+      expect(addScissors(net, c.g, c.edge, c.uA, c.uB, 'heavy').ok).toBe(true);
+    }
+    const x = { A: pairAt(net, 1000, 'A'), C: pairAt(net, 3000, 'C'), E: pairAt(net, 5000, 'E') };
+    game.build(true);
+    const local = mkRoute(game, 'Local', [x.A[0], x.C[0], x.E[0]]);
+    const roles = () => new Set(game.routes.path(net, local).legs.map((l) => net.edges.get(l.edge)?.quad?.role ?? 'plain'));
+    expect([...roles()]).toEqual(['local']);
+    // Plan a local-only stop at 2000 between A and C (a blueprint on built track).
+    const hit = pickEdge(net, 2000, 0, 5, (id) => net.edges.get(id)?.quad?.role === 'local')!;
+    const bp = net.addStation(hit.edge, hit.u, 8, 'Planned');
+    expect(bp.status).toBe('blueprint');
+    expect([...roles()]).toEqual(['local']);
+    // Once it is built and the local still skips it, the skip is real: the local takes the express pair past it.
+    game.build(true);
+    expect(net.stations.get(bp.id)!.status).toBe('built');
+    expect(roles().has('express')).toBe(true);
+  });
+
+  it('event cards list a cross-platform pair once (its nearer platform)', () => {
+    const x = patternQuad();
+    x.game.build(true);
+    mkRoute(x.game, 'Local', x.local);
+    mkRoute(x.game, 'Express', x.express, true);
+    const net = compileNetwork(x.game).net;
+    const near = stationsNear(net, 3000, 50, 1500);
+    expect(near.map((s) => s.name)).toEqual(['C', 'B', 'D']);
+    // On the express side, the express platform is the nearer one.
+    expect(stationsNear(net, 3000, -60, 300)).toEqual([{ id: x.C[1], name: 'C', dist: expect.closeTo(51, 0) }]);
+  });
+
+  it('construction labels: one per four-track section pair of edges, connectors only where no pair is labelled', () => {
+    const game = stubGame();
+    const net = game.network;
+    const q = addQuadStroke(net, [P(0, 0), P(6000, 0)], 'heavy', none, none, { side: 1 });
+    game.build(false);
+    for (const e of net.edges.values()) e.status = 'construction';
+    const labelled = constructionLabelEdges(net);
+    expect(labelled.length).toBe(q.local.length);
+    expect(new Set(labelled)).toEqual(new Set(q.local));
+    // An ordinary edge under construction is labelled as before; so is an express edge whose local partner is built.
+    net.addStroke([P(0, 3000), P(2000, 3000)], 'heavy', none, none);
+    const plain = [...net.edges.values()].find((e) => !e.quad)!;
+    plain.status = 'construction';
+    const x = q.express.reduce((a, b) => (net.geom(a).length >= net.geom(b).length ? a : b));
+    const partner = partnerPoint(net, x, net.geom(x).length / 2)!;
+    net.edges.get(partner.edge)!.status = 'built';
+    const l2 = new Set(constructionLabelEdges(net));
+    expect(l2.has(plain.id)).toBe(true);
+    expect(l2.has(x)).toBe(true);
+  });
+
+  it('a Service edit that changes nothing is a no-op; a kind change with the same stops is not', () => {
+    const r = { stops: [1, 2, 3], express: true };
+    expect(serviceEditNoop(r, [1, 2, 3])).toBe(true);
+    expect(serviceEditNoop(r, [1, 2, 3], true)).toBe(true);
+    expect(serviceEditNoop(r, [1, 2, 3], false)).toBe(false);
+    expect(serviceEditNoop(r, [1, 3])).toBe(false);
+    expect(serviceEditNoop({ stops: [1, 2], express: undefined }, [1, 2], false)).toBe(true);
+  });
+
+  it('bulldozing one pair says how to put it back; ordinary track says nothing more', () => {
+    expect(strip(bulldozePairEdgeHint('express'))).toBe('The express pair of a four-track section: to put it back, draw four tracks ( Q ) from one end of the gap to the other');
+    expect(bulldozePairEdgeHint('link')).toBe('');
+    expect(bulldozePairEdgeHint(undefined)).toBe('');
   });
 });

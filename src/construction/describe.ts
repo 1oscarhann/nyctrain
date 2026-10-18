@@ -2,7 +2,8 @@
 import { QUAD } from '../balance';
 import { fmtDistance, fmtMoney, fmtSpeed } from '../core/units';
 import type { Game } from '../core/game';
-import { edgeReport, LEVEL_NAMES } from './validate';
+import { edgeReport, LEVEL_NAMES, quadCostFactor } from './validate';
+import type { Network } from './network';
 import { progress } from './blueprint';
 import type { TrackEdge } from './types';
 
@@ -17,12 +18,18 @@ export function levelLabel(net: Game['network'], edgeId: number): string {
   return la === lb ? cap(LEVEL_NAMES[la]) : `Ramp: ${LEVEL_NAMES[la]} → ${LEVEL_NAMES[lb]}`;
 }
 
-/** Which part of a four-track section an edge is (null for ordinary double track). */
-export function quadLabel(e: TrackEdge): string | null {
+/**
+ * Which part of a four-track section an edge is (null for ordinary double track). With the
+ * network, the express pair's factor is the one it is priced at (full price where no local pair
+ * runs alongside).
+ */
+export function quadLabel(e: TrackEdge, net?: Network): string | null {
   if (!e.quad) return null;
   if (e.quad.role === 'local') return 'Local pair';
-  if (e.quad.role === 'express') return `Express pair · shared works ×${QUAD.secondPairCostFactor}`;
-  return `Turnout or crossover · ×${QUAD.linkCostFactor}`;
+  const f = net ? quadCostFactor(net, e) : e.quad.role === 'express' ? QUAD.secondPairCostFactor : QUAD.linkCostFactor;
+  const x = `×${Math.round(f * 100) / 100}`;
+  if (e.quad.role === 'express') return f >= 1 ? 'Express pair · no local pair alongside, full price' : `Express pair · shared works ${x}`;
+  return f >= 1 ? 'Turnout or crossover · full price' : `Turnout or crossover · ${x}`;
 }
 
 export function edgeTooltip(game: Game, edgeId: number): string {
@@ -44,7 +51,7 @@ export function edgeTooltip(game: Game, edgeId: number): string {
     `<div class="row"><span class="hw-muted">Curve</span><span class="num">${curve} · ${fmtSpeed(r.speedLimit)} max</span></div>`,
     `<div class="row"><span class="hw-muted">${e.status === 'blueprint' ? 'Cost' : 'Built for'}</span><span class="num">${fmtMoney(cost)}</span></div>`,
   ];
-  const quad = quadLabel(e);
+  const quad = quadLabel(e, net);
   if (quad) lines.splice(1, 0, `<div class="row"><span class="hw-muted">Four-track</span><span class="num">${quad}</span></div>`);
   if (r.waterLength > 0) lines.push(`<div class="row"><span class="hw-muted">Over water</span><span class="num">${fmtDistance(r.waterLength)}</span></div>`);
   if (r.densityMult > 1.05 && e.status === 'blueprint') lines.push(`<div class="row"><span class="hw-muted">Density premium</span><span class="num">×${r.densityMult.toFixed(1)}</span></div>`);

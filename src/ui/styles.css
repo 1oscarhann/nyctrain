@@ -1337,8 +1337,17 @@ input[type='checkbox'] {
 .line-row.skipped .grow {
   color: var(--muted);
 }
+/* A skipped row's name can wrap, and its tag ("passes", "on the local pair") sits on its own line
+   under the name, so the tag that tells a stop beside the line from one the route runs through is
+   never cut off by the other routes' bullets and the Stop here button. */
+.line-row .grow {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .line-tag {
+  display: block;
   font-size: 11px;
+  line-height: 1.25;
   color: var(--dim);
 }
 .line-term {

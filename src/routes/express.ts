@@ -64,6 +64,34 @@ export function choosePlatform(net: Network, stationId: number, express: boolean
 }
 
 /**
+ * The route tool's Alt-click on a station complex the draft already stops at: that stop moves to
+ * the pair's other platform (and back on the next Alt-click). Null when the complex isn't a stop or
+ * has no other platform.
+ */
+export function switchPlatform(net: Network, stops: readonly number[], stationId: number): number[] | null {
+  const p = partnerOf(net, stationId);
+  const i = stops.findIndex((x) => x === stationId || (p !== null && x === p));
+  if (i < 0) return null;
+  const other = partnerOf(net, stops[i]);
+  if (other === null) return null;
+  const out = [...stops];
+  out[i] = other;
+  return out;
+}
+
+/**
+ * A route path error, with a hint when the route stops on four-track sections: trains change
+ * pairs only at a crossover, so two platforms on different pairs need one between them.
+ */
+export function pathErrorHint(net: Network, stops: readonly number[], error: string): string {
+  const onQuad = stops.some((id) => {
+    const r = quadRole(net, id);
+    return r === 'local' || r === 'express';
+  });
+  return onQuad ? `${error}. On four tracks trains change pairs only at a crossover: use the other platform (Alt-click) or add crossovers (Track tool, 4 tracks, X)` : error;
+}
+
+/**
  * Every station along a route's path, in direction-0 order: platforms on the path's own track
  * (`on-track`) and, on four-track sections, platforms on the other pair beside it (`beside`). A
  * cross-platform pair is one entry (on-track preferred; `partner` is the other platform).

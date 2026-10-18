@@ -36,6 +36,7 @@ import { PlaceNames, tractName } from '../map/placeNames';
 import { compileNetwork, type CompileResult } from '../routes/compile';
 import { RouteTool } from '../routes/routeTool';
 import { stationsAlongRoute, type AlongStation } from '../routes/express';
+import { constructionLabelEdges } from './express';
 import { hexRgb } from '../map/networkLayers';
 import { SimClient } from '../sim/client';
 import { servedStations } from '../sim/growth';
@@ -943,8 +944,9 @@ export class App implements AppContext {
   private constructionLabels(): Layer[] {
     const net = this.game.network;
     const data: { pos: [number, number]; text: string }[] = [];
-    for (const e of net.edges.values()) {
-      if (e.status !== 'construction') continue;
+    // (One label per four-track section's pair of edges: constructionLabelEdges.)
+    for (const id of constructionLabelEdges(net)) {
+      const e = net.edges.get(id)!;
       const g = net.geom(e.id);
       const [x, y] = slicePolyline(g.xs, g.ys, g.cum, g.length / 2, g.length / 2 + 0.01)[0];
       data.push({ pos: toLonLat(x, y), text: `${Math.floor(progress(e, this.game.time) * 100)}%` });
