@@ -167,12 +167,21 @@ export const QUAD = {
   partnerTolerance: 3,
   /** An existing platform on the other pair this close pairs up with a new one. */
   pairLinkDistance: 40,
-  /** The express pair shares excavation, structure and right of way (cost × this). */
-  secondPairCostFactor: 0.75,
+  /**
+   * The express pair shares excavation, structure, shafts, ventilation, power and the right of way
+   * (cost × this): a four-track section costs 1.5× a double track, as historic four-track subways
+   * did, against 2× for a second line. Tuned (express review, docs/v2/express-quad.md): at 0.75 the
+   * pair's capital was the whole of the express scenarios' gap to their all-stops twins.
+   */
+  secondPairCostFactor: 0.5,
   /** Turnouts and crossovers sit inside the four-track box (cost × this). */
   linkCostFactor: 0.5,
-  /** Each platform of a cross-platform pair costs this share of a lone platform (shared entrances). */
-  pairPlatformCostShare: 0.8,
+  /**
+   * Each platform of a cross-platform pair costs this share of a lone platform (shared box,
+   * entrances and concourse: a pair is 1.4× a station). The design's own lever (§12), applied
+   * because the express scenario lost more than $0.3M/day against the core.
+   */
+  pairPlatformCostShare: 0.7,
   /** Staff of a cross-platform pair, in stations. */
   pairStaffing: 1.4,
   /** Seconds to step across an island platform. */
@@ -185,6 +194,8 @@ export const QUAD = {
    * is already in: no wait). About one skipped stop's worth.
    */
   switchGain: 45,
+  /** Longest a rider on a local steps across to wait for an express due at the other platform, s. */
+  crossPlatformWaitMax: 300,
   /** Route pathfinding: metres added for running through a platform the route does not serve. */
   passPenalty: 600,
   /** Route pathfinding: metres added for each turnout or crossover used. */

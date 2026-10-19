@@ -9,6 +9,118 @@ chaos, operations control and Living City. Its `file:line` references are to the
 `a27dbfa` and are stale. **Where the code and this design disagree, trust the code and the task's
 amendments** (saves are v5 → v6, not v2 → v3).
 
+## Implementation notes (review fixes)
+
+Two reviews (eleven findings) and the sim engineer's balance measurements, fixed after the UI
+notes below; this section supersedes the balance figures in the sim notes. Baseline `pre-express`.
+**A network with no quads and no express routes is still byte-identical to `pre-express`**: every
+change is on quad tags, pairs or express routes (checked as before: `headless-sim days=3`, `balance`
+core and sprawl in both cities at 8 days, core days=25 in both cities and sprawl days=25 across the
+31 Jan month close on Steady; `dump=` files and printed output identical apart from timings; `npm
+run perf` the same 40,320 boardings and 1,090 waiting).
+
+### Findings
+
+1. **The express-pair discount outlived the local pair** (bulldozed blueprints, then build:
+   ×0.75 on plain double track). `quadCostFactor(net, e)` now prices an express edge by
+   `partnerCoverage` (the share of its length with an other-role edge of its group 9 m to the
+   partner side, sampled every ~20 m): ×factor where the local pair runs alongside, ×1 where it
+   doesn't, prorated between; a connector is discounted only while its group has both pairs. The
+   edge tooltip says which ("no local pair alongside, full price").
+2. **Drags beside a fan desynced the pairs.** A twinned vertex next to a fan junction (whose
+   counterpart on the other pair is the turnout's far end, not opposite it) now slides along that
+   junction's axis; between two fans it can't move ("pinned", with its own red tip); a twin fillet
+   that would overrun its own shorter chord next to a fan shrinks both fillets concentrically. The
+   reviewer's fuzz (2,142 random drags): 141 desyncs before, now 0 silent and 1 flagged on *both*
+   pairs (a vertex between a fan and a scissors dragged past the 2° junction tolerance, which v1
+   flags the same way on ordinary track).
+3. **Blueprint platforms re-routed running locals.** `RouteSet.path`'s built-track search counts only
+   built platforms as ones a route passes (`PathCostOptions.platform`).
+4. **Load accepted nonsense.** `sanitizeQuadTag` drops pair tags with `away` 0;
+   `Network.dropImplausible` drops twins more than 60 m apart and pairs that are not one platform on
+   each pair of one group within `hypot(spacing, pairLinkDistance) + tolerance` of each other.
+5. **Headless timeouts.** The three headless files set `testTimeout: 180_000` (`vi.setConfig`).
+6. **Alt-click** switches a served pair's platform each time (`switchPlatform`), the hover hints are
+   worded from the platform a plain click picks, and a path error on four tracks adds the crossover
+   hint (`pathErrorHint`).
+7. **Event cards** list a pair once: `stationsNear` dedupes by station complex (nearer platform).
+8. **Construction labels**: one per pair of twin edges (`constructionLabelEdges`).
+9. **Line list tags** wrap onto their own line under the name (CSS).
+10. **A bulldozed stretch of one pair can be put back**: a four-track stroke from one end of the gap
+    to the other (`repairPair`) rebuilds it as the exact parallel of the surviving pair (tags, twins,
+    concentric fillets); a two-track stroke between the ends takes the pair's tag where it runs
+    beside the other pair (`rejoinPair`). The bulldoze and track tool hovers say so.
+11. **Service edits that change nothing** (Express pattern on an express) edit nothing and say so.
+
+### Balance: why the express made the core worse, and what changed
+
+Measured with `balance scenario=express` against its all-stops twin (`allstops=1`: the same
+stations on double track; in New York the core itself), day 11 of 12, plus a same-commuter
+comparison (groups are the data's OD pairs, identical in both runs) of trips that pass at least
+three of the express's skipped stations:
+
+- **Riders waited for one route**, so a station both routes served at 5 minutes each waited twice as
+  long as the core's 2.5-minute line. Now a rider waiting for one route boards another route's train
+  at the same station complex (or across the island just as it arrives) when its ride to their
+  stop's complex is no longer than their own route's plus half its headway (`boardSiblings`; only
+  where one of the two routes is an express).
+- **Changing across the platform never paid** (15 s + half the express headway + the 2-minute
+  penalty against one or two skipped stops). Now riders on a train at a cross-platform station move
+  to another route's train dwelling across the island when it reaches their stop's complex sooner
+  by more than 15 s + `QUAD.switchGain` (45 s), and riders on a local step across to wait for an
+  express due there within `QUAD.crossPlatformWaitMax` (5 min, by its timetable from where it is now)
+  when that still gets them there sooner. Mode choice sees it through the observed times.
+- **Express and local ran as a pair.** Dispatch slots are multiples of the headway for every route,
+  so two routes at one headway left their shared terminal together. An express now leaves half a
+  headway after an ordinary route's slots (`TrainSim.runDispatch`, express routes only), so the two
+  alternate at the shared stations (overtakes: NYC 101 → 169, London 11 → 194 a day; test 27's
+  shared-pair control now runs 334 s instead of 462 s, the quad express still 280 s).
+- **The scenarios skipped too little.** The design's pairs (four in each city) left one or two
+  local stops between them. Now the express calls only at the hubs: New York Grand Central and 92 St
+  (the other seven trunk stations local-only), London Oxford Circus and Bank with the Central line's
+  Chancery Lane added (five local-only). London's line D leaves out its three least-used central
+  stations (Covent Garden, Temple, Tower Hill: about 16k boardings between them), which is what
+  fits it under the bond cap; Bond Street as a sixth local stop would leave £2M of headroom.
+- **The express pair's capital is the whole money gap.** With it free (`secondPairCostFactor` 0)
+  the New York express runs within $59k a day of the core (London £42k). The trunk's through trips
+  already go 85% (London 95%) by transit, so faster trips win few new commuters, and splitting the
+  trains halves the service at local-only stations: fare journeys stay level in every split tried
+  (5/5, 2.5/5, 3.75/7.5, 3.33/10, 4.17/6.25 minutes; shorter local trains) and in a 30-day
+  converged run. `secondPairCostFactor` is now 0.5 (a four-track section 1.5× a double track, the
+  historic ratio, against 2× for a second line) and `pairPlatformCostShare` 0.7 (§12's own lever:
+  the scenario lost more than $0.3M/day against the core). Value capture doesn't move (Living City
+  12 months: $354k against $353k a day).
+
+| Day 11 of 12 | NYC core (twin) | NYC express before | NYC express now | London twin | London express before | London express now |
+|---|---|---|---|---|---|---|
+| Capital (bonds) | $23.3B ($17.3B) | $25.7B | $24.7B ($18.7B) | £23.9B (£18.9B) | £26.6B (£21.6B, over the cap) | £24.8B (£19.8B) |
+| Riders | 1,349,870 | 1,346,070 | 1,364,130 (+1.1%) | 761,920 | 761,400 | 763,580 (+0.2%) |
+| Fare journeys | 1,204,510 | — | 1,202,070 | 761,920 | — | 759,320 |
+| Cross-platform transfers a day | — | 0 | 16,855 | — | 0 | 3,639 |
+| Through trips by express, door to door (same commuters) | 53.0 min | — | 45.8 min | 52.9 min | — | 52.2 min |
+| Overtakes a day | — | 170 | 169 | — | 148 | 194 |
+| Operating result | +$1.37M | +$1.3M | +$1.28M | −£0.28M | −£0.43M | −£0.33M |
+| After bond interest | −$0.28M | −$0.63M | −$0.51M | −£2.09M | −£2.5M | −£2.23M |
+
+So three of the four aims hold in New York (riders up, through trips 7.2 minutes faster, transfers),
+London gains little (its line A is uncrowded and its through trips are dominated by long walks: an
+Oxford Circus–City express saves 4–5 minutes of a 50-minute door-to-door trip), and **neither city's
+express earns its four-track works back in fares**: the gap after interest shrank from $0.35M to
+$0.23M a day (London £0.3M to £0.14M), and closing it would take about 38,000 more transit commuters
+(+6%) or an express pair almost free. `localPeak=2.5 expressPeak=5` (the local kept at the core's
+headway): 1,381,480 riders, −$0.63M/day (London 763,170, −£2.39M and over the cap).
+
+`balance` gained `allstops=1` (the twin), `localCars=`/`expressCars=`, `exact=1` (the money lines in
+thousands) and the through-trip line; `scripts/scenarios.ts` holds the networks.
+
+### Tests
+
+301 pass (274 unit, 27 headless): the 283 before, plus `quad.test.ts` (pricing beside a pair and
+prorated, drags beside a fan, pinned vertices, fillets that shrink to fit, load sanitising, repairing
+a gap both ways), `expressUi.test.ts` (Alt-click, the path hint, blueprint stops, event cards,
+construction labels, no-op Service edits, the bulldoze hint) and `express.test.ts` (the first train
+of either on a synthetic trunk city, stepping across to an express in and to one due).
+
 ## Implementation notes (construction)
 
 Baseline: the `pre-express` tag. This covers checklist steps 1–5: constants, types, network
@@ -345,12 +457,12 @@ bit-identically to `pre-express`** (amendment 3; how the gate works and what was
 
 ### Known gaps
 
-- Waiting is per route (no combined frequency at a station two routes serve), which caps what an
-  express adds to ridership in the balance scenarios (above).
+- (Superseded by the review fixes at the top: riders now take the first train of either and step
+  across to an express in or due, and London's scenario fits the bond cap.) Route planning and the
+  timetable fallback of mode choice still see each route's own headway.
 - Overtakes are counted only between two consecutive cross-platform stations both trains call at,
   and a network edit forgets the pair calls in progress (an overtake right after an edit can be
   missed).
-- London's express scenario needs more bonds than the cap allows; it is a sandbox measurement.
 
 ## Implementation notes (UI)
 

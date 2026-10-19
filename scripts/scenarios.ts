@@ -138,6 +138,9 @@ export function buildCoreTrunks(game: Game) {
 /** A point a fraction f of the way from a to b. */
 const lerpLL = (a: LL, b: LL, f: number): LL => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
 
+/** The New York express scenario's local-only trunk stations (the express skips them). */
+export const NYC_EXPRESS_SKIPS = ['Astor Pl', '18 St', '28 St', '53 St', '68 St', '79 St', '106 St'];
+
 /**
  * Express service (v2, docs/v2/express-quad.md §12): the core with Lexington from past Canal St
  * to past 106 St as a four-track trunk (double track Bowling Green → Canal and 106 → 120 St, the
@@ -316,47 +319,63 @@ export function buildLondonCoreTrunks(game: Game, leaveOut: readonly string[] = 
 /** Line D's least-used central stations, left out of London's express network to stay within the bond cap. */
 export const LONDON_EXPRESS_LEAVE_OUT = ['Covent Garden', 'Temple', 'Tower Hill'];
 
+type TrunkStop = [LL, string, 'shared' | 'pair' | 'local'];
+
+/**
+ * London's express line A (the express network and its all-stops twin): the core's line A with the
+ * Central line's Chancery Lane added. On the four-track trunk Oxford Circus and Bank are
+ * cross-platform hubs and the five stations around them are local-only, so a trip through the City
+ * passes four or five stations the express skips. (Bond Street as well would leave no margin under
+ * the bond cap: £19.998B of £20B.)
+ */
+const LONDON_EXPRESS_A: TrunkStop[] = [
+  [[-0.1755, 51.5162], 'Paddington', 'shared'],
+  [[-0.1585, 51.5136], 'Marble Arch', 'local'],
+  [[-0.1415, 51.5152], 'Oxford Circus', 'pair'],
+  [[-0.1308, 51.5165], 'Tottenham Court Road', 'local'],
+  [[-0.1200, 51.5163], 'Holborn', 'local'],
+  [[-0.1115, 51.5185], 'Chancery Lane', 'local'],
+  [[-0.0975, 51.5146], "St Paul's", 'local'],
+  [[-0.0886, 51.5133], 'Bank', 'pair'],
+  [[-0.0726, 51.5165], 'Aldgate East', 'shared'],
+  [[-0.0597, 51.5194], 'Whitechapel', 'shared'],
+  [[-0.0333, 51.5252], 'Mile End', 'shared'],
+  [[-0.0040, 51.5415], 'Stratford', 'shared'],
+];
+
+/** The London express scenario's local-only trunk stations (the express skips them). */
+export const LONDON_EXPRESS_SKIPS = LONDON_EXPRESS_A.filter(([, , k]) => k === 'local').map(([, n]) => n);
+
+/** London's line A waypoints (the core's). */
+const LONDON_A_WAYPOINTS: LL[] = [[-0.1780, 51.5168], [-0.1585, 51.5136], [-0.1300, 51.5166], [-0.0975, 51.5146], [-0.0886, 51.5133], [-0.0600, 51.5195], [-0.0333, 51.5252], [-0.0030, 51.5420]];
+
 /**
  * London express service (v2): the core with a deep four-track trunk along a Central-line-like
  * corridor, from just west of Marble Arch along Oxford Street and through the City to east of
- * Bank (fanning at both ends). The express calls at the hubs: cross-platform stations at Oxford
- * Circus and Bank; Marble Arch, Tottenham Court Road, Holborn and St Paul's are local-only (the
- * express skips three stops between its pairs). London's core already needs £19.3B of the £20B of
- * bonds a career game may hold, so this network leaves out line D's three least-used central
- * stations (Covent Garden, Temple and Tower Hill, each 500–800 m from another station: about 16k
- * boardings a day between them) and needs £20.0B. `allstops=1` builds its all-stops twin (the same
- * stations, double track). A is the all-stops local, X the express; both at twice the core's
- * headways.
+ * Bank (fanning at both ends). The express calls at the hubs (cross-platform stations at Oxford
+ * Circus and Bank) and skips the five local-only stations of LONDON_EXPRESS_A. London's core
+ * already needs £19.3B of the £20B of bonds a career game may hold, so this network leaves out line
+ * D's three least-used central stations (Covent Garden, Temple and Tower Hill, each 500–800 m from
+ * another station: about 16k boardings a day between them) to stay under the cap. `allstops=1`
+ * builds its all-stops twin (the same stations, double track). A is the all-stops local, X the
+ * express; both at twice the core's headways.
  */
 export function buildLondonCoreExpressNetwork(game: Game) {
-  const cen: LL[] = [[-0.1780, 51.5168], [-0.1585, 51.5136], [-0.1300, 51.5166], [-0.0975, 51.5146], [-0.0886, 51.5133], [-0.0600, 51.5195], [-0.0333, 51.5252], [-0.0030, 51.5420]];
+  const cen = LONDON_A_WAYPOINTS;
   const west = lerpLL(cen[0], cen[1], 0.75);
   const east = lerpLL(cen[4], cen[5], 0.35);
   drawLine(game, [cen[0], west], 'deep');
   drawLine(game, [east, ...cen.slice(5)], 'deep');
   quadLine(game, [west, ...cen.slice(1, 5), east], 'deep', nodeSnapNear(game, west), nodeSnapNear(game, east), 1);
-  const s = (p: LL, n: string) => stationNear(game, p, n, CARS);
-  const loc = (p: LL, n: string) => stationNear(game, p, n, CARS, { role: 'local' });
-  const pr = (p: LL, n: string) => pairNear(game, p, n, CARS)[0];
-  const A = [
-    s([-0.1755, 51.5162], 'Paddington'),
-    loc([-0.1585, 51.5136], 'Marble Arch'),
-    pr([-0.1415, 51.5152], 'Oxford Circus'),
-    loc([-0.1308, 51.5165], 'Tottenham Court Road'),
-    loc([-0.1200, 51.5163], 'Holborn'),
-    loc([-0.0975, 51.5146], "St Paul's"),
-    pr([-0.0886, 51.5133], 'Bank'),
-    s([-0.0726, 51.5165], 'Aldgate East'),
-    s([-0.0597, 51.5194], 'Whitechapel'),
-    s([-0.0333, 51.5252], 'Mile End'),
-    s([-0.0040, 51.5415], 'Stratford'),
-  ];
+  const A = LONDON_EXPRESS_A.map(([p, n, k]) =>
+    k === 'pair' ? pairNear(game, p, n, CARS)[0] : stationNear(game, p, n, CARS, k === 'local' ? { role: 'local' } : undefined),
+  );
   return { A, X: expressPattern(game.network, A), ...buildLondonCoreTrunks(game, LONDON_EXPRESS_LEAVE_OUT) };
 }
 
-/** London's express network's all-stops twin: the core without line D's three stations the express network leaves out. */
+/** London's express network's all-stops twin: the same stations on double track. */
 export function buildLondonCoreExpressTwin(game: Game) {
-  const { A } = buildLondonCoreNetworkA(game);
+  const A = line(game, LONDON_A_WAYPOINTS, 'deep', LONDON_EXPRESS_A.map(([p, n]) => [p, n] as [LL, string]));
   return { A, ...buildLondonCoreTrunks(game, LONDON_EXPRESS_LEAVE_OUT) };
 }
 

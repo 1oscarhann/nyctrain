@@ -461,10 +461,20 @@ export class TrainSim {
       for (const d of [0, 1] as const) {
         // New departure slots.
         let guard = 0;
-        while (t >= ds.next[d] && guard++ < 20) {
+        while (guard < 20) {
+          if (t < ds.next[d]) break;
           const hw = this.headwayAt(ri, r, ds.next[d]);
+          // Express service (v2): an express leaves half a headway after the slot an ordinary route
+          // gets, so where it shares stations with a local at the same headway the two alternate
+          // instead of running as a pair (slots are multiples of the headway for every route).
+          let slot = ds.next[d];
+          if (r.express && hw > 0) {
+            slot += hw / 2;
+            if (t < slot) break;
+          }
+          guard++;
           if (hw > 0) {
-            ds.pending[d].push(ds.next[d]);
+            ds.pending[d].push(slot);
             ds.last[d] = ds.next[d];
           }
           ds.next[d] = hw > 0 ? ds.next[d] + hw : this.nextServiceTime(ri, r, ds.next[d] + 1);

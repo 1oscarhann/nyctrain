@@ -477,7 +477,8 @@ export class Network implements GraphView {
       // Four tracks: next to a fan, the other pair's turnout end is a fixed anchor further along
       // (not opposite the junction), so only a slide along that junction's axis keeps both pairs
       // straight and parallel there; the other side, if a junction too, is opposite its partner
-      // junction (a scissors) and turns the same on both pairs. Between two fans it can't move.
+      // junction (a scissors), so both pairs turn alike there and validation judges it as on
+      // ordinary track (2° at a junction). Between two fans it can't move.
       const fans = this.fanAnchors(id);
       if (fans.length > 1) return false;
       axis = fans[0];

@@ -30,7 +30,7 @@ import {
   type PairGeometry,
   type TransitCostInput,
 } from './modeChoice';
-import { hasExpressService, type CompiledNetwork, type CRoute, type DayReport, type EventDayInfo, type EventOutcome, type LiveStats, type ModeState, type ServiceOverride } from './protocol';
+import { hasExpressService, type CompiledNetwork, type CRoute, type CRouteDir, type DayReport, type EventDayInfo, type EventOutcome, type LiveStats, type ModeState, type ServiceOverride } from './protocol';
 import { effectiveTransfers, TransitGraph } from './transitGraph';
 import { periodIndex, TState, type PassengerHooks, type Train } from './trainSim';
 
@@ -1637,18 +1637,74 @@ export class Commuters implements PassengerHooks {
    * cross-platform pair while another route's train dwells at the other (long enough to step
    * across). Riders on either who are bound for a station complex the other train reaches sooner
    * by its timetable, by more than the step across and QUAD.switchGain, change trains: the local's
-   * riders to the express that caught it up, and back where a local is the quicker way.
+   * riders to the express that caught it up, and back where a local is the quicker way. With no
+   * express in yet, a local's riders step across to wait for the soonest one due (waitAcross).
    */
   private crossPlatform(train: Train, route: CRoute, stopIdx: number, t: number): void {
     const net = this.net!;
     const ps = net.stations[route.dirs[train.dir].stopStation[stopIdx]].pair;
     if (ps === undefined || ps < 0) return;
+    /** The soonest express due at the other platform (not dwelling there yet), for this train's riders. */
+    let due: { x: Train; rx: CRoute; kx: number; eta: number } | null = null;
     for (const x of this.trains()) {
-      if (x === train || x.state !== TState.Dwelling || x.route === train.route || x.until - t < QUAD.crossPlatformTransfer) continue;
+      if (x === train || x.route === train.route) continue;
+      if (x.state === TState.Dwelling && x.until - t >= QUAD.crossPlatformTransfer) {
+        const rx = net.routes[x.route];
+        if (rx && rx.dirs[x.dir].stopStation[x.stop] === ps) {
+          this.switchTrains(train, route, stopIdx, x, rx, x.stop, t);
+          this.switchTrains(x, rx, x.stop, train, route, stopIdx, t);
+          continue;
+        }
+      }
+      if (route.express || (x.state !== TState.Running && x.state !== TState.Dwelling)) continue;
       const rx = net.routes[x.route];
-      if (!rx || rx.dirs[x.dir].stopStation[x.stop] !== ps) continue;
-      this.switchTrains(train, route, stopIdx, x, rx, x.stop, t);
-      this.switchTrains(x, rx, x.stop, train, route, stopIdx, t);
+      if (!rx?.express) continue;
+      const dx = rx.dirs[x.dir];
+      const kx = this.xp!.cstop[x.route][x.dir].get(this.xp!.complex[ps]);
+      if (kx === undefined || kx < x.stop || (kx === x.stop && x.state === TState.Dwelling) || dx.stopStation[kx] !== ps) continue;
+      const eta = t + timeToStop(x, dx, kx, t);
+      if (eta < t + QUAD.crossPlatformTransfer || eta > t + QUAD.crossPlatformWaitMax || (due && eta >= due.eta)) continue;
+      due = { x, rx, kx, eta };
+    }
+    if (due) this.waitAcross(train, route, stopIdx, due, t);
+  }
+
+  /**
+   * Express service (v2), across the platform: riders on a local just in at a cross-platform station
+   * step across and wait for an express due at the other platform shortly (by its timetable from
+   * where it is now) when it still gets them to their stop's station complex sooner, by more than
+   * QUAD.switchGain, than staying on: the change the station's countdown invites. They queue there
+   * like anyone else (a full express leaves them behind) and their leg rides the express.
+   */
+  private waitAcross(f: Train, rf: CRoute, kf: number, due: { x: Train; rx: CRoute; kx: number; eta: number }, t: number): void {
+    const xp = this.xp!, net = this.net!;
+    const df = rf.dirs[f.dir], dx = due.rx.dirs[due.x.dir];
+    const cst = xp.cstop[due.x.route][due.x.dir];
+    const wait = due.eta - t;
+    const across = net.stations[dx.stopStation[due.kx]].id;
+    const key = Math.min(across, net.stations[df.stopStation[kf]].id);
+    for (let k = kf + 1; k < df.stopStation.length; k++) {
+      const b = f.buckets[k];
+      if (!b || !b.length) continue;
+      const kx = cst.get(xp.complex[df.stopStation[k]]);
+      if (kx === undefined || kx <= due.kx) continue;
+      const rideF = df.schedArrive[k] - df.schedArrive[kf];
+      if (wait + dx.schedArrive[kx] - dx.schedArrive[due.kx] + QUAD.switchGain >= rideF) continue;
+      const alight = net.stations[dx.stopStation[kx]].id;
+      // Crowding: the rest of the ride is no longer on this train (the express adds its own at boarding).
+      const was = (rideF / 60) * COMMUTERS.crowdingWeight * Math.max(0, (f.load * this.scale) / rf.capComfort - 1) * this.wx.crowd;
+      for (const a of b) {
+        this.aCrowd[a] = Math.max(0, this.aCrowd[a] - was);
+        const o = (a * MAX_LEGS + this.aLeg[a]) * 3;
+        this.aLegs[o] = due.rx.id;
+        this.aLegs[o + 1] = across;
+        this.aLegs[o + 2] = alight;
+        this.aState[a] = S_WALK;
+        this.push(t + QUAD.crossPlatformTransfer, a, E_PLATFORM);
+      }
+      f.load -= b.length;
+      this.day.crossTransfers.set(key, (this.day.crossTransfers.get(key) ?? 0) + b.length);
+      f.buckets[k] = [];
     }
   }
 
@@ -2428,4 +2484,18 @@ function buildExpressBoarding(net: CompiledNetwork, graph: TransitGraph): Expres
     }
   }
   return { complex, cstop, sibSame, sibAcross, pairs };
+}
+
+/**
+ * Express service (v2): scheduled seconds until train x reaches stop k (k ≥ its next stop) of its
+ * direction d, from where it is now: the rest of its dwell, or the unrun share of the leg to its
+ * next stop, then the timetable.
+ */
+function timeToStop(x: Train, d: CRouteDir, k: number, t: number): number {
+  const j = x.stop;
+  if (x.state === TState.Dwelling) return Math.max(0, x.until - t) + (d.schedArrive[k] - d.schedDepart[j]);
+  const s0 = j > 0 ? d.stopS[j - 1] : 0, s1 = d.stopS[j];
+  const f = s1 > s0 ? Math.min(1, Math.max(0, (x.s - s0) / (s1 - s0))) : 1;
+  const t0 = j > 0 ? d.schedDepart[j - 1] : 0;
+  return (1 - f) * (d.schedArrive[j] - t0) + (d.schedArrive[k] - d.schedArrive[j]);
 }

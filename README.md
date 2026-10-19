@@ -152,8 +152,8 @@ commuters are rebuilt from the data, scaled by the saved growth, when the save i
 ## Testing each part
 
 ```bash
-npm test                 # all 283 tests (unit + headless, both cities)
-npm run test:unit        # 256: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+npm test                 # all 301 tests (unit + headless, both cities)
+npm run test:unit        # 274: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
                          # chaos (calendar, weather, incidents, train-sim hooks and the watchdog's scope, event
                          # trips, event service, save v3 with today's level), chaos UI (alert text, feed and
                          # ticker order, announcements, cancelled service, wrap-up toasts, London wording and £),
@@ -174,12 +174,17 @@ npm run test:unit        # 256: geometry, costs, ramps, water, pathfinding, logi
                          # four-track trunks and express service: quad geometry and strokes, crossovers, pairs
                          # and costs (also on London's land), route pathfinding and its gate (ordinary track
                          # keeps its paths), stations along a path, skip/serve and the patterns, compile,
-                         # cross-platform transfers, overtaking against a shared pair (280 s against 462 s),
-                         # incidents, closures, event service, holding, timepoints and value capture on four
-                         # tracks, save v6; and their UI: the pair push on the map and its sign whichever way a
-                         # chain is drawn, the four-track, crossover, station and bulldoze texts (connectors by
-                         # kind, units and currency in both cities), link candidates, the Line list, the
-                         # Overtakes card, the merged station figures and the route tool's insert-in-order
+                         # cross-platform transfers, overtaking against a shared pair (280 s against 334 s),
+                         # riders taking the first train of either and changing across the platform (to an
+                         # express in or due), incidents, closures, event service, holding, timepoints and value
+                         # capture on four tracks, save v6, the express pair priced ×0.5 only beside a local
+                         # pair, drags beside a fan, load sanitising, putting a bulldozed stretch of one pair
+                         # back; and their UI: the pair push on the map and its sign whichever way a chain is
+                         # drawn, the four-track, crossover, station and bulldoze texts (connectors by kind,
+                         # units and currency in both cities), link candidates, the Line list, the Overtakes
+                         # card, the merged station figures, the route tool's insert-in-order and Alt-click,
+                         # event cards and construction labels listing a pair once, Service edits that change
+                         # nothing
 npm run test:headless    # 27: 3 days on the test network (with regularity and fares by band and period),
                          # holding against no holding, holding next to Wild chaos and event service, chaos end
                          # to end (closures, event agents, determinism, snow, breakdowns, Off is inert, mid-day
@@ -201,6 +206,8 @@ npm run balance -- scenario=core days=12 control=tp    # control=default|legacy|
                                                        # farePeak= fareOff= low=1|0.5|0, dump=file.json
 npm run balance -- scenario=express days=12            # the core with a four-track Lexington trunk: local + express
 npm run balance -- city=london scenario=express days=12 # Oxford Street and the City as four tracks
+npm run balance -- scenario=express allstops=1 days=12 # its all-stops twin (the same stations, double track);
+                                                       # localPeak= expressPeak= localCars= expressCars= exact=1
 npm run balance -- scenario=core months=12             # Living City: 12 growth months of monthDays=5 days each
                                                        # (pace=off|steady|boom); days=262 runs a calendar year
 npm run perf -- city=london                            # London's grid of the same size; month=0 skips the month closes
@@ -318,23 +325,37 @@ Every value is in `src/balance.ts`. Main values (spec values unless noted):
 |---|---|---|---|---|
 | **Core** (`balance -- scenario=core`) | 4 deep routes, 40 stations: Lexington, CPW–Atlantic, Times Sq–Jackson Hts, 6 Av–Myrtle–Wyckoff; 67 trains (holding, 10% recovery: one more train per route) | $23.3B (needs $17.3B of bonds) | 1.35M on day 11 (still rising slowly), 21% transit share | Operating +$1.4M/day; −$0.28M/day after bond interest; −$1.8M/day after full debt service; rated BBB (new bonds 3.10%) |
 | **Sprawl** (`scenario=sprawl`) | Elevated Jamaica–Glen Oaks and St George–Huguenot | $5.00B | 15.7k | −$0.81M/day; rated BB with no debt |
-| **Express** (`scenario=express`) | The core with Lexington from Canal to 106 St as four tracks: pairs at 18 St, Grand Central, 53 St and 92 St; local A and express X every 5 min each | $25.7B (+$2.4B) | 1.35M on day 11 (−0.3%) | Operating +$1.3M/day; −$0.63M/day after bond interest; rated BB |
+| **Express** (`scenario=express`) | The core with Lexington from Canal to 106 St as four tracks: cross-platform hubs at Grand Central and 92 St, the other seven trunk stations local-only (three or four skipped between hubs); local A and express X every 5 min each, the express half a headway after the local | $24.7B (+$1.4B; $18.7B of bonds) | 1.36M on day 11 (+1.1%) | Operating +$1.3M/day; −$0.51M/day after bond interest (core −$0.28M); rated BBB |
 
-**Four tracks and express service** (day 11 of 12, details in `docs/v2/express-quad.md`):
+**Four tracks and express service** (day 11 of 12, details in `docs/v2/express-quad.md`; London against its
+all-stops twin, `allstops=1`: the same stations on double track):
 
-| Trunk | Run time, local / express | Trains | Riders, local + express | Lateness, local / express | Overtakes a day | Left behind (network) |
-|---|---|---|---|---|---|---|
-| New York, Lexington | 18.3 / 14.0 min (13 / 8 stops) | 11 + 9 (core: 20) | 219,570 + 257,810 (core: 487,160) | 120 / 191 s | 170 (local 20) | 537k (core 824k) |
-| London, Oxford Street and the City | 18.7 / 15.3 min (13 / 9 stops) | 11 + 9 (core: 19) | 91,800 + 108,240 | 9 / 27 s | 148 | 150 (core 120) |
+| Trunk | Run time, local / express | Trains | Riders, local + express | Lateness, local / express | Overtakes a day | Cross-platform transfers a day | Left behind (network) |
+|---|---|---|---|---|---|---|---|
+| New York, Lexington | 18.3 / 12.2 min (13 / 6 stops) | 11 + 8 (core: 20) | 321,610 + 171,640 (core: 487,160) | 168 / 53 s | 169 | 16,855 | 479k (core 824k) |
+| London, Oxford Street and the City | 17.9 / 13.6 min (12 / 7 stops) | 11 + 9 (twin: 20) | 111,880 + 93,490 (twin: 205,630) | 10 / 11 s | 194 | 3,639 | 510 (twin 400) |
 
-The express saves 4.3 minutes end to end in New York (3.4 in London), overtakes a local on about
-every other trip and relieves crowding, but ridership doesn't rise: each rider waits for one route, so at
-5 minutes each a station both serve waits twice as long as on the core's single 2.5-minute route.
-Changing across the platform costs more than one or two skipped stops save, so neither scenario has
-cross-platform transfers (the West Side headless test, with three or four local stops between
-pairs, has about 6,000 a day). A quad is a service investment that pays only on long, dense
-corridors. With the local kept at 2.5 minutes and the express added on top (`localPeak=2.5
-expressPeak=5`): 1.36M riders (+0.7%) for −$0.77M/day after interest (London 763k, −£2.7M/day).
+The express saves 6.1 minutes end to end in New York (4.3 in London). Riders take the first train
+of either at a station both routes serve when it gets them to their stop about as soon, and on a
+local at a hub they step across to an express that is in, or due within five minutes, when it still
+gets them there sooner; the express leaves half a headway after the local, so at the shared stations
+the two alternate. Commuters whose trip passes at least three of the express's skipped stations
+(the same commuters in both runs, by the all-stops paths) ride 7.2 minutes faster by express in New
+York (53.0 → 45.8 min door to door, with half the crowding) and 0.7 minutes in London (52.9 → 52.2;
+its trips are dominated by long walks). Riders (boardings) rise 1.1% in New York and 0.2% in
+London, but fare-paying journeys stay level (−0.2% and −0.3%): the trunk's through trips already go
+85% (London 95%) by transit, so faster trips win few new commuters, and splitting the trains between
+two routes halves the service at the local-only stations.
+
+So the express network still earns less than the all-stops one: −$0.51M against −$0.28M a day after
+interest (London −£2.23M against −£2.09M). The gap is the quad's capital: with the express pair
+free, the New York express would run within $59k a day of the core (London £42k). Paying for $1.4B of
+four-track works from fares would take about 38,000 more transit commuters (+6%). The express
+review cut the gap from $0.35M to $0.23M a day (the express pair now costs ×0.5 of a double track,
+a cross-platform pair 1.4× a station) and fitted London under the bond cap (£19.8B of £20B; line D
+without its three least-used central stations). Keeping the local at 2.5 minutes and adding the
+express on top (`localPeak=2.5 expressPeak=5`): 1.38M riders (+2.3%) for −$0.63M/day after interest
+(London 763k, −£2.39M/day, and over the cap).
 
 So the core covers its operating costs and interest at about 1.45–1.5M riders. Repaying the
 principal as well needs more ridership or a higher fare. The sprawl network loses money every
@@ -359,7 +380,7 @@ are in `CITY_BALANCE.london`:
 |---|---|---|---|---|
 | **Core** (`city=london scenario=core`) | 4 deep routes, 43 stations: Paddington–Bank–Stratford, Kentish Town–King's Cross–Elephant–Brixton, Victoria–Waterloo–Canary Wharf–North Greenwich, Hammersmith–Piccadilly–Cannon St–Shadwell | £24.3B (needs £19.3B of bonds) | 764k on day 11, 13% transit share | Operating −£0.31M/day; −£2.2M/day after bond interest; rated BB (new bonds 3.75%: it recovers 86% of its operating costs; New York's anchors would rate it CCC) |
 | **Sprawl** (`scenario=sprawl`) | Elevated Dagenham–Upminster and Eltham–Bexleyheath | £3.43B | 16k | −£0.59M/day; rated BB with no debt |
-| **Express** (`city=london scenario=express`) | The core with west of Marble Arch to east of Bank as four tracks: pairs at Marble Arch, Oxford Circus, Holborn and Bank; local A (adds Bond Street, Chancery Lane) and express X every 5 min each | £26.6B (+£2.3B; £21.6B of bonds, over the cap) | 761k on day 11 (−0.3%) | Operating −£0.43M/day; −£2.5M/day after bond interest; rated BB |
+| **Express** (`city=london scenario=express`) | The core with west of Marble Arch to east of Bank as four tracks and the Central line's Chancery Lane added to line A: hubs at Oxford Circus and Bank, the other five trunk stations local-only; line D without Covent Garden, Temple and Tower Hill (to stay within the bond cap); local A and express X every 5 min each | £24.8B (£19.8B of bonds, within the cap; the all-stops twin £23.9B) | 764k on day 11 (twin 762k, +0.2%) | Operating −£0.33M/day; −£2.2M/day after bond interest (twin −£2.1M); rated BB |
 
 (With `ops=off`: 761k, £24.2B, −£0.29M/−£2.1M a day; sprawl £3.38B, −£0.59M/day, as before
 operations control.)
@@ -403,9 +424,12 @@ boardings, 1,090 waiting; 176 / 140 / 152 ms against 173 / 223 / 200 ms for the 
 interleaved runs). `perf -- quads=5` (325 stations, 30 routes, 494 trains, 25 cross-platform pairs,
 40 merge locks, about 440 overtakes by 08:00) takes 176–255 ms (London 183 ms), within the 300 ms
 target. Re-measured after the UI (which adds no sim work): 157 / 148 ms for the code before it
-against 147 / 175 ms, and 212 ms for `quads=5`. On the main thread, the track tool's four-track
-preview (a clone, the stroke, every new edge's report and the tooltip) takes about 1.2 ms per mouse
-move on that grid (p90 4 ms).
+against 147 / 175 ms, and 212 ms for `quads=5`. After the express review (riders taking the first
+train of either and stepping across to a due express, the express timed between the locals), 3
+interleaved runs: 120 / 176 / 113 ms for the code before it against 121 / 143 / 134 ms, the same
+40,320 boardings and 1,090 waiting; `quads=5` 185 / 182 ms (London 167 ms), 695 overtakes by 08:00.
+On the main thread, the track tool's four-track preview (a clone, the stroke, every new edge's
+report and the tooltip) takes about 1.2 ms per mouse move on that grid (p90 4 ms).
 
 **Living City.** The peak hour never crosses a month, so it is unchanged: 40,320 boardings and
 1,090 waiting as before, 220–266 ms against 211–265 ms for the code before Living City in
@@ -899,6 +923,11 @@ about month 17–19 on Steady (extrapolated) and month 6–7 on Boom.
   them a few pixels further apart at every zoom; a pair's route lines, trains, local-only stops and
   capsule ends follow the push, while clicks still pick by distance in metres (which is always the
   side the cursor is on).
-- Riders wait for one route: at a station both a local and an express serve, nobody takes "the first
-  train of either", so an express on a 5-minute headway beside a 5-minute local doesn't add the
-  ridership a combined 2.5-minute service would (see the express balance rows).
+- Express service on the trains, not in the plans: riders take the first train of either and step
+  across to an express that is in or due, but route planning and the timetable mode choice falls
+  back on (for a group nobody rode yesterday) still see each route's own headway. An express always
+  leaves half a headway after the slots an ordinary route gets (there is no per-route offset to set),
+  which spaces it between a local at the same headway at the shared stations but times no
+  connections at the hubs. On these corridors an express wins few new commuters (the long trips
+  already go by transit), so it doesn't pay back its four-track works in fares (see the express
+  balance rows).

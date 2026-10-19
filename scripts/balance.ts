@@ -12,10 +12,12 @@
  * the Upper East Side; London: Oxford Street and the City, without line D's three least-used
  * central stations, to stay within the bond cap), an all-stops local A and an express X calling at
  * the trunk's hubs, each at twice the core's headway by default (localPeak= / expressPeak= set
- * their peak minutes); it prints both routes' run times, trains, riders, lateness and overtakes,
- * the transfers across the platform and the long trips on the trunk. allstops=1 builds its
+ * their peak minutes, localCars= / expressCars= their train lengths); it prints both routes' run
+ * times, trains, riders, lateness and overtakes, the transfers across the platform and the trips
+ * through the trunk (past at least 3 of the express's skipped stations). allstops=1 builds its
  * all-stops twin instead: the same stations on double track, one route A at the core's headways
- * (New York: exactly the core). long=1 prints the long-trip line for any scenario.
+ * (New York: exactly the core). long=1 prints the through-trip line for any scenario; exact=1 the
+ * money lines in thousands.
  * Living City: pace= sets the growth pace (default Steady, as a new game; pace=off is the code
  * before Living City). A growth month closes at each calendar month end (from day 18, 31 Jan
  * 2030). months=N instead runs N growth months of monthDays=K days each (default 5: shares
@@ -36,6 +38,8 @@ import {
   buildLondonSprawlNetwork,
   buildSprawlNetwork,
   CARS,
+  LONDON_EXPRESS_SKIPS,
+  NYC_EXPRESS_SKIPS,
   fund,
   PEAK,
 } from './scenarios';
@@ -112,7 +116,9 @@ if (scenario === 'test') {
     const hw = pair
       ? { am: pk, pm: pk, midday: pk * 2, evening: Math.max(6, (pk / 2) * 3) * 2, night: k === 'X' ? 0 : 20 }
       : { am: PEAK, pm: PEAK, midday: PEAK * 2, evening: Math.max(6, PEAK * 3), night: 20 };
-    makeRoute(game, k === 'X' ? 'Line A Express' : `Line ${k}`, k, colors[(k === 'X' ? 0 : i) % colors.length], stops, CARS, hw, 'heavy', undefined, k === 'X');
+    // localCars= / expressCars= set the trunk routes' train lengths (default: cars=, 10).
+    const cars = pair ? Number((k === 'X' ? args.expressCars : args.localCars) ?? CARS) : CARS;
+    makeRoute(game, k === 'X' ? 'Line A Express' : `Line ${k}`, k, colors[(k === 'X' ? 0 : i) % colors.length], stops, cars, hw, 'heavy', undefined, k === 'X');
   });
 }
 if (controlArg === 'tp') for (const r of game.routes.list()) game.routes.update(r.id, { control: { ...r.control, timepoints: suggestTimepoints(r, game.routes.list()) } });
@@ -185,6 +191,8 @@ for (const r of months > 0 ? [] : run.reports) console.log(`  day ${r.day}: ride
 const opCost = f.operating + f.staffing + f.maintenance;
 console.log(`last day: revenue ${fmtMoney(f.revenue)} · operating ${fmtMoney(f.operating)} (${Math.round(f.carKm).toLocaleString()} car-km) · staffing ${fmtMoney(f.staffing)} · maintenance ${fmtMoney(f.maintenance)}`);
 console.log(`  operating result ${fmtMoney(f.revenue - opCost, { sign: true })}/day · after bond interest ${fmtMoney(f.revenue - opCost - interest, { sign: true })}/day · after full debt service ${fmtMoney(f.revenue - opCost - debtService, { sign: true })}/day`);
+// exact=1: the same three figures in thousands (for comparing close scenarios).
+if (args.exact === '1') console.log(`  exact (k/day): operating ${((f.revenue - opCost) / 1e3).toFixed(0)} · after bond interest ${((f.revenue - opCost - interest) / 1e3).toFixed(0)} · after full debt service ${((f.revenue - opCost - debtService) / 1e3).toFixed(0)}`);
 // Living City: the last growth month's value capture per day, on top of the last day's result.
 const lastGm = growthReports[growthReports.length - 1];
 const vcPerDay = lastGm ? lastGm.growth!.valueCapture / monthWeekdays(lastGm.day) : 0;
@@ -207,30 +215,42 @@ if (scenario === 'express') {
   console.log(`  four-track: ${pairs} cross-platform stations · ${Math.round(mean((x) => sum(x.crossTransfers))).toLocaleString()} cross-platform transfers/day · last day ${JSON.stringify(last.crossTransfers ?? {})}`);
 }
 if (scenario === 'express' || args.long === '1') {
-  // Long trips on the trunk: commuters whose morning journey rides line A (or its express) for at
-  // least 5 km, by planned path; their door-to-door time as observed (as mode choice sees it), and
-  // the fare-paying journeys of the whole network.
+  // Trips through the trunk: commuters whose morning journey rides line A (or its express) past at
+  // least 3 of the express's skipped stations (by name, so the all-stops twin and the core count
+  // the same trips), by planned path; their door-to-door time as observed (as mode choice sees it),
+  // crowding and planned transfers, and the fare-paying journeys of the whole network.
   const c = run.engine.commuters!;
   const trunk = new Set(game.routes.list().filter((r) => r.bullet === 'A' || r.bullet === 'X').map((r) => r.id));
-  const pos = new Map([...game.network.stations.values()].map((st) => [st.id, game.network.stationPos(st)]));
-  let n = 0, tSum = 0, all = 0;
+  const lineA = game.routes.list().find((r) => r.bullet === 'A');
+  const order = new Map((lineA?.stops ?? []).map((id, i) => [game.network.stations.get(id)!.name, i]));
+  const skips = new Set(cityId === 'london' ? LONDON_EXPRESS_SKIPS : NYC_EXPRESS_SKIPS);
+  const skipAt = (lineA?.stops ?? []).map((id) => skips.has(game.network.stations.get(id)!.name));
+  const nameOf = (id: number) => game.network.stations.get(id)?.name ?? '';
+  let n = 0, tSum = 0, all = 0, crowd = 0, xfer = 0;
   for (let g = 0; g < c.G; g++) {
     const p = c.pathAM[g];
     if (!p) continue;
-    let long = false;
+    let through = false;
     for (let i = 0; i < p.legs.length / 3; i++) {
-      const a = pos.get(p.legs[i * 3 + 1]), b = pos.get(p.legs[i * 3 + 2]);
-      if (trunk.has(p.legs[i * 3]) && a && b && Math.hypot(a.x - b.x, a.y - b.y) >= 5000) long = true;
+      if (!trunk.has(p.legs[i * 3])) continue;
+      const a = order.get(nameOf(p.legs[i * 3 + 1])), b = order.get(nameOf(p.legs[i * 3 + 2]));
+      if (a === undefined || b === undefined) continue;
+      let k = 0;
+      for (let j = Math.min(a, b) + 1; j < Math.max(a, b); j++) if (skipAt[j]) k++;
+      if (k >= 3) through = true;
     }
-    if (!long) continue;
+    if (!through) continue;
     const w = c.gCount[g] * c.shares[g * 3 + 2];
     const obs = c.obsTime[g];
     all += c.gCount[g];
     n += w;
     tSum += w * (obs > 0 ? obs : (p.time + c.pathPM[g]!.time) / 2);
+    crowd += w * c.obsCrowd[g];
+    xfer += (w * (p.transfers + c.pathPM[g]!.transfers)) / 2;
   }
   const journeys = last.fares.trips.reduce((a, b) => a + b, 0);
-  console.log(`  long trips on line A (≥ 5 km on it): ${Math.round(all * scale).toLocaleString()} commuters, ${Math.round(n * scale).toLocaleString()} by transit · door to door ${(tSum / Math.max(1, n) / 60).toFixed(1)} min · network journeys ${Math.round(journeys).toLocaleString()}/day`);
+  const per = (x: number) => (x / Math.max(1, n)).toFixed(2);
+  console.log(`  trips through the trunk (past ≥ 3 of the express's skipped stops on line A): ${Math.round(all * scale).toLocaleString()} commuters, ${Math.round(n * scale).toLocaleString()} by transit (${((100 * n) / Math.max(1, all)).toFixed(1)}%) · door to door ${(tSum / Math.max(1, n) / 60).toFixed(1)} min · crowding ${per(crowd)} min · transfers ${per(xfer)} · network journeys ${Math.round(journeys).toLocaleString()}/day`);
 }
 if (!opsOff) {
   // Fares by band and period on the last day, and the credit rating a player with this network

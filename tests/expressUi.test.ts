@@ -199,7 +199,8 @@ describe('express UI: track tool texts (§2.1)', () => {
     const ny = strip(quadStrokeTip(net, res, rep, 'deep', 'heavy'));
     expect(ny).toMatch(/^Four-track · Deep tunnel · Heavy metro/);
     expect(ny).toMatch(/Local pair [\d.]+ mi · \$[\d.]+B/);
-    expect(ny).toMatch(/Express pair ×0\.75 [\d.]+ mi · \$/);
+    expect(ny).toContain(`Express pair ×${QUAD.secondPairCostFactor} `);
+    expect(ny).toMatch(/Express pair ×[\d.]+ [\d.]+ mi · \$/);
     expect(ny).toContain('Turnouts/crossovers 2 scissors');
     expect(ny).toMatch(/Tightest curve [\d,]+ ft · \d+ mph \(inner|\((local|express) pair\)/);
     expect(ny).toMatch(/Line so far \$[\d.]+B/);
@@ -268,7 +269,7 @@ describe('express UI: station and bulldoze tools (§2.2)', () => {
   it('station and bulldoze texts for a pair, a link and a local-only stop, in both cities', () => {
     applyCity('nyc');
     const pair = strip(stationQuadTip({ mode: { kind: 'pair', partnerEdge: 1, partnerU: 2 }, role: 'local', level: 'deep', cars: 8, cost: 333e6, days: 30 }));
-    expect(pair).toBe('Cross-platform station · Deep tunnel · 8 cars Platforms local + express Cost $333M (2 platforms at 80%) Build time 30 days Click to place · Shift-click: only this pair');
+    expect(pair).toBe(`Cross-platform station · Deep tunnel · 8 cars Platforms local + express Cost $333M (2 platforms at ${Math.round(QUAD.pairPlatformCostShare * 100)}%) Build time 30 days Click to place · Shift-click: only this pair`);
     const net = stubGame().network;
     addQuadStroke(net, [P(0, 0), P(6000, 0)], 'heavy', none, none, { side: 1 });
     const id = platformAt(net, 3000, 0, 'local', '72 St');

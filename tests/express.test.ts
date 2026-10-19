@@ -32,6 +32,11 @@ import { measureExposure, trackSpans } from '../src/sim/incidents';
 import { hasExpressService, type CompiledNetwork, type CRoute, type CRouteDir } from '../src/sim/protocol';
 import { TrainSim, TState, type PassengerHooks, type Train } from '../src/sim/trainSim';
 import { effectiveTransfers, TransitGraph } from '../src/sim/transitGraph';
+import { toLonLat } from '../src/core/geo';
+import { buildWorld } from '../src/data/world';
+import { encodeOD } from '../src/data/odFormat';
+import { runDays } from '../src/sim/headless';
+import { Commuters } from '../src/sim/commuters';
 
 const dry: Terrain = { isWater: () => false, density: () => 0 };
 const P = (x: number, y: number, level: TrackLevel = 'deep'): StrokePoint => ({ x, y, level });
@@ -599,7 +604,10 @@ describe('city chaos on four tracks', () => {
     const a = count(false), b = count(true);
     expect(b.n).toBeGreaterThanOrEqual(a.n * 1.6);
     expect(b.sim.day.deadlocks).toBe(0);
-    expect(b.sim.day.overtakes.get(b.L.express.id) ?? 0).toBeGreaterThan(a.sim.day.overtakes.get(a.L.express.id) ?? 0);
+    // Overtaking goes on (the extra expresses leave between the locals, half a headway apart, so
+    // they need not catch one more local each).
+    expect(b.sim.day.overtakes.get(b.L.express.id) ?? 0).toBeGreaterThan(0);
+    expect(b.sim.day.overtakes.get(b.L.express.id) ?? 0).toBeGreaterThanOrEqual(a.sim.day.overtakes.get(a.L.express.id) ?? 0);
   });
 
   it("a long stall on the local pair is covered by the watchdog's grace; without the incident the stall is caught", () => {
@@ -790,11 +798,6 @@ void STATION;
 // Riders on an express trunk (review fixes): the first train of either at a station both routes
 // serve, and the change across the platform to an express dwelling there. A synthetic city of
 // two or three tracts along a quad, no real data.
-import { toLonLat } from '../src/core/geo';
-import { buildWorld } from '../src/data/world';
-import { encodeOD } from '../src/data/odFormat';
-import { runDays } from '../src/sim/headless';
-import { Commuters } from '../src/sim/commuters';
 
 function dIdOf(game: Game, name: string): number {
   return [...game.network.stations.values()].find((s) => s.name === name)!.id;
@@ -895,5 +898,54 @@ describe('riders on an express trunk', () => {
     expect(x2.buckets[kX(x.st.E[1])]).toEqual([3, 0, 1]);
     expect(l2.load).toBe(0);
   });
-});
+
+  it('a rider on the local steps across to wait for an express due at the other platform when it still gets there sooner', () => {
+    const x = trunkCity([{ h: 0, w: 1, n: 50 }], [[3000, 400], [8200, 400]]);
+    const net = compileNetwork(x.game).net;
+    const ri = net.routes.findIndex((r) => r.id === x.local.id), rx = net.routes.findIndex((r) => r.id === x.express.id);
+    const L = net.routes[ri], X = net.routes[rx];
+    const si = (id: number) => net.stations.findIndex((s) => s.id === id);
+    const kL = (id: number) => Array.from(L.dirs[0].stopStation).indexOf(si(id));
+    const kX = (id: number) => Array.from(X.dirs[0].stopStation).indexOf(si(id));
+    const mk = (route: number, r: CRoute, stop: number, id: number, state: TState): Train => ({
+      id, route, routeId: r.id, dir: 0, s: r.dirs[0].stopS[stop], v: 0, state, stop, until: 0, schedStart: 0, late: 0,
+      buckets: Array.from(r.dirs[0].stopS, () => [] as number[]), load: 0, elem: 0, lim: 0, locks: [], stoppedSince: 0, lastS: 0, holdUntil: 0, holdNext: 0, incident: 0, out: 0,
+    });
+    const t = 7 * 3600;
+    const jx = kX(x.st.C[1]);
+    const d0 = X.dirs[0];
+    /** The express running towards C's express platform, `share` of the way from its previous stop. */
+    const setup = (share: number) => {
+      const c = new Commuters(x.game.world, { agentScale: 1, seed: 1885, fares: x.game.fares });
+      c.setNetwork(net, 6 * 3600);
+      const local = mk(ri, L, kL(x.st.C[0]), 1, TState.Dwelling);
+      local.until = t + 25;
+      const express = mk(rx, X, jx, 2, TState.Running);
+      express.s = d0.stopS[jx - 1] + share * (d0.stopS[jx] - d0.stopS[jx - 1]);
+      local.buckets[kL(x.st.E[0])] = [0, 1, 2, 3, 4];
+      local.buckets[kL(dIdOf(x.game, 'D'))] = [5, 6, 7];
+      local.load = 8;
+      c.setTrains(() => [local, express]);
+      c.arrive(local, L, local.stop, t);
+      return { c, local, express };
+    };
+    // Due in about 30 s: the riders for E (the express skips D and D2) step across; those for D stay.
+    const near = setup(0.85);
+    expect(near.local.buckets[kL(x.st.E[0])]).toEqual([]);
+    expect(near.local.buckets[kL(dIdOf(x.game, 'D'))]).toEqual([5, 6, 7]);
+    expect(near.local.load).toBe(3);
+    expect(near.c.crossTransfersToday()).toEqual({ [Math.min(x.st.C[0], x.st.C[1])]: 5 });
+    // They reach the express platform after the step across, and the express takes them on to E.
+    near.c.step(t + QUAD.crossPlatformTransfer + 1);
+    near.express.state = TState.Dwelling;
+    near.express.s = d0.stopS[jx];
+    near.express.until = t + 70;
+    near.c.arrive(near.express, X, jx, t + 40);
+    expect([...near.express.buckets[kX(x.st.E[1])]].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4]);
+    expect(near.express.load).toBe(5);
+    // Still at its previous stop (about 3.5 min away): waiting would not pay, so nobody moves.
+    const far = setup(0);
+    expect(far.local.load).toBe(8);
+    expect(far.c.crossTransfersToday()).toEqual({});
+  });
 });

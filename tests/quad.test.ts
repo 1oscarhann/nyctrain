@@ -324,7 +324,7 @@ describe('quad strokes', () => {
     setUnits('metric');
   });
 
-  it('10. a deep → elevated quad ramps both pairs; express ×0.75 and connectors ×0.5 of ordinary track', () => {
+  it('10. a deep → elevated quad ramps both pairs; express ×secondPairCostFactor and connectors ×linkCostFactor of ordinary track', () => {
     const { net, r } = freeFree([P(0, 0, 'deep'), P(1500, 0, 'deep'), P(2600, 0, 'elevated'), P(4000, 0, 'elevated')]);
     expect(r.ok).toBe(true);
     expect(allOk(net, r.edges)).toEqual([]);
@@ -337,8 +337,8 @@ describe('quad strokes', () => {
     expect(lv(lr)).toEqual(['deep', 'elevated']);
     const cl = edgeReport(net, lr, dry), cx = edgeReport(net, xr, dry);
     expect(cx.length).toBeCloseTo(cl.length, 3);
-    expect(cx.cost / cl.cost).toBeGreaterThan(0.75 * 0.98);
-    expect(cx.cost / cl.cost).toBeLessThan(0.75 * 1.02);
+    expect(cx.cost / cl.cost).toBeGreaterThan(QUAD.secondPairCostFactor * 0.98);
+    expect(cx.cost / cl.cost).toBeLessThan(QUAD.secondPairCostFactor * 1.02);
     // A connector costs half of the same track untagged.
     const link = r.links[1];
     const plain = net.clone();
@@ -441,7 +441,7 @@ describe('quad strokes', () => {
 // Review fixes: the shared-works price needs the other pair, drags beside a fan, load sanitising
 // of tags, twins and pairs, and putting a bulldozed stretch of one pair back.
 describe('four-track repairs and guards', () => {
-  it('the express pair pays ×0.75 only where the local pair runs alongside; connectors only while both pairs exist', () => {
+  it('the express pair pays ×secondPairCostFactor only where the local pair runs alongside; connectors only while both pairs exist', () => {
     const net = new Network();
     const r = addQuadStroke(net, [P(0, 0), P(6000, 0)], 'heavy', none, none, { side: 1 });
     expect(r.ok).toBe(true);
@@ -730,7 +730,7 @@ describe('crossovers', () => {
 
 // ------------------------------------------------------------------------------------------
 describe('cross-platform stations', () => {
-  it('23. addStationPair links two platforms; both valid despite the crossover; each 0.8× a lone platform', () => {
+  it('23. addStationPair links two platforms; both valid despite the crossover; each pairPlatformCostShare × a lone platform', () => {
     const { net, r } = freeFree([P(0, 0), P(3000, 0)]);
     expect(r.links.length).toBe(12);
     const L = r.local.find((id) => net.geom(id).length > 1000)!;
