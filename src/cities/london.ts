@@ -46,6 +46,8 @@ export const LONDON: CityConfig = {
   valueCaptureTax: 'business rates and council tax',
   // The precedent is the Crossrail business rate supplement (2010), not US-style tax increment.
   defaultUnits: 'metric',
+  // GMT, BST from the last Sunday of March to the last Sunday of October.
+  timeZone: { utcOffset: 0, dst: 'eu' },
   valueCaptureDistrict: 'business rate supplement district',
   goals: [
     { id: 'cross-thames', title: 'Cross the Thames', detail: 'A running route linking boroughs north and south of the river.', kind: 'crossing', a: NORTH, b: SOUTH },

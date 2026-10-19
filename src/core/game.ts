@@ -20,6 +20,7 @@ import { Emitter } from './emitter';
 import { dayIndex } from './calendar';
 import { RouteSet } from '../routes/routeSet';
 import type { ChaosInit, DayExposure, ServiceOverride } from '../sim/protocol';
+import { emptyTimelapse, encodeTimelapse, recordFrame, type SavedTimelapse, type Timelapse, type TLFrame } from '../cinematic/timelapse';
 
 /** City chaos settings (saved). The calendar, weather and incident plan all derive from the seed. */
 export interface ChaosSettings {
@@ -83,6 +84,12 @@ export class Game {
   selection: Selection | null = null;
   /** City chaos: level (default Normal for new games), seed and planned event service. */
   chaos: ChaosSettings;
+  /**
+   * Cinematic (v2): the network at each month close, for the timelapse player (saved, v7). Main
+   * thread only: nothing in the simulation reads it.
+   */
+  private _timelapse: Timelapse = emptyTimelapse();
+  private timelapseSaved: SavedTimelapse | null = null;
 
   constructor(
     readonly world: World,
@@ -184,6 +191,27 @@ export class Game {
 
   get day(): number {
     return dayIndex(this.time);
+  }
+
+  // ------------------------------------------------------------------ timelapse (Cinematic)
+  get timelapse(): Timelapse {
+    return this._timelapse;
+  }
+
+  set timelapse(tl: Timelapse) {
+    this._timelapse = tl;
+    this.timelapseSaved = null;
+  }
+
+  /** Record the network as it is now as a timelapse frame (at a month close: the App and the headless scripts). */
+  recordTimelapse(day = this.day): TLFrame {
+    this.timelapseSaved = null;
+    return recordFrame(this._timelapse, day, this.network, this.routes);
+  }
+
+  /** The timelapse as a save stores it (encoded once per recorded frame). */
+  timelapseData(): SavedTimelapse {
+    return (this.timelapseSaved ??= encodeTimelapse(this._timelapse));
   }
 
   // ------------------------------------------------------------------ blueprint edits

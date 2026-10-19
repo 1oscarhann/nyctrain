@@ -69,6 +69,40 @@ export const MAP = {
 };
 
 // ---------------------------------------------------------------------------
+// Cinematic (v2, docs/v2/cinematic.md): main thread only; nothing here reaches the sim.
+export const CINEMATIC = {
+  /** The day/night palette is re-evaluated at most this often (App's 250 ms interval). */
+  tickMs: 250,
+  /** A palette colour is pushed to MapLibre only when a channel moved at least this much (of 255). */
+  minColourDelta: 2,
+  /** …and the light only when its direction moved at least this many degrees. */
+  minLightDegrees: 2,
+  /** Glow layers' opacity steps (the view is redrawn only when the night factor moves this much). */
+  glowStep: 0.02,
+  /** Follow-cam: chase pitch (degrees), default distance behind the train (m), its wheel range, easing (s). */
+  chasePitch: 72,
+  chaseDistance: 260,
+  chaseDistanceMin: 90,
+  chaseDistanceMax: 2500,
+  chaseLookAhead: 40,
+  chaseBearingTau: 0.7,
+  chasePitchTau: 0.45,
+  /** maxPitch while following (the horizon and the sky show at the chase pitch). */
+  chaseMaxPitch: 76,
+  /** maxZoom while following (the chase distance needs it at large windows). */
+  chaseMaxZoom: 20,
+  /** A followed train that leaves the snapshot (a turnaround, a recompile) is waited for this long (game s). */
+  followLostGameSec: 600,
+  /** Timelapse: at most this many frames, a save budget (characters), and the simplification tolerance (m). */
+  timelapseMaxFrames: 120,
+  timelapseMaxBytes: 600_000,
+  timelapseToleranceM: 1,
+  /** Player: real seconds per month at 1×, and the speeds offered. */
+  timelapseSecondsPerMonth: 1.1,
+  timelapseSpeeds: [1, 2, 4] as const,
+};
+
+// ---------------------------------------------------------------------------
 // Track
 export type TrackLevel = 'elevated' | 'at-grade' | 'cut-and-cover' | 'deep';
 export type TrackClass = 'heavy' | 'light';

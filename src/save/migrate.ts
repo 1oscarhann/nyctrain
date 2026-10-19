@@ -9,6 +9,7 @@ import { remainingPayments } from '../economy/finance';
 import { monthIndex } from '../core/calendar';
 import { legacyControl } from '../routes/control';
 import { SAVE_VERSION, type SaveFile } from './format';
+import { emptyTimelapse, encodeTimelapse } from '../cinematic/timelapse';
 
 type AnySave = Record<string, unknown> & { version?: number };
 type Loose = Record<string, any>;
@@ -112,6 +113,16 @@ const STEPS: Record<number, (s: AnySave) => AnySave> = {
     }
     s.game = game;
     s.version = 6;
+    return s;
+  },
+  // v6 → v7: the Cinematic timelapse (docs/v2/cinematic.md). Defaults only (??=), so it is
+  // idempotent: an empty timelapse; the first frame is recorded at the next month close, and the
+  // player always ends on the network as it is.
+  6: (s) => {
+    const game = (s.game ?? {}) as Loose;
+    game.timelapse ??= encodeTimelapse(emptyTimelapse());
+    s.game = game;
+    s.version = 7;
     return s;
   },
 };

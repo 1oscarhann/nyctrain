@@ -22,6 +22,8 @@ export const NYC: CityConfig = {
   lowIncomeBand: 'commuters earning $1,250 a month or less (the lowest LODES band)',
   valueCaptureTax: 'property tax',
   defaultUnits: 'imperial',
+  // Eastern time: EST, EDT from the second Sunday of March to the first Sunday of November.
+  timeZone: { utcOffset: -5, dst: 'us' },
   valueCaptureDistrict: 'Transit Improvement District',
   goals: [
     { id: 'east-river', title: 'Cross the East River', detail: 'A running route linking Manhattan with Brooklyn or Queens.', kind: 'crossing', a: ['Manhattan'], b: ['Brooklyn', 'Queens'] },

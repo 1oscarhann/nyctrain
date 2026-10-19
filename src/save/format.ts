@@ -10,12 +10,13 @@ import type { UnitSystem } from '../core/units';
 import type { ChaosLevel, CityId, GrowthPace } from '../balance';
 import type { DayExposure, ServiceOverride } from '../sim/protocol';
 import type { FarePolicy } from '../economy/fares';
+import type { SavedTimelapse } from '../cinematic/timelapse';
 
 /**
  * v3: city chaos (events, disruptions, weather). v4: operations control and the money market.
- * v5: Living City. v6: express services and four-track trunks.
+ * v5: Living City. v6: express services and four-track trunks. v7: the Cinematic timelapse.
  */
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 
 /**
  * Living City growth state (v5): what the saved groups (and so the saved mode shares) were
@@ -91,6 +92,8 @@ export interface SaveFile {
     chaos: SavedChaos;
     /** Living City pace (v5; older saves join on Steady). */
     growthPace: GrowthPace;
+    /** Cinematic (v7): the network at each month close (older saves start empty). */
+    timelapse: SavedTimelapse;
   };
   settings: SaveSettings;
   modeState: SavedModeState | null;

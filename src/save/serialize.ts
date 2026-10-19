@@ -6,6 +6,7 @@ import type { GoalState } from '../core/goals';
 import { Finance } from '../economy/finance';
 import { normalizeFares } from '../economy/fares';
 import type { DayExposure, DayReport, GrowthData, ModeState, ServiceOverride } from '../sim/protocol';
+import { decodeTimelapse } from '../cinematic/timelapse';
 import { b64ToF32, b64ToF64, b64ToU16, bytesToB64, f32ToB64, SAVE_VERSION, type SavedGrowth, type SaveFile, type SaveSettings } from './format';
 
 /** Living City state for a save (typed arrays as base64). */
@@ -115,6 +116,7 @@ export function buildSave(
         ...(game.chaos.dayExposure ? { dayExposure: JSON.parse(JSON.stringify(game.chaos.dayExposure)) as DayExposure } : {}),
       },
       growthPace: game.growthPace,
+      timelapse: game.timelapseData(),
     },
     settings: { ...extra.settings },
     modeState: ms ? { key: ms.key, shares: f32ToB64(ms.shares), obsTime: f32ToB64(ms.obsTime), obsCrowd: f32ToB64(ms.obsCrowd) } : null,
@@ -133,6 +135,8 @@ export function applySave(game: Game, save: SaveFile): { goals: GoalState; lastR
   game.routes.load(g.routes);
   game.finance = Finance.fromData(g.finance);
   game.chaos = sanitizeChaos(g.chaos, g.time, new Set(game.routes.list().map((r) => r.id)));
+  // A malformed timelapse decodes empty (the replay then starts from this load).
+  game.timelapse = decodeTimelapse(g.timelapse);
   const ms = save.modeState;
   return {
     goals: { ...g.goals },

@@ -49,7 +49,7 @@ import { creditScore, spreadOf } from '../src/economy/credit';
 import { fareSummary } from '../src/economy/fares';
 import { defaultControl, legacyControl, offControl, suggestTimepoints } from '../src/routes/control';
 import type { RouteControl } from '../src/routes/types';
-import { dumpRun } from './dump';
+import { dumpRun, timelapseRun } from './dump';
 import { edgeReport } from '../src/construction/validate';
 import { fmtMoney } from '../src/core/units';
 import { TIME } from '../src/balance';
@@ -163,6 +163,8 @@ const run = runDays(game, months > 0 ? months * monthDays : days, {
   agentScale: scale,
   ...(months > 0 ? { monthEvery: monthDays } : {}),
   onDay: (r) => {
+    // timelapse=1: a Cinematic timelapse frame at every day end, through the game's own path.
+    if (args.timelapse === '1') game.recordTimelapse(r.day);
     if (!r.growth) return;
     growthReports.push(r);
     console.log(growthLine(r));
@@ -283,6 +285,7 @@ if (!opsOff) {
   console.log(`  credit: ${res.metrics.map((m) => `${m.label} ${m.display}`).join(' · ')} → score ${res.score.toFixed(1)} → ${res.rating} (new bonds ${((BONDS.start + spreadOf(res.rating)) * 100).toFixed(2)}%)`);
 }
 if (args.dump) dumpRun(args.dump, run.reports, game, run.engine);
+if (args.timelapse === '1') timelapseRun(game, args.timelapseDump);
 if (growthReports.length) {
   // Living City summary: value capture per day of each growth month, the riders' trend, the city.
   const vcDay = (r: DayReport) => r.growth!.valueCapture / monthWeekdays(r.day);

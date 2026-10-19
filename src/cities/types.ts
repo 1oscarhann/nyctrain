@@ -4,6 +4,7 @@
  */
 import type { CityId } from '../balance';
 import type { UnitSystem } from '../core/units';
+import type { TimeZone } from '../cinematic/solar';
 
 export type { CityId };
 
@@ -65,4 +66,9 @@ export interface CityConfig {
   tutorial: { jobs: string; track: string };
   /** Extra data attribution shown on the map (licence requirements). */
   attribution?: string;
+  /**
+   * Cinematic (v2): the game clock is local civil time here; the sun (sunrise, sunset, the
+   * day/night palette) follows this zone and the city's CITY_BALANCE origin.
+   */
+  timeZone: TimeZone;
 }

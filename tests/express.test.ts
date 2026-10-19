@@ -758,8 +758,9 @@ describe('save v6', () => {
     save.version = 5;
     for (const r of save.game.routes.routes) delete r.express;
     const m = migrate(save);
-    expect(SAVE_VERSION).toBe(6);
-    expect(m.version).toBe(6);
+    // (v7 since the Cinematic timelapse: its step runs on the way.)
+    expect(SAVE_VERSION).toBe(7);
+    expect(m.version).toBe(SAVE_VERSION);
     expect(m.migratedFrom).toBe(5);
     expect(m.game.routes.routes.map((r) => r.express)).toEqual([false, false]);
     expect(m.game.lastReport).toMatchObject({ day: 3, riders: 7, routeOvertakes: {}, crossTransfers: {} });

@@ -23,3 +23,12 @@ export function dumpRun(path: string, reports: DayReport[], game: Game, engine: 
   );
   console.log(`dumped ${reports.length} days to ${path}`);
 }
+
+/** timelapse=1: what the recorded Cinematic timelapse holds (and its save encoding, to `path`). */
+export function timelapseRun(game: Game, path?: string): void {
+  const tl = game.timelapse;
+  const d = game.timelapseData();
+  const last = tl.frames[tl.frames.length - 1];
+  console.log(`timelapse: ${tl.frames.length} frames (days ${tl.frames[0]?.day ?? '—'}–${last?.day ?? '—'}) · ${tl.edges.size} edges, ${tl.stations.size} stations, ${tl.shapes.length} route shapes · last frame ${last?.edges.length ?? 0} edges, ${last?.routes.length ?? 0} routes · encoded ${(d.data.length + JSON.stringify(d.shapes).length).toLocaleString()} chars`);
+  if (path) writeFileSync(path, JSON.stringify(d));
+}
