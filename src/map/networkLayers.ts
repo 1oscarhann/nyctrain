@@ -140,7 +140,11 @@ export interface RouteDrawInfo {
   operational: boolean;
 }
 
+export const ROUTE_GLOW_LAYER = 'hw-route-glow';
+const OWN_PREFIXES = ['hw-hilite', 'hw-track-', 'hw-quad-', 'hw-construct', 'hw-route-', 'hw-blueprint'];
+
 export class NetworkLayers {
+  private glow = 0;
   private hatchFrame = 0;
   private hatchTimer: number | null = null;
   /** Elevated pieces for the 3D renderer: [lon, lat, z] paths with colour/offset. */
@@ -249,6 +253,16 @@ export class NetworkLayers {
       'line-opacity': ['get', 'opacity'],
       ...extra,
     });
+    // Cinematic: route lines glow at night (a blurred halo under them; its opacity is the only
+    // property the day/night cycle changes, a constant, so a change is a uniform).
+    add({
+      ...base,
+      id: ROUTE_GLOW_LAYER,
+      source: ROUTE_SOURCE,
+      filter: elevatedVisible as never,
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { ...routePaint(), 'line-width': W(MAP.routeLineWidthPx + 10), 'line-blur': W(7), 'line-opacity': 0 } as never,
+    });
     add({ ...base, id: 'hw-route-elevated-casing', source: ROUTE_SOURCE, filter: ['all', routeLevel('elevated'), elevatedVisible] as never, paint: { ...routePaint(), 'line-color': '#D5DCE3', 'line-width': W(MAP.routeLineWidthPx + 3) } as never });
     add({ ...base, id: 'hw-route-elevated', source: ROUTE_SOURCE, filter: ['all', routeLevel('elevated'), elevatedVisible] as never, paint: routePaint() as never });
     add({ ...base, id: 'hw-route-at-grade', source: ROUTE_SOURCE, filter: routeLevel('at-grade') as never, paint: routePaint() as never });
@@ -277,6 +291,19 @@ export class NetworkLayers {
       filter: ['all', ['==', ['get', 'status'], 'blueprint'], ['!', ['get', 'valid']]],
       paint: { 'line-color': RED, 'line-opacity': 0.95, 'line-width': W(3.4), 'line-dasharray': [2, 1.4], 'line-offset': pairOff },
     });
+  }
+
+  /** Night glow under the route lines (0 = off: MapLibre skips a line layer at opacity 0). */
+  setGlow(night: number): void {
+    const v = Math.round(night * 0.55 * 100) / 100;
+    if (v === this.glow) return;
+    this.glow = v;
+    this.map.setPaintProperty(ROUTE_GLOW_LAYER, 'line-opacity', v, { validate: false });
+  }
+
+  /** The MapLibre layers this owns (the timelapse player hides them while it plays). */
+  layerIds(): string[] {
+    return (this.map.getStyle().layers ?? []).map((l) => l.id).filter((id) => id.startsWith('hw-') && OWN_PREFIXES.some((p) => id.startsWith(p)));
   }
 
   /** Rebuild all line features from the game state. */

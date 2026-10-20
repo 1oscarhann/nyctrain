@@ -214,6 +214,34 @@ export class SimClient {
     return out;
   }
 
+  /**
+   * One train, interpolated as trains() does (the follow-cam asks every frame for one id, without
+   * building the whole list). Null when the train is not in the latest snapshot.
+   */
+  trainView(id: number, now = performance.now()): TrainView | null {
+    const cur = this.latest;
+    if (!cur) return null;
+    const A = cur.trains;
+    let i = -1;
+    for (let k = 0; k < A.length; k += TRAIN_STRIDE) if (A[k] === id) {
+      i = k;
+      break;
+    }
+    if (i < 0) return null;
+    let s = A[i + 3];
+    const prev = this.prev;
+    if (prev) {
+      const f = Math.max(0, Math.min(1, (now - this.latestAt) / this.interval));
+      const P = prev.trains;
+      for (let k = 0; k < P.length; k += TRAIN_STRIDE) {
+        if (P[k] !== id) continue;
+        if (P[k + 1] === A[i + 1] && P[k + 2] === A[i + 2] && A[i + 3] >= P[k + 3]) s = P[k + 3] + (A[i + 3] - P[k + 3]) * f;
+        break;
+      }
+    }
+    return { id, route: A[i + 1], dir: A[i + 2], s, v: A[i + 4], load: A[i + 5], late: A[i + 6], state: A[i + 7], nextStop: A[i + 8] };
+  }
+
   /** Interpolated game time. */
   time(now = performance.now()): number {
     const cur = this.latest;

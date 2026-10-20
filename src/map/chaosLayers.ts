@@ -14,6 +14,7 @@ import { toLonLat } from '../core/geo';
 import type { Alert } from '../sim/protocol';
 import type { FeedEvent } from '../ui/alertFeed';
 import { fmtK, shortDate } from '../ui/alertFeed';
+import { ADDITIVE, GLOW_MIN, VENUE_GLOW } from '../cinematic/glow';
 
 const DEPTH = { depthCompare: 'always', depthWriteEnabled: false } as const;
 const dashExt = new PathStyleExtension({ dash: true });
@@ -46,6 +47,7 @@ interface SignalSeg {
 
 export class ChaosLayers {
   private venues: VenueMarker[] = [];
+  private todayCache: { version: number; list: VenueMarker[] } | null = null;
   private incidents: IncidentMarker[] = [];
   private signals: SignalSeg[] = [];
   private ring: { pos: [number, number] } | null = null;
@@ -88,7 +90,7 @@ export class ChaosLayers {
   }
 
   /** Under the trains: signal segments, the focused venue's ring and venue markers (labels: venueLabelLayers). */
-  venueLayers(): Layer[] {
+  venueLayers(glow = 0): Layer[] {
     const v = this.version;
     const out: Layer[] = [];
     if (this.signals.length) {
@@ -139,6 +141,25 @@ export class ChaosLayers {
       );
     }
     if (this.venues.length) {
+      // Cinematic: today's venues are floodlit at night (additive halo; its own data until the markers change).
+      if (glow >= GLOW_MIN) {
+        if (this.todayCache?.version !== v) this.todayCache = { version: v, list: this.venues.filter((d) => d.today) };
+        if (this.todayCache.list.length)
+          out.push(
+            new ScatterplotLayer<VenueMarker>({
+              id: 'chaos-venue-glow',
+              data: this.todayCache.list,
+              getPosition: (d) => d.pos,
+              getRadius: (d) => d.radius * 3.2 + 10,
+              radiusUnits: 'pixels',
+              getFillColor: VENUE_GLOW,
+              billboard: true,
+              opacity: glow,
+              parameters: ADDITIVE,
+              updateTriggers: { getPosition: v, getRadius: v },
+            }),
+          );
+      }
       out.push(
         new ScatterplotLayer<VenueMarker>({
           id: 'chaos-venues',

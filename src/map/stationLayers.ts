@@ -12,6 +12,7 @@ import { lineScale } from './networkLayers';
 import type { Game } from '../core/game';
 import { progress } from '../construction/blueprint';
 import { computeInterchanges } from '../routes/interchange';
+import { ADDITIVE, GLOW_MIN, STATION_GLOW } from '../cinematic/glow';
 
 export interface StationStat {
   /** Daily boardings (real people, scaled up). */
@@ -202,7 +203,9 @@ export class StationLayers {
     ];
   }
 
-  layers(zoom: number, time: number): Layer[] {
+  private allCache: { version: number; all: StationDatum[] } | null = null;
+
+  layers(zoom: number, time: number, glow = 0): Layer[] {
     const pulse = 0.5 + 0.5 * Math.sin(time / 260);
     const showLabels = zoom >= 13.2;
     const zKey = Math.round(zoom * 20);
@@ -226,7 +229,23 @@ export class StationLayers {
     };
     const pairLine = (d: PairDatum): [number, number, number, number] =>
       this.closed.has(d.id) || this.closed.has(d.b) ? [255, 93, 93, 255] : d.status === 'construction' ? [255, 194, 74, 255] : d.status === 'blueprint' ? [255, 255, 255, 160] : [22, 27, 33, 255];
+    // Cinematic: a warm glow around every built station at night (same data object until the stations change).
+    if (this.allCache?.version !== this.version) this.allCache = { version: this.version, all: all.filter((d) => d.status === 'built') };
+    const lit = this.allCache.all;
     return [
+      glow >= GLOW_MIN &&
+        lit.length > 0 &&
+        new ScatterplotLayer<StationDatum>({
+          id: 'station-glow',
+          data: lit,
+          getPosition: posOf,
+          getRadius: (d) => d.radius + 10,
+          radiusUnits: 'pixels',
+          getFillColor: STATION_GLOW,
+          opacity: glow,
+          parameters: ADDITIVE,
+          updateTriggers: { getPosition: [this.version, zKey], getRadius: this.version },
+        }),
       new PathLayer<PillDatum>({
         id: 'station-pill-outline',
         data: this.pills,

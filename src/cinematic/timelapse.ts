@@ -633,3 +633,61 @@ export function frameStats(tl: Timelapse, f: TLFrame): { trackM: number; station
   }
   return { trackM, stations: f.stations.length, routes: f.routes.filter((r) => r.running).length };
 }
+
+/** One route's stretch of one edge in a frame, as the player draws it. */
+export interface RoutePiece {
+  shape: number;
+  edge: number;
+  /** The part of the edge (metres from node a). */
+  s0: number;
+  s1: number;
+  /** Drawn b→a (the frame's orientation): the points are reversed and the offset is in that direction. */
+  flip: boolean;
+  /** Sideways offset in px at line scale 1 (positive = right of the drawn direction), as the live map's interlining. */
+  offsetPx: number;
+  running: boolean;
+}
+
+/**
+ * The frame's route pieces with the live map's interlining (networkLayers.update): routes sharing
+ * an edge side by side in route-id order, centred on a four-track pair's push.
+ */
+export function routePieces(tl: Timelapse, f: TLFrame, spacingPx: number, lineWidthPx: number, pairGapPx: number): RoutePiece[] {
+  const flips = new Map(f.edges.map((e) => [e.id, e.flip]));
+  const onEdge = new Map<number, { shape: number; id: number; s0: number; s1: number; running: boolean }[]>();
+  for (const r of f.routes) {
+    const sh = tl.shapes[r.shape];
+    if (!sh) continue;
+    for (const [edge, u0, u1] of sh.legs) {
+      if (!flips.has(edge)) continue;
+      let l = onEdge.get(edge);
+      if (!l) onEdge.set(edge, (l = []));
+      const ex = l.find((x) => x.shape === r.shape);
+      if (ex) {
+        ex.s0 = Math.min(ex.s0, u0);
+        ex.s1 = Math.max(ex.s1, u1);
+      } else l.push({ shape: r.shape, id: sh.id, s0: u0, s1: u1, running: r.running });
+    }
+  }
+  const out: RoutePiece[] = [];
+  for (const [edge, list] of onEdge) {
+    list.sort((a, b) => a.id - b.id);
+    const k = list.length;
+    const flip = flips.get(edge) ?? false;
+    const away = tl.edges.get(edge)?.away ?? 0;
+    const push = away ? away * (((k - 1) * spacingPx) / 2 + lineWidthPx / 2 + pairGapPx / 2) : 0;
+    const base = flip ? -push : push;
+    list.forEach((r, i) => out.push({ shape: r.shape, edge, s0: r.s0, s1: r.s1, flip, offsetPx: base + (i - (k - 1) / 2) * spacingPx, running: r.running }));
+  }
+  return out;
+}
+
+/** A deep enough copy for the player (geometry arrays are never mutated, so they are shared). */
+export function cloneTimelapse(tl: Timelapse): Timelapse {
+  return {
+    edges: new Map(tl.edges),
+    stations: new Map(tl.stations),
+    shapes: tl.shapes.map((s) => ({ ...s, legs: s.legs.map((l) => [l[0], l[1], l[2]] as [number, number, number]) })),
+    frames: tl.frames.map((f) => ({ day: f.day, edges: f.edges.map((e) => ({ ...e })), stations: f.stations.map((s) => ({ ...s })), routes: f.routes.map((r) => ({ ...r })) })),
+  };
+}

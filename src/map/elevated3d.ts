@@ -13,6 +13,7 @@ import { toLonLat } from '../core/geo';
 import type { Network } from '../construction/network';
 import { edgePieces, lineScale, type NetworkLayers } from './networkLayers';
 import { offsetPolyline, slicePolyline } from './polyline';
+import { ADDITIVE, GLOW_MIN } from '../cinematic/glow';
 
 export const STRUCTURE_SOURCE = 'hw-elevated-structure';
 const offsetExt = new PathStyleExtension({ offset: true });
@@ -78,13 +79,30 @@ export class Elevated3D {
   }
 
   /** Coloured elevated lines at deck height (3D only). */
-  layers(net: NetworkLayers, is3D: boolean, zoom: number): Layer[] {
+  layers(net: NetworkLayers, is3D: boolean, zoom: number, glow = 0): Layer[] {
     if (!is3D || !net.elevated3d.length) return [];
     const DEPTH = { depthCompare: 'always', depthWriteEnabled: false } as const;
     const k = lineScale(zoom);
     const w = MAP.routeLineWidthPx * k;
     type D = NetworkLayers['elevated3d'][number];
+    const gw = w + 10 * k;
     return [
+      // Cinematic: the lines on the structure glow at night (additive, under the casing).
+      glow >= GLOW_MIN &&
+        new PathLayer<D, PathStyleExtensionProps<D>>({
+          id: 'elevated-glow',
+          data: net.elevated3d,
+          getPath: (d) => d.path,
+          getColor: (d) => [d.color[0], d.color[1], d.color[2], Math.round(d.color[3] * 0.45)],
+          getWidth: gw,
+          widthUnits: 'pixels',
+          capRounded: true,
+          getOffset: (d) => (d.offset * k) / gw,
+          extensions: [offsetExt],
+          opacity: glow,
+          parameters: ADDITIVE,
+          updateTriggers: { getOffset: k, getWidth: k },
+        }),
       new PathLayer<D, PathStyleExtensionProps<D>>({
         id: 'elevated-casing',
         data: net.elevated3d,
@@ -109,6 +127,11 @@ export class Elevated3D {
         parameters: DEPTH,
         updateTriggers: { getOffset: k, getWidth: k },
       }),
-    ];
+    ].filter(Boolean) as Layer[];
+  }
+
+  /** The MapLibre layers this owns (the timelapse player hides them while it plays). */
+  layerIds(): string[] {
+    return ['hw-elevated-structure'];
   }
 }

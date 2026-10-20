@@ -11,6 +11,7 @@ import { toLonLat } from '../core/geo';
 import type { CompiledNetwork, CRouteDir } from '../sim/protocol';
 import type { TrainView } from '../sim/client';
 import { hexRgb } from '../map/networkLayers';
+import { ADDITIVE, EXPRESS_GLOW, GLOW_MIN } from '../cinematic/glow';
 
 export interface TrainDatum {
   id: number;
@@ -59,11 +60,7 @@ export class TrainLayer {
       const tail = Math.max(0, head - r.trainLength);
       const path = samplePath(dir, tail, head, is3D);
       if (path.length < 2) continue;
-      const el = elementAt(dir, head - r.trainLength / 2);
-      const offAB = el ? (offsets.get(`${el.edge}:${r.id}`) ?? 0) : 0;
-      const travelOffset = el && el.edgeDir === 1 ? -offAB : offAB;
-      // Right-hand running: each direction sits slightly to its own side of the line.
-      out.push({ id: t.id, path, color: col, offset: (travelOffset * scale + 1.6) / WIDTH, train: t, express: !!r.express });
+      out.push({ id: t.id, path, color: col, offset: trainOffsetPx(dir, r.id, head - r.trainLength / 2, offsets, scale) / WIDTH, train: t, express: !!r.express });
     }
     this.data = out;
   }
@@ -75,7 +72,7 @@ export class TrainLayer {
     this.alertedVersion++;
   }
 
-  layers(zoom: number, onPick: (id: number) => void): Layer[] {
+  layers(zoom: number, onPick: (id: number) => void, glow = 0): Layer[] {
     if (zoom < MAP.trainMinZoom || !this.data.length) return [];
     const DEPTH = { depthCompare: 'always', depthWriteEnabled: false } as const;
     const sel = this.selected;
@@ -83,7 +80,24 @@ export class TrainLayer {
     const casing = (d: TrainDatum) => (d.id === sel || al.has(d.id) ? WIDTH + 5 : WIDTH + 2.5);
     // Stalled or held trains: a white rim outside the red casing, so it reads on red routes too.
     const halo = al.size ? this.data.filter((d) => al.has(d.id) && d.id !== sel) : [];
+    const GW = WIDTH + 12;
     return [
+      // Cinematic: a halo in the route colour at night (white for expresses), blended additively.
+      glow >= GLOW_MIN &&
+        new PathLayer<TrainDatum, PathStyleExtensionProps<TrainDatum>>({
+          id: 'trains-glow',
+          data: this.data,
+          getPath: (d) => d.path,
+          getColor: (d) => (d.express ? EXPRESS_GLOW : [d.color[0], d.color[1], d.color[2], 120]),
+          getWidth: GW,
+          widthUnits: 'pixels',
+          capRounded: true,
+          jointRounded: true,
+          getOffset: (d) => (d.offset * WIDTH) / GW,
+          extensions: [offsetExt],
+          opacity: glow,
+          parameters: ADDITIVE,
+        }),
       halo.length > 0 &&
         new PathLayer<TrainDatum, PathStyleExtensionProps<TrainDatum>>({
           id: 'trains-alert-rim',
@@ -132,6 +146,19 @@ export class TrainLayer {
       }),
     ].filter(Boolean) as Layer[];
   }
+}
+
+/**
+ * The drawn sideways offset of a train (px at line scale 1 × scale, positive = right of travel):
+ * its route's interline (and four-track pair) offset on the edge under its middle, plus the
+ * right-hand running nudge. The follow-cam uses it to sit on the train as drawn.
+ */
+export function trainOffsetPx(dir: CRouteDir, routeId: number, sMid: number, offsets: Map<string, number>, scale = 1): number {
+  const el = elementAt(dir, sMid);
+  const offAB = el ? (offsets.get(`${el.edge}:${routeId}`) ?? 0) : 0;
+  const travelOffset = el && el.edgeDir === 1 ? -offAB : offAB;
+  // Right-hand running: each direction sits slightly to its own side of the line.
+  return travelOffset * scale + 1.6;
 }
 
 /** Points of a route-direction polyline between path distances s0 and s1. */
