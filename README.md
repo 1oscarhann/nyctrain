@@ -22,13 +22,15 @@ npm run preview      # serve dist/
 
 From the title screen: pick the city (New York / London; remembered), then **New game**
 (career, $6B in New York, £5B in London), **Sandbox** (unlimited money, instant construction),
-**Load game**, **Settings** (units, agent scale) and **Continue** (the autosave). Units follow
+**Load game**, **Settings** (units, agent scale, day and night) and **Continue** (the autosave). Units follow
 the city (miles in New York, kilometres in London) until you pick some for that city in Settings
 or the menu. Saves remember
 their city, so loading a London save from the New York title screen switches over. A new game
 asks for the city chaos level (Off / Calm / Normal / Wild, remembered; Normal by default) and
 offers an 8-step tutorial. The city grows around good transit once a month ([Living City](#living-city);
-Steady by default).
+Steady by default). The light follows the game clock: dawn, day, dusk and night with each city's own
+sunrise and sunset, lit windows and glowing lines at night, a follow camera, photo mode and a
+timelapse of your network ([Cinematic](#cinematic)).
 
 ### Data
 
@@ -103,6 +105,10 @@ Open Government Licence v3.0.
 | E (Route tool) | Local or express draft |
 | Alt-click (Route tool) | The other platform of a cross-platform station |
 | Shift-click (Bulldoze) | Only this platform of a cross-platform station (the other stays as a lone platform) |
+| P | Photo mode on / off: the interface hides (L letterbox, C caption with date, time and city); Esc or P leaves |
+| Follow (train panel) or F (a train selected) | The camera follows the train: a chase camera in 3D, centred in 2D; F, Esc or dragging the map stops; the wheel sets the distance |
+| Film button (toolbar) | Timelapse: replay the network's growth month by month (Space play / pause, ← → a month, Esc closes) |
+| Menu → Light, title → Settings | Day and night / Always day; lit windows or dark (per browser) |
 
 All toolbar buttons have tooltips that show their shortcut.
 
@@ -118,6 +124,7 @@ src/
   cities/         New York and London: regions, goals, copy, naming style; applyCity() switches everything
   core/           geo (local metres around City Hall), calendar (weekdays only), city chaos calendar and weather, units, game state, goals
   data/           world loading, tract index, land mask
+  cinematic/      day/night palette and the sun (palette.ts, solar.ts), the runtime light (daylight.ts), night glow, follow-cam (chase.ts maths, followCam.ts), photo mode, timelapse recording/encoding and player
   map/            MapLibre style recolouring, network/station/elevated layers (four-track pair push, cross-platform capsules), overlays (city growth: growthMath.ts), naming and tract names (placeNames.ts), city chaos markers
   construction/   track graph with arc fillets, levels and ramps, validation and costs, four-track sections and crossovers (quad.ts), tools
   routes/         route pathfinding on track, compilation for the sim, fleet sizing and car sales, operations control settings, express patterns (express.ts), route tool, event service estimates
@@ -146,14 +153,15 @@ control settings and the express flag), finances (bonds with their coupons,
 the bond market and the rating), the fare policy, goals, the day's mode shares and observations,
 the city chaos level (today's and the one from the next 3 am), seed, today's incident-plan
 basis and planned event service, and the city's growth (pace, per-tract multipliers and balancing
-factors, the land-value premium and a thinned history; save format v6; older saves migrate). The
+factors, the land-value premium and a thinned history), and the Cinematic timelapse (the network
+at each month close, compactly encoded; save format v7; older saves migrate). The
 commuters are rebuilt from the data, scaled by the saved growth, when the save is loaded.
 
 ## Testing each part
 
 ```bash
-npm test                 # all 301 tests (unit + headless, both cities)
-npm run test:unit        # 274: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
+npm test                 # all 338 tests (unit + headless, both cities)
+npm run test:unit        # 311: geometry, costs, ramps, water, pathfinding, logit, kinematics, economy, London,
                          # chaos (calendar, weather, incidents, train-sim hooks and the watchdog's scope, event
                          # trips, event service, save v3 with today's level), chaos UI (alert text, feed and
                          # ticker order, announcements, cancelled service, wrap-up toasts, London wording and £),
@@ -184,7 +192,14 @@ npm run test:unit        # 274: geometry, costs, ramps, water, pathfinding, logi
                          # units and currency in both cities), link candidates, the Line list, the Overtakes
                          # card, the merged station figures, the route tool's insert-in-order and Alt-click,
                          # event cards and construction labels listing a pair once, Service edits that change
-                         # nothing
+                         # nothing; Cinematic: the day/night palette (keyframes, OKLab mixing, weather tints,
+                         # the change threshold, the light), sunrise and sunset in both cities (published times
+                         # at the solstices and an equinox, DST rules, London's shorter winter days), the chase
+                         # camera maths and the drawn train pose (interline and pair offsets, track height), the
+                         # timelapse (recording, bounds, size cap, encode/decode, the draw schedule, the replay's
+                         # frames, timing, draw-in and stations popping up), save v7, the runtime light against a
+                         # fake map (paint pushed only on change, Always day, windows twice a day), the settings,
+                         # and the copy in both cities (follow chip, photo caption, timelapse counter and units)
 npm run test:headless    # 27: 3 days on the test network (with regularity and fares by band and period),
                          # holding against no holding, holding next to Wild chaos and event service, chaos end
                          # to end (closures, event agents, determinism, snow, breakdowns, Off is inert, mid-day
@@ -198,6 +213,7 @@ npm run sim -- days=3    # headless run of the test network, with a daily summar
 npm run sim -- days=3 chaos=normal           # the same with city chaos: weather, incidents and events per day
 npm run sim -- days=3 ops=off                # operations control, fare policy and bond market all off: as before v2
 npm run sim -- days=3 pace=off               # Living City off (pace=off|steady|boom; the default Steady first grows after day 18)
+npm run sim -- days=3 timelapse=1            # Cinematic: also record a timelapse frame every day end (timelapseDump=file.json)
 npm run balance -- scenario=core days=12     # ~40-station core: ridership, daily money, regularity, credit rating
 npm run balance -- scenario=sprawl days=8    # low-density sprawl: should lose money
 npm run balance -- city=london scenario=core days=12   # the same for London (43 stations)
@@ -222,7 +238,8 @@ the mode shares, for comparing two versions field by field. With `pace=off` ever
 byte-identical to the code before Living City, including runs that cross a month end. A network
 with no four-track sections and no express routes is byte-identical to the code before them
 (`headless-sim days=3`, `balance` core and sprawl in both cities, core over 25 days across the
-January month close, and the perf peak hour).
+January month close, and the perf peak hour). Cinematic never touches the simulation: every dump
+is byte-identical to the code before it (tag `pre-cinematic`), with or without `timelapse=1`.
 
 To check each milestone by hand in `npm run dev`:
 
@@ -280,6 +297,13 @@ To check each milestone by hand in `npm run dev`:
     **Express pattern**, **All stops**), the Line list with **Skip** / **Stop here** and the
     *Overtakes yesterday* card, and the station panel shows a pair as one station with its
     cross-platform transfers. **B** on a pair demolishes both platforms (Shift: one).
+11. **Cinematic:** a new game starts at 5 am, before sunrise: the map is night blue, lines,
+    trains and stations glow, and in 3D (**V**) the buildings' windows are lit. Run to dawn (about
+    7:20 in New York in January, 8:04 in London), day, dusk and night; rain greys the city and snow
+    whitens it. Click a train and **Follow**: in 3D the camera rides behind and above it, the chip at
+    the bottom says where it is going and any hold or incident; drag the map or press Esc to stop.
+    **P** hides everything but the map and the attribution (**L** letterbox, **C** caption). After a
+    month end or two, the film button replays the network growing. Menu → Light: Always day.
 
 ## Balance
 
@@ -893,6 +917,78 @@ fares (value capture is ≈ 9% of fares in both cities). With month 12's value c
 calendar-year runs had 0 deadlocks on all 262 days in both cities. *Land value pays* comes at
 about month 17–19 on Steady (extrapolated) and month 6–7 on Boom.
 
+## Cinematic
+
+The city by day and by night, a camera that rides with a train, a photo mode and a timelapse of
+your network (design: `docs/v2/cinematic.md`, whose end has the implementation notes). It all
+runs on the main thread from the game clock and the latest snapshot; nothing is sent to the
+worker, and the simulation is the same with any of it in use.
+
+### In the game
+
+- **Day and night.** The light follows the game clock: dawn, day, golden hour, dusk and night are
+  interpolated (in OKLab) on the recoloured basemap: land, water, parks, roads, labels, the
+  building footprints, the 3D buildings, the fill-extrusion light's colour, intensity and
+  direction (from the sun's azimuth and height), and the sky. Sunrise and sunset come from each
+  city's latitude, longitude, time zone and daylight saving and the game date (NOAA solar
+  equations): on Tue 8 Jan 2030 New York's sun rises at 7:20 and sets at 16:46 (9 h 26 min),
+  London's at 8:04 and 16:11 (8 h 7 min); on 24 June London's day is 16 h 38 min against New
+  York's 15 h 5 min. Blue hour is cool on the
+  buildings with the warmth on the horizon; the avenues' street lights come on at dusk. Weather
+  tints it (rain greys and wets the streets, snow whitens the ground and roofs, heat hazes) by day
+  and by night; the weather chip shows a moon on a clear night.
+- **Night glow.** Route lines, trains (white for expresses), stations, elevated lines and today's
+  event venues glow at night (additive blending); a station closed by police activity stays dark.
+  In 3D the buildings' windows light up after sunset (a seeded window pattern: the same in every
+  session).
+- **Follow-cam.** **Follow** in the train panel (or **F** with a train selected) locks the camera
+  to the train: in 3D a chase camera behind and above it, aimed at track height (elevated +8 m),
+  its bearing eased to the train's heading on the interpolated path, sitting on the train as drawn
+  (interline and four-track pair offsets); in 2D a centre lock. The chip at the bottom names the
+  route, the next stop and the load, with any incident or hold first ("Held at 96 St for an even
+  gap", "Stalled: mechanical problem…", "Bank is closed: running through"). The wheel sets the
+  chase distance; dragging the map, Esc or F stops. A train turning round at a terminal is waited
+  for (10 game minutes at most). **V** switches between the chase and the centre lock.
+- **Photo mode (P).** The interface hides (panels keep their state and come back as they were);
+  **L** letterbox bars, **C** a caption ("TUE 8 JAN 2030 · 18:42 · NEW YORK", and the weather when
+  it isn't clear). The map attribution stays visible over the letterbox (licence requirement).
+  Space, 1–4, V and F still work; P or Esc leaves.
+- **Timelapse** (film button). The network is recorded at every month end (in the save, bounded to
+  120 frames and 600,000 characters, compactly encoded; save v7, older saves start empty). The
+  player replays it from an empty city to now: new lines draw themselves out from the existing
+  network, stations pop up as the line reaches them, with the month and the track length (miles
+  or kilometres), stations and routes counting up. Space plays and pauses, ← → step a month, 1×
+  2× 4×, a scrubber; the game is paused while it plays, and Esc puts everything back.
+- **Settings.** Menu → Light (or Settings on the title screen): **Day and night** (default) or
+  **Always day** (the map as before: no runtime style changes at all), lit windows or dark. Per
+  browser, not in saves. The title screen is blue hour with the windows lit.
+
+### Identity and performance
+
+**Identity.** Nothing in Cinematic reaches the worker or touches the RNG, the event order or any
+state the sim reads: the timelapse is recorded on the main thread from the network and routes,
+the follow-cam reads the latest snapshot, and the rest is rendering. Every `dump=` output
+(`DayReport`s, `finance.toData()`, the share and observation hashes) is byte-identical to the
+code before it (tag `pre-cinematic`) for `headless-sim days=3` (chaos Off and Normal), `balance`
+core over 25 days across the 31 January month close in New York and London, and `balance`
+express (4 days) in both cities, both as they are and while recording a timelapse frame every day
+end (`timelapse=1`). The worker bundle is the same code (65 bytes more: the cities' time zones).
+
+**Performance.** `npm run perf` (3 interleaved runs, New York; 2 for London) is unchanged, as it
+must be: the same 40,320 boardings and 1,090 waiting (London 34,380 and 1,380); the peak hour took
+161–197 ms before against 128–159 ms now (London 146–155 against 141–176 ms) and the month closes
+181–283 against 163–338 ms (London 108–196 against 101–179 ms), all noise. On the main thread
+(measured in the browser): a day/night tick 0.006–0.017 ms when nothing moved, a full palette
+push 0.2–0.26 ms (at most four times a second, only in twilight), a followed train's pose
+0.001–0.005 ms per frame, and collecting the deck.gl layers with the night glow 0.30–0.38 ms a
+frame against 0.30–0.31 ms by day. The software renderer here takes 180–200 ms a frame at
+960 × 600, so frame rates were compared, not measured: the night palette and the glow change
+nothing (183 ms against 183 ms in 2D), following a train in 3D costs the same as not following
+(about 1,100 ms either way at 1×), but the lit windows (a pattern on every 3D building) take
+about +65% of the software renderer's frame in 3D at night (1,100 against 670 ms). That is GPU
+texture sampling emulated on the CPU, not main-thread work; *Dark* in Menu → Light turns the
+windows off.
+
 ## Known issues
 
 - Changing the city chaos level redraws the announced events from that level's calendar at
@@ -931,3 +1027,10 @@ about month 17–19 on Steady (extrapolated) and month 6–7 on Boom.
   connections at the hubs. On these corridors an express wins few new commuters (the long trips
   already go by transit), so it doesn't pay back its four-track works in fares (see the express
   balance rows).
+- Cinematic: the frame rate could only be judged relatively here (software WebGL takes about
+  0.5 s a frame at 1440 × 900). The sky shows only above the horizon, so at the chase camera's 72°
+  it is rarely in view. The lit-window pattern covers roofs as well as walls (they read as rooftop
+  lights). The timelapse draws elevated lines on the ground and does not grow the buildings. A save
+  from before Cinematic replays straight from an empty city to the network as it is until its next
+  month ends are recorded. A followed train turning round is waited for 10 game minutes at most
+  (trains leave the snapshot while they queue at a terminal).

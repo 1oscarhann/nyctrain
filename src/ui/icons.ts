@@ -29,6 +29,7 @@ export const ICONS = {
   // Cinematic: the timelapse (a film strip), follow-cam (a crosshair), photo mode (a camera).
   film: '<rect x="4" y="5" width="16" height="14" rx="1.5"/><path d="M4 9h16 M4 15h16 M8 5v4 M12 5v4 M16 5v4 M8 15v4 M12 15v4 M16 15v4" stroke-width="1.4"/>',
   follow: '<circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><path d="M12 2.5v3 M12 18.5v3 M2.5 12h3 M18.5 12h3"/>',
+  moon: '<path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10Z"/>',
   camera: '<path d="M4 8.5h3.2L9 6h6l1.8 2.5H20V18H4Z"/><circle cx="12" cy="13" r="3.2"/>',
   ticket: '<path d="M4 8.5V6h16v2.5a2.5 2.5 0 0 0 0 5V18H4v-4.5a2.5 2.5 0 0 0 0-5Z"/><path d="M14 6.5v11" stroke-dasharray="2 2"/>',
 };

@@ -10,7 +10,8 @@ import { Commuters, type RegenStats } from './commuters';
 import { flatFares, type FarePolicy } from '../economy/fares';
 import { Growth, servedStations, type Benefits } from './growth';
 import { emptyStats } from './regularity';
-import type { Alert, ChaosInit, CompiledNetwork, DayChaosInfo, DayReport, GrowthData, GrowthMonth, GrowthView, LiveStats, ModeState, ServiceOverride, SimState, Snapshot, TractGrowth } from './protocol';
+import type { Alert, ChaosInit, CompiledNetwork, DayChaosInfo, DayReport, DayStories, GrowthData, GrowthMonth, GrowthView, LiveStats, ModeState, ServiceOverride, SimState, Snapshot, StoryPick, TraceData, TractGrowth } from './protocol';
+import { DailyPicks, StoryTracer } from './stories';
 import { GROWTH_LABEL, hasExpressService, SNAP_HELD, TRAIN_STRIDE } from './protocol';
 import { TrainSim, TState } from './trainSim';
 
@@ -22,6 +23,8 @@ export interface EngineCallbacks {
   alert?(a: Alert): void;
   /** City chaos: today's level, weather and events (3 am, or on start after 3 am). */
   dayChaos?(info: DayChaosInfo): void;
+  /** Commuter stories: the day's notable commuters, right after dayEnd (only while setStoriesDaily(true)). */
+  dayStories?(s: DayStories): void;
 }
 
 export interface EngineOptions {
@@ -66,6 +69,8 @@ export class Engine {
   private benefitCache: Benefits | null = null;
   /** The starting city's agents are all pre-placed (or need not be): see Commuters.prePlace. */
   private prePlaceDone = false;
+  /** Commuter stories (v2): the traced agent's recorder (null without a world). Read-only for the sim. */
+  readonly stories: StoryTracer | null;
   private cb: EngineCallbacks;
 
   constructor(world: World | null, opts: EngineOptions, cb: EngineCallbacks = {}) {
@@ -90,6 +95,7 @@ export class Engine {
       opts.agentScale,
     );
     this.commuters?.setTrains(() => this.trains.trains);
+    this.stories = this.commuters ? new StoryTracer(this.commuters, this.trains) : null;
     this.chaos = new ChaosController(opts.chaos ?? { level: 'off', seed: CHAOS.defaultSeed }, this.trains, this.commuters, {
       alert: (a) => cb.alert?.(a),
       dayChaos: (i) => cb.dayChaos?.(i),
@@ -166,6 +172,8 @@ export class Engine {
     this.chaos.step(t1);
     this.trains.step(t1, dt);
     this.commuters?.step(t1);
+    // Commuter stories: the traced rider's train (holds, incidents); nothing when nobody is traced.
+    if (this.commuters && this.commuters.traceA >= 0) this.stories!.poll(t1);
     // Living City: while the city has not grown yet, its agents get their per-agent placements a
     // few thousand per step (side arrays; ≈ 70 steps), so the first month close only copies them.
     if (!this.prePlaceDone) {
@@ -183,6 +191,8 @@ export class Engine {
 
   private closeDay(day: number): void {
     const c = this.commuters;
+    // Commuter stories: the day's notable commuters, resolved before any regeneration renumbers them.
+    const stories = c?.daily ? c.daily.finish(day, (a) => c.storyWho(a)) : null;
     const tr = this.trains.day;
     const routeLateness: Record<number, number> = {};
     for (const [rid, v] of tr.routeLate) routeLateness[rid] = v.n ? v.sum / v.n : 0;
@@ -219,6 +229,26 @@ export class Engine {
     this.chaos.endDay();
     this.trains.resetDay();
     this.cb.dayEnd?.(report);
+    if (stories) this.cb.dayStories?.(stories);
+  }
+
+  // ------------------------------------------------------------------ Commuter stories (v2)
+  /** Look for the commuter of the day (candidate checks at boarding and arrival). Off by default. */
+  setStoriesDaily(on: boolean): void {
+    const c = this.commuters;
+    if (!c) return;
+    if (!on) c.daily = null;
+    else c.daily ??= new DailyPicks(c.aState.length);
+  }
+
+  /** Trace an agent (the old story ends); null when nobody fits (the old story goes on). */
+  storyPick(pick: StoryPick): TraceData | null {
+    return this.stories?.pick(pick, this.time) ?? null;
+  }
+
+  /** End the story. */
+  storyStop(): void {
+    this.stories?.stop();
   }
 
   // ------------------------------------------------------------------ Living City
@@ -309,7 +339,11 @@ export class Engine {
     });
     const waiting = this.commuters?.waitingByStation(this.net?.stations.length ?? 0) ?? new Float64Array(this.net?.stations.length ?? 0);
     const live: LiveStats = this.commuters?.live() ?? { ridersToday: 0, tripsInProgress: 0, inSystem: 0 };
-    return { time: this.time, netVersion: this.net?.version ?? -1, trains: arr, waiting, live, simRate };
+    const snap: Snapshot = { time: this.time, netVersion: this.net?.version ?? -1, trains: arr, waiting, live, simRate };
+    // Commuter stories: only while a story is open.
+    const story = this.stories?.live();
+    if (story) snap.story = story;
+    return snap;
   }
 }
 

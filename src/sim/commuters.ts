@@ -16,11 +16,13 @@ import type { World } from '../data/world';
 import { eventCosts, originCdf, reverseLegs, sampleBand, sampleCdf, venueGeometry } from './eventTrips';
 import type { OdFactors } from './growth';
 import {
+  driveMoney,
   driveTripTime,
   fareOddsMultiplier,
   generalisedCosts,
   logitShares,
   logsum,
+  moneyToMinutes,
   MODE_DRIVE,
   MODE_TRANSIT,
   MODE_WALK,
@@ -30,7 +32,8 @@ import {
   type PairGeometry,
   type TransitCostInput,
 } from './modeChoice';
-import { hasExpressService, type CompiledNetwork, type CRoute, type CRouteDir, type DayReport, type EventDayInfo, type EventOutcome, type LiveStats, type ModeState, type ServiceOverride } from './protocol';
+import { hasExpressService, type CabWhy, type CompiledNetwork, type CRoute, type CRouteDir, type DayReport, type EventDayInfo, type EventOutcome, type LiveStats, type ModeState, type ServiceOverride, type StoryPick, type StoryPlan, type StoryWho, type TraceEvent } from './protocol';
+import type { DailyPicks, TraceSink } from './stories';
 import { effectiveTransfers, TransitGraph } from './transitGraph';
 import { periodIndex, TState, type PassengerHooks, type Train } from './trainSim';
 
@@ -500,6 +503,15 @@ export class Commuters implements PassengerHooks {
   private baselineCache = new Map<string, number>();
   /** The no-subway baseline under today's weather (equals baseline on a clear day). */
   baselineToday = 0;
+  // ---- Commuter stories (v2, docs/v2/commuter-stories.md)
+  /**
+   * The traced agent (−1: nobody). Every hook is one `a === this.traceA` compare before a call
+   * that only reads sim state and records an event: nothing the sim reads is written.
+   */
+  traceA = -1;
+  tracer: TraceSink | null = null;
+  /** Commuter of the day: O(1) candidate checks at boarding and arrival (null: off). */
+  daily: DailyPicks | null = null;
 
   constructor(world: World, opts: { agentScale: number; seed: number; fares: FarePolicy; modeState?: ModeState; factors?: OdFactors | null }, cb: EngineCb = {}) {
     this.world = world;
@@ -802,7 +814,9 @@ export class Commuters implements PassengerHooks {
    * Mid-day (tests, scripts) the rest of the day is scheduled again (startDay).
    */
   regenerate(factors: OdFactors, t: number): RegenStats {
-    const stuck = this.resetTrips();
+    // Commuter stories: who is traced (agent indices change below), found again at the end.
+    const traced = this.traceA >= 0 ? this.storyWho(this.traceA) : null;
+    const stuck = this.resetTrips(t);
     this.day.stuck += stuck;
     // The pool's agents are indexed past A, which changes: they go now (as at 3 am). Today's
     // events and tallies stay, for wrap-ups still due.
@@ -891,6 +905,8 @@ export class Commuters implements PassengerHooks {
       shares[g * 3 + 1] = p[1];
       shares[g * 3 + 2] = p[2];
     }
+    if (this.daily) this.daily.resize(this.aState.length);
+    if (traced) this.retrace(traced, t);
     this.startDay(t);
     return { groups: G, agents: this.A, kept, newBands, newPairs: need.length, dropped: old.G - kept, stuck, replaced };
   }
@@ -990,12 +1006,14 @@ export class Commuters implements PassengerHooks {
       }
       for (const a of moving) {
         const np = this.platformFor(a);
-        if (np < 0) this.finishByCab(a, t);
+        if (np < 0) this.finishByCab(a, t, 'network');
         else this.enqueue(a, np);
       }
     }
     this.recomputePaths();
     this.last.netVersion = net.version;
+    // Commuter stories: the traced commuter's plan on the new network.
+    if (this.traceA >= 0) this.tracer!.setPlan(this.storyPlan(this.traceA, t));
   }
 
   /** Platform for an agent's current leg in the current network (−1 if it no longer exists). */
@@ -1259,8 +1277,10 @@ export class Commuters implements PassengerHooks {
   private drawModesAndSchedule(dayStart: number, now: number): void {
     // Anyone still out from yesterday is sent home (counted as stuck); yesterday's event-goers
     // are removed (the pool empties).
-    this.day.stuck += this.resetTrips();
+    this.day.stuck += this.resetTrips(now);
     this.resetEventPool();
+    // Commuter stories: an event-goer's day is over (the pool's agents are drawn again).
+    if (this.traceA >= this.A) this.untrace('eventOver');
     const d = this.day;
     // Fares that vary by time of day tilt each agent's transit odds by its own trips' fare against
     // the group's expected fare (no extra RNG draws; with one fare all day the draw is exactly v1's).
@@ -1315,6 +1335,8 @@ export class Commuters implements PassengerHooks {
         }
       }
     }
+    // Commuter stories: the traced commuter's new day (today's mode and plan).
+    if (this.traceA >= 0) this.tracer!.newDay(now, this.storyPlan(this.traceA, now));
   }
 
   /**
@@ -1323,8 +1345,13 @@ export class Commuters implements PassengerHooks {
    * Returns how many were mid-trip (stuck). Shared by the 3 am plan and regeneration, since
    * either can change agent indices or plans.
    */
-  private resetTrips(): number {
+  private resetTrips(t: number): number {
     let stuck = 0;
+    const ta = this.traceA;
+    if (ta >= 0) {
+      const s = this.aState[ta];
+      if (s === S_WALK || s === S_WAIT || s === S_RIDE || s === S_EGRESS) this.tracer!.add({ k: 'stuck', t });
+    }
     for (let a = 0; a < this.A + this.evUsed; a++) {
       const s = this.aState[a];
       if (s === S_WALK || s === S_WAIT || s === S_RIDE || s === S_EGRESS) stuck++;
@@ -1366,10 +1393,11 @@ export class Commuters implements PassengerHooks {
           break;
         case E_GIVEUP:
           if (this.aState[a] === S_WAIT && et - this.aWaitStart[a] >= COMMUTERS.maxPlatformWait - 1) {
+            if (a === this.traceA) this.tracer!.add({ k: 'giveup', t: et, station: this.platStationId(this.aPlat[a]), waited: et - this.aWaitStart[a] });
             this.leaveQueue(a);
             this.day.gaveUp++;
             if (a >= this.A) this.evTally[this.evGroups[this.aGroup[a]].ev].gaveUp += this.scale;
-            this.finishByCab(a, et);
+            this.finishByCab(a, et, 'giveup');
           }
           break;
       }
@@ -1384,9 +1412,11 @@ export class Commuters implements PassengerHooks {
     this.aCrowd[a] = 0;
     this.aBoarded[a] = 0;
     this.aLeft[a] = 0;
+    if (this.daily) this.daily.crossed[a] = 0;
     if (!path) {
       // Lost their transit option (network changed): drive today.
       const dt = this.driveTime(g, pm);
+      if (a === this.traceA) this.tracer!.add({ k: 'drive', t, t1: t + dt, pm });
       this.recordTrip(a, t + dt, false);
       return;
     }
@@ -1397,32 +1427,34 @@ export class Commuters implements PassengerHooks {
     const net = this.net!;
     const st = net.stations[this.stationById.get(path.legs[1]) ?? -1];
     if (!st) {
-      this.finishByCab(a, t);
+      this.finishByCab(a, t, 'gone');
       return;
     }
     const x = pm ? this.aWx[a] : this.aHx[a];
     const y = pm ? this.aWy[a] : this.aHy[a];
     const walk = (Math.hypot(st.x - x, st.y - y) * COMMUTERS.walkDetour) / (COMMUTERS.walkSpeed * this.wx.walkSpeed);
     this.aState[a] = S_WALK;
+    if (a === this.traceA) this.tracer!.add({ k: 'walk', t, t1: t + walk, why: 'access', from: [x, y], to: [st.x, st.y], station: st.id, pm });
     this.push(t + walk, a, E_PLATFORM);
   }
 
   private arrivePlatform(a: number, t: number): void {
     const p = this.platformFor(a);
     if (p < 0) {
-      this.finishByCab(a, t);
+      this.finishByCab(a, t, 'gone');
       return;
     }
     const cu = this.closedUntil;
     if (cu.length) {
       const until = cu[this.graph!.platStation[p]];
       if (until > t) {
-        this.closedAt(a, until, t);
+        this.closedAt(a, until, t, this.graph!.platStation[p]);
         return;
       }
     }
     this.aWaitStart[a] = t;
     this.enqueue(a, p);
+    if (a === this.traceA) this.tracer!.add(this.waitEvent(p, t));
     this.push(t + COMMUTERS.maxPlatformWait, a, E_GIVEUP);
   }
 
@@ -1449,27 +1481,33 @@ export class Commuters implements PassengerHooks {
     // Alight
     const off = train.buckets[stopIdx] ?? [];
     train.buckets[stopIdx] = [];
+    const ta = this.traceA;
     for (const a of off) {
       this.aLeg[a]++;
+      if (a === ta) this.tracer!.add({ k: 'alight', t, station: station.id, route: route.id, train: train.id });
       if (this.aLeg[a] < this.aLegN[a]) {
         // Transfer: walk to the next platform.
         const o = (a * MAX_LEGS + this.aLeg[a]) * 3;
         const ni = this.stationById.get(this.aLegs[o + 1]) ?? -1;
         const nextSt = net.stations[ni];
         let walk: number;
+        const across = !!nextSt && station.pair === ni;
         if (nextSt && station.pair === ni) {
           // Four-track sections (v2): a step across the island platform to the partner.
           walk = QUAD.crossPlatformTransfer;
           const key = Math.min(station.id, nextSt.id);
           this.day.crossTransfers.set(key, (this.day.crossTransfers.get(key) ?? 0) + 1);
+          if (this.daily) this.daily.crossed[a] = 1;
         } else walk = nextSt ? (Math.hypot(nextSt.x - station.x, nextSt.y - station.y) / (1.2 * this.wx.walkSpeed) + 60) : 60;
         this.aState[a] = S_WALK;
+        if (a === ta) this.tracer!.add({ k: 'walk', t, t1: t + walk, why: across ? 'across' : 'transfer', from: [station.x, station.y], to: nextSt ? [nextSt.x, nextSt.y] : [station.x, station.y], station: nextSt?.id ?? -1, pm: this.aPM[a] === 1 });
         this.push(t + walk, a, E_PLATFORM);
       } else {
         const x = this.aPM[a] ? this.aHx[a] : this.aWx[a];
         const y = this.aPM[a] ? this.aHy[a] : this.aWy[a];
         const walk = (Math.hypot(station.x - x, station.y - y) * COMMUTERS.walkDetour) / (COMMUTERS.walkSpeed * this.wx.walkSpeed);
         this.aState[a] = S_EGRESS;
+        if (a === ta) this.tracer!.add({ k: 'walk', t, t1: t + walk, why: 'egress', from: [station.x, station.y], to: [x, y], station: -1, pm: this.aPM[a] === 1 });
         this.push(t + walk, a, E_ARRIVE);
       }
     }
@@ -1495,6 +1533,7 @@ export class Commuters implements PassengerHooks {
   /** Board from the platform queue up to crush capacity. Left-behinds are counted once, as the train leaves. */
   private board(train: Train, route: CRoute, stopIdx: number, t: number, countLeft: boolean): number {
     const graph = this.graph!;
+    const net = this.net!;
     const p = graph.base[train.route][train.dir] + stopIdx;
     const q = this.queues[p];
     let head = this.qHead[p];
@@ -1508,6 +1547,7 @@ export class Commuters implements PassengerHooks {
     const peak = isPeakTime(t) ? 1 : 0;
     const ft = this.fareTable;
     const day = this.day;
+    const ta = this.traceA, daily = this.daily;
     let boarded = 0;
     while (head < q.length && train.load < capAgents) {
       const a = q[head++];
@@ -1517,14 +1557,15 @@ export class Commuters implements PassengerHooks {
       if (k === undefined || k <= stopIdx) {
         // Can't ride to the stop they want any more.
         this.leaveQueue(a);
-        this.finishByCab(a, t);
+        this.finishByCab(a, t, 'cantRide');
         continue;
       }
       this.leaveQueue(a);
       this.aState[a] = S_RIDE;
       // One fare per journey, at the fare in force when it first boards (transfers are free), for
       // the rider's band and the period of that boarding.
-      if (!this.aBoarded[a]) {
+      const first = !this.aBoarded[a];
+      if (first) {
         const cell = this.aBand[a] * 2 + peak;
         const f = ft[cell];
         day.fareRevenue += f;
@@ -1536,6 +1577,8 @@ export class Commuters implements PassengerHooks {
       (train.buckets[k] ??= []).push(a);
       train.load++;
       boarded++;
+      if (a === ta) this.traceBoard(a, train, route, stationIdx, k, t, first ? ft[this.aBand[a] * 2 + peak] : 0, false);
+      if (daily && a < this.A && t - this.aWaitStart[a] > daily.waitBest) daily.offerWait(a, t - this.aWaitStart[a], t, net.stations[stationIdx].id, route.id, this.aLeft[a] === 1);
       // Crowding experienced on this ride (load after boarding vs comfortable capacity).
       const ride = dir.schedArrive[k] - dir.schedArrive[stopIdx];
       this.aCrowd[a] += (ride / 60) * COMMUTERS.crowdingWeight * Math.max(0, (train.load * this.scale) / route.capComfort - 1) * this.wx.crowd;
@@ -1559,6 +1602,7 @@ export class Commuters implements PassengerHooks {
         this.day.leftBehind += left;
         this.stationLeft[stationIdx] += left * this.scale;
         for (let i = head; i < this.queues[p].length; i++) this.aLeft[this.queues[p][i]] = 1;
+        if (ta >= 0 && this.aState[ta] === S_WAIT && this.aPlat[ta] === p) this.tracer!.add({ k: 'left', t, station: net.stations[stationIdx].id, route: route.id });
       }
     }
     return boarded;
@@ -1580,6 +1624,7 @@ export class Commuters implements PassengerHooks {
     const here = dir.stopStation[stopIdx];
     const period = periodIndex(t);
     const ft = this.fareTable, day = this.day;
+    const ta = this.traceA, daily = this.daily;
     let boarded = 0;
     for (const list of atArrival ? [xp.sibSame[p], xp.sibAcross[p]] : [xp.sibSame[p]]) {
       if (!list) continue;
@@ -1606,7 +1651,8 @@ export class Commuters implements PassengerHooks {
           if (dir.schedArrive[k] - dir.schedArrive[stopIdx] > dq.schedArrive[ka] - dq.schedArrive[kq] + wait) continue;
           this.leaveQueue(a);
           this.aState[a] = S_RIDE;
-          if (!this.aBoarded[a]) {
+          const first = !this.aBoarded[a];
+          if (first) {
             const cell = this.aBand[a] * 2 + peak;
             const f = ft[cell];
             day.fareRevenue += f;
@@ -1621,6 +1667,8 @@ export class Commuters implements PassengerHooks {
           (train.buckets[k] ??= []).push(a);
           train.load++;
           boarded++;
+          if (a === ta) this.traceBoard(a, train, route, here, k, t, first ? ft[this.aBand[a] * 2 + peak] : 0, true);
+          if (daily && a < this.A && t - this.aWaitStart[a] > daily.waitBest) daily.offerWait(a, t - this.aWaitStart[a], t, net.stations[here].id, route.id, this.aLeft[a] === 1);
           const ride = dir.schedArrive[k] - dir.schedArrive[stopIdx];
           this.aCrowd[a] += (ride / 60) * COMMUTERS.crowdingWeight * Math.max(0, (train.load * this.scale) / route.capComfort - 1) * this.wx.crowd;
           day.routeBoard.set(route.id, (day.routeBoard.get(route.id) ?? 0) + 1);
@@ -1700,6 +1748,8 @@ export class Commuters implements PassengerHooks {
         this.aLegs[o + 1] = across;
         this.aLegs[o + 2] = alight;
         this.aState[a] = S_WALK;
+        if (this.daily) this.daily.crossed[a] = 1;
+        if (a === this.traceA) this.traceAcross(f, rf, kf, due.rx.id, dx.stopStation[due.kx], due.eta, t);
         this.push(t + QUAD.crossPlatformTransfer, a, E_PLATFORM);
       }
       f.load -= b.length;
@@ -1740,6 +1790,8 @@ export class Commuters implements PassengerHooks {
         const o = (a * MAX_LEGS + this.aLeg[a]) * 3;
         this.aLegs[o] = rg.id;
         this.aLegs[o + 2] = net.stations[dg.stopStation[kx]].id;
+        if (this.daily) this.daily.crossed[a] = 1;
+        if (a === this.traceA) this.tracer!.add({ k: 'switch', t, station: toId, route: rg.id, train: g.id, alight: this.aLegs[o + 2] }, g);
       }
       this.day.crossTransfers.set(key, (this.day.crossTransfers.get(key) ?? 0) + n);
       this.day.routeBoard.set(rg.id, (this.day.routeBoard.get(rg.id) ?? 0) + n);
@@ -1748,22 +1800,25 @@ export class Commuters implements PassengerHooks {
   }
 
   evacuate(train: Train, t: number): void {
-    for (const b of train.buckets) for (const a of b) if (this.aState[a] === S_RIDE) this.finishByCab(a, t);
+    for (const b of train.buckets) for (const a of b) if (this.aState[a] === S_RIDE) this.finishByCab(a, t, 'evacuated');
     train.buckets = train.buckets.map(() => []);
     train.load = 0;
   }
 
-  private finishByCab(a: number, t: number): void {
+  private finishByCab(a: number, t: number, why: CabWhy): void {
     const g = this.aGroup[a];
     const rest = (a >= this.A ? this.evGroups[g].drive : this.driveTime(g, this.aPM[a] === 1)) * 0.6;
+    if (a === this.traceA) this.tracer!.add({ k: 'cab', t, t1: t + rest, why });
     this.recordTrip(a, t + rest, true);
   }
 
   private completeTrip(a: number, t: number): void {
+    if (this.daily && this.aBoarded[a]) this.dailyTrip(a, t);
     this.recordTrip(a, t, true);
   }
 
   private recordTrip(a: number, tEnd: number, transit: boolean): void {
+    if (a === this.traceA) this.tracer!.add({ k: 'arrive', t: tEnd, pm: this.aPM[a] === 1, dur: tEnd - this.aTripStart[a], boarded: this.aBoarded[a] === 1 });
     if (a >= this.A) {
       this.recordEventTrip(a, tEnd);
       return;
@@ -2152,29 +2207,35 @@ export class Commuters implements PassengerHooks {
         const a = q[i];
         if (this.aState[a] !== S_WAIT || this.aPlat[a] !== p) continue;
         this.leaveQueue(a);
-        this.closedAt(a, until, t);
+        this.closedAt(a, until, t, si);
       }
       this.queues[p] = [];
       this.qHead[p] = 0;
     }
   }
 
-  private closedAt(a: number, until: number, t: number): void {
+  private closedAt(a: number, until: number, t: number, si: number): void {
     if (until - t <= CHAOS.police.waitOutside) {
       this.aState[a] = S_WALK;
+      if (a === this.traceA) this.tracer!.add({ k: 'closed', t, station: this.net!.stations[si]?.id ?? -1, until: until + (a % 120), cab: false });
       this.push(until + (a % 120), a, E_PLATFORM);
     } else {
       this.day.diverted++;
-      this.finishByCab(a, t);
+      if (a === this.traceA) this.tracer!.add({ k: 'closed', t, station: this.net!.stations[si]?.id ?? -1, until, cab: true });
+      this.finishByCab(a, t, 'closed');
     }
   }
 
   /** A train runs through a closed stop: riders for it stay on to the next stop and walk from there. */
-  pass(train: Train, _route: CRoute, stopIdx: number, _t: number): void {
+  pass(train: Train, route: CRoute, stopIdx: number, t: number): void {
     const b = train.buckets[stopIdx];
     if (!b || !b.length) return;
     const next = (train.buckets[stopIdx + 1] ??= []);
-    for (const a of b) next.push(a);
+    const ta = this.traceA;
+    for (const a of b) {
+      next.push(a);
+      if (a === ta) this.tracer!.add({ k: 'past', t, station: this.net!.stations[route.dirs[train.dir].stopStation[stopIdx]].id });
+    }
     train.buckets[stopIdx] = [];
     this.day.carriedPast += b.length;
   }
@@ -2401,6 +2462,342 @@ export class Commuters implements PassengerHooks {
   chaosStats(): { eventRiders: number; diverted: number; carriedPast: number } {
     const d = this.day;
     return { eventRiders: d.eventBoard * this.scale, diverted: d.diverted * this.scale, carriedPast: d.carriedPast * this.scale };
+  }
+
+  // ------------------------------------------------------------------ Commuter stories (v2)
+  // Everything below only reads the sim's state (docs/v2/commuter-stories.md): no RNG draw, no
+  // event scheduled, no field the sim reads is written. Picks use hashes of their salt.
+
+  /** Who agent `a` is (a commuter by group identity, an event-goer by today's event). */
+  storyWho(a: number): StoryWho {
+    if (a >= this.A) {
+      const eg = this.evGroups[this.aGroup[a]];
+      const ev = this.evEvents[eg.ev];
+      const k = a - this.A;
+      return {
+        home: eg.tract,
+        work: -1,
+        band: this.aBand[a],
+        k,
+        nameSeed: hash32x4(this.seed ^ 0x51ed, ev.id, eg.tract * 3 + this.aBand[a], k),
+        event: { id: ev.id, label: ev.label, venue: ev.venue, start: this.evDayStart + ev.start, end: this.evDayStart + ev.end },
+      };
+    }
+    const g = this.aGroup[a];
+    const h = this.gHome[g], w = this.gWork[g], b = this.gBand[g], k = a - this.gStart[g];
+    return { home: h, work: w, band: b, k, nameSeed: hash32x4(this.seed ^ 0x570e, h * 3 + b, w, k) };
+  }
+
+  /** The commuter with this identity now (−1: their group is gone or smaller; event-goers are never found again). */
+  findAgent(who: StoryWho): number {
+    if (who.event || who.work < 0) return -1;
+    for (let g = 0; g < this.G; g++) {
+      if (this.gHome[g] !== who.home || this.gWork[g] !== who.work || this.gBand[g] !== who.band) continue;
+      return who.k < this.gCount[g] ? this.gStart[g] + who.k : -1;
+    }
+    return -1;
+  }
+
+  /** Living City regeneration: trace the same commuter again (a new index), or end the story. */
+  private retrace(who: StoryWho, t: number): void {
+    const a = this.findAgent(who);
+    if (a < 0) {
+      this.untrace(who.event ? 'eventOver' : 'moved');
+      return;
+    }
+    this.traceA = a;
+    this.tracer!.add({ k: 'regen', t });
+    this.tracer!.setPlan(this.storyPlan(a, t));
+  }
+
+  /** The traced agent is gone: the story ends (the tracer keeps what it recorded). */
+  private untrace(why: 'moved' | 'eventOver'): void {
+    this.traceA = -1;
+    this.tracer?.ended(why);
+  }
+
+  /** Station id of platform p (−1 without a network). */
+  private platStationId(p: number): number {
+    const g = this.graph;
+    return g && p >= 0 && p < g.P ? this.net!.stations[g.platStation[p]].id : -1;
+  }
+
+  /** The 'wait' event for platform p: its station, route and terminal. */
+  private waitEvent(p: number, t: number, joined = false): TraceEvent {
+    const g = this.graph!, net = this.net!;
+    const r = net.routes[g.platRoute[p]];
+    const dir = r.dirs[g.platDir[p]];
+    const e: TraceEvent = { k: 'wait', t, station: net.stations[g.platStation[p]].id, route: r.id, towards: net.stations[dir.stopStation[dir.stopStation.length - 1]].id };
+    if (joined) e.j = true;
+    return e;
+  }
+
+  private traceBoard(a: number, train: Train, route: CRoute, stationIdx: number, k: number, t: number, fare: number, either: boolean, joined = false): void {
+    const net = this.net!;
+    const e: TraceEvent = {
+      k: 'board',
+      t,
+      train: train.id,
+      route: route.id,
+      station: net.stations[stationIdx].id,
+      alight: net.stations[route.dirs[train.dir].stopStation[k]].id,
+      fare,
+      load: train.load * this.scale,
+      cap: route.capComfort,
+      waited: joined ? 0 : t - this.aWaitStart[a],
+      either,
+    };
+    if (joined) e.j = true;
+    this.tracer!.add(e, train);
+  }
+
+  /** Express service: the traced rider steps across to wait for an express due at the other platform. */
+  private traceAcross(f: Train, rf: CRoute, kf: number, routeId: number, acrossIdx: number, eta: number, t: number): void {
+    const net = this.net!;
+    const here = net.stations[rf.dirs[f.dir].stopStation[kf]], there = net.stations[acrossIdx];
+    this.tracer!.add({ k: 'alight', t, station: here.id, route: rf.id, train: f.id });
+    this.tracer!.add({ k: 'across', t, station: there.id, route: routeId, eta });
+    this.tracer!.add({ k: 'walk', t, t1: t + QUAD.crossPlatformTransfer, why: 'across', from: [here.x, here.y], to: [there.x, there.y], station: there.id, pm: false });
+  }
+
+  /** Commuter of the day: a completed transit trip (boarded) is checked against the day's best. */
+  private dailyTrip(a: number, t: number): void {
+    const d = this.daily!;
+    const dur = t - this.aTripStart[a];
+    const pm = this.aPM[a] === 1;
+    if (a >= this.A) {
+      if (!pm && dur > d.fanBest) {
+        const ev = this.evEvents[this.evGroups[this.aGroup[a]].ev];
+        d.offer('fan', a, dur, this.aTripStart[a], t, pm, this.legsOf(a), { late: t > this.evDayStart + ev.start });
+      }
+      return;
+    }
+    const g = this.aGroup[a];
+    const w = this.walkTimeToday(g), dr = this.driveTime(g, pm);
+    const walkFaster = isFinite(w) && w < dr;
+    const alt = walkFaster ? w : dr;
+    const saved = alt - dur;
+    if (saved > d.savedBest) d.offer('saved', a, saved, this.aTripStart[a], t, pm, this.legsOf(a), { alt, altMode: walkFaster ? MODE_WALK : MODE_DRIVE });
+    if (d.crossed[a]) {
+      d.crossed[a] = 0;
+      if (saved > d.crossBest) d.offer('cross', a, saved, this.aTripStart[a], t, pm, this.legsOf(a), { alt, altMode: walkFaster ? MODE_WALK : MODE_DRIVE });
+    }
+  }
+
+  /** Agent a's legs as ridden this trip ([route, board, alight] × n). */
+  private legsOf(a: number): number[] {
+    const n = this.aLegN[a];
+    return Array.from(this.aLegs.subarray(a * MAX_LEGS * 3, (a * MAX_LEGS + n) * 3));
+  }
+
+  /** The time and type of agent a's next pending trip event (null: none). A scan of the heap, on demand only. */
+  private pendingFor(a: number): { t: number; type: number } | null {
+    let best: { t: number; type: number } | null = null;
+    for (let i = 0; i < this.hN; i++) {
+      const v = this.hV[i];
+      if (v >> 3 !== a) continue;
+      if (!best || this.hT[i] < best.t) best = { t: this.hT[i], type: v & 7 };
+    }
+    return best;
+  }
+
+  /**
+   * Today's plan of agent a and the mode choice behind it: the generalised costs with today's
+   * weather (as the 3 am choice saw them), their parts, the group's shares, the planned paths and
+   * the fares its two trips are billed.
+   */
+  storyPlan(a: number, t: number): StoryPlan {
+    const dayStart = dayIndex(t) * SECONDS_PER_DAY;
+    const band = this.aBand[a];
+    const vot = COMMUTERS.valueOfTime[band];
+    const pathOf = (p: GroupPath | null) => (p ? { legs: Array.from(p.legs), time: p.time } : null);
+    if (a >= this.A) {
+      const eg = this.evGroups[this.aGroup[a]];
+      const depart = dayStart + this.aDepart[a];
+      const peakTo = isPeakTod(this.aDepart[a]) ? 1 : 0, peakFrom = isPeakTod(this.aReturn[a]) ? 1 : 0;
+      return {
+        day: dayIndex(t),
+        mode: MODE_TRANSIT,
+        depart,
+        stay: Math.max(0, this.evDayStart + this.aReturn[a] - depart),
+        costs: [null, null, null],
+        walk: null,
+        drive: null,
+        transit: null,
+        shares: null,
+        am: pathOf(eg.to),
+        pm: pathOf(eg.from),
+        home: [this.aHx[a], this.aHy[a]],
+        work: [this.aWx[a], this.aWy[a]],
+        fares: [this.fareTable[band * 2 + peakTo], this.fareTable[band * 2 + peakFrom]],
+        vot,
+      };
+    }
+    const g = this.aGroup[a];
+    const geom = this.gGeom[g];
+    const ti = this.transitInput(g);
+    const c = generalisedCosts(geom, band, ti, this.wx);
+    const wt = walkTime(geom.distance, this.wx);
+    const money = driveMoney(geom);
+    const pk = this.aPeak[a];
+    const fin = (x: number) => (isFinite(x) ? x : null);
+    return {
+      day: dayIndex(t),
+      mode: this.aMode[a],
+      depart: dayStart + this.aDepart[a],
+      stay: this.aReturn[a],
+      costs: [fin(c[0]), fin(c[1]), fin(c[2])],
+      walk: isFinite(wt) ? { min: wt / 60, penalty: this.wx.walkPenalty } : null,
+      drive: { min: driveTripTime(geom, this.wx) / 60, money, moneyMin: moneyToMinutes(money, band), constant: COMMUTERS.modeConstant.drive },
+      transit: ti
+        ? {
+            min: ti.time / 60,
+            transfers: ti.transfers,
+            transferMin: (ti.transfers * COMMUTERS.transferPenalty) / 60,
+            crowdMin: ti.crowdMinutes,
+            fare: ti.fare,
+            fareMin: moneyToMinutes(ti.fare, band),
+            observed: this.obsTime[g] > 0,
+          }
+        : null,
+      shares: [this.shares[g * 3], this.shares[g * 3 + 1], this.shares[g * 3 + 2]],
+      am: pathOf(this.pathAM[g]),
+      pm: pathOf(this.pathPM[g]),
+      home: [this.aHx[a], this.aHy[a]],
+      work: [this.aWx[a], this.aWy[a]],
+      fares: [this.fareTable[band * 2 + (pk & 1)], this.fareTable[band * 2 + (pk >> 1)]],
+      vot,
+    };
+  }
+
+  /**
+   * Choose an agent for a story (−1: nobody fits). Random: someone mid-trip by transit, else a
+   * transit commuter still to travel today, else any of today's transit commuters. Station: someone
+   * waiting on its platforms, else on the way to board there, else a commuter boarding there today.
+   */
+  storyPick(pick: StoryPick, t: number): number {
+    if (pick.kind === 'who') return this.findAgent(pick.who);
+    const n = this.A + this.evUsed;
+    const salt = pick.salt | 0;
+    const hashPick = (list: number[]) => (list.length ? list[hash32x4(salt, Math.floor(t), list.length, 0x51) % list.length] : -1);
+    const moving = (s: number) => s === S_WALK || s === S_WAIT || s === S_RIDE || s === S_EGRESS;
+    if (pick.kind === 'random') {
+      const now: number[] = [];
+      for (let a = 0; a < n; a++) if (moving(this.aState[a]) && this.aMode[a] === MODE_TRANSIT) now.push(a);
+      if (now.length) return hashPick(now);
+      // Nobody is travelling: a transit commuter whose next trip is soonest (ties by the hash).
+      const later: number[] = [];
+      for (let a = 0; a < this.A; a++) if (this.aMode[a] === MODE_TRANSIT && (this.aState[a] === S_HOME || this.aState[a] === S_WORK)) later.push(a);
+      if (later.length) return this.soonest(later, salt, t);
+      const any: number[] = [];
+      for (let a = 0; a < this.A; a++) if (this.aMode[a] === MODE_TRANSIT && this.pathAM[this.aGroup[a]]) any.push(a);
+      return hashPick(any);
+    }
+    const graph = this.graph, net = this.net;
+    if (!graph || !net) return -1;
+    const ids = new Set(pick.stations);
+    const idx = pick.stations.map((id) => this.stationById.get(id)).filter((i): i is number => i !== undefined);
+    const waiting: number[] = [];
+    for (const si of idx) {
+      for (const p of graph.stationBoard[si]) {
+        const q = this.queues[p];
+        for (let i = this.qHead[p]; i < q.length; i++) {
+          const a = q[i];
+          if (this.aState[a] === S_WAIT && this.aPlat[a] === p) waiting.push(a);
+        }
+      }
+    }
+    if (waiting.length) return hashPick(waiting);
+    const coming: number[] = [];
+    for (let a = 0; a < n; a++) {
+      if (this.aState[a] !== S_WALK) continue;
+      const o = (a * MAX_LEGS + this.aLeg[a]) * 3;
+      if (ids.has(this.aLegs[o + 1])) coming.push(a);
+    }
+    if (coming.length) return hashPick(coming);
+    const later: number[] = [];
+    for (let a = 0; a < this.A; a++) {
+      if (this.aMode[a] !== MODE_TRANSIT) continue;
+      const g = this.aGroup[a];
+      const s = this.aState[a];
+      const path = s === S_HOME ? this.pathAM[g] : s === S_WORK ? this.pathPM[g] : null;
+      if (path && ids.has(path.legs[1])) later.push(a);
+    }
+    return later.length ? this.soonest(later, salt, t) : -1;
+  }
+
+  /** Of these agents, the one whose next trip starts soonest after t (the salt's hash breaks ties). */
+  private soonest(list: number[], salt: number, t: number): number {
+    const dayStart = dayIndex(t) * SECONDS_PER_DAY;
+    let best = -1, bestT = Infinity, bestH = 0;
+    for (const a of list) {
+      const dep = dayStart + this.aDepart[a];
+      // At work: home time is the morning trip's end plus the stay (approximated by the departure, an hour's trip and the stay).
+      const next = this.aState[a] === S_HOME ? dep : dep + 1800 + this.aReturn[a];
+      const nt = next >= t ? next : next + SECONDS_PER_DAY;
+      const hh = hash32x4(salt, a, 0x50, 0);
+      if (nt < bestT - 60 || (Math.abs(nt - bestT) <= 60 && hh > bestH)) {
+        best = a;
+        bestT = nt;
+        bestH = hh;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Where agent a is right now, as trace events (a story that starts mid-trip): walking (with the
+   * arrival time from its pending event), waiting, on a train (found in the trains' buckets), or
+   * none (at home or at work).
+   */
+  storyJoin(a: number, t: number): { events: TraceEvent[]; train: Train | null } {
+    const s = this.aState[a];
+    const net = this.net, graph = this.graph;
+    const pm = this.aPM[a] === 1;
+    if (!net || !graph) return { events: [], train: null };
+    if (s === S_WAIT && this.aPlat[a] >= 0) return { events: [this.waitEvent(this.aPlat[a], this.aWaitStart[a], true)], train: null };
+    if (s === S_RIDE) {
+      for (const tr of this.trains()) {
+        for (let k = 0; k < tr.buckets.length; k++) {
+          const b = tr.buckets[k];
+          if (!b || b.indexOf(a) < 0) continue;
+          const r = net.routes[tr.route];
+          const dir = r.dirs[tr.dir];
+          // (The current leg's board station; its alight is the bucket's stop.)
+          const o = (a * MAX_LEGS + this.aLeg[a]) * 3;
+          const e: TraceEvent = { k: 'board', t, train: tr.id, route: r.id, station: this.aLegs[o + 1], alight: net.stations[dir.stopStation[k]].id, fare: 0, load: tr.load * this.scale, cap: r.capComfort, waited: 0, either: false, j: true };
+          return { events: [e], train: tr };
+        }
+      }
+      return { events: [], train: null };
+    }
+    if (s === S_WALK || s === S_EGRESS) {
+      const pend = this.pendingFor(a);
+      const t1 = pend ? pend.t : t;
+      const leg = this.aLeg[a];
+      const o = (a * MAX_LEGS + leg) * 3;
+      if (s === S_EGRESS) {
+        const lo = (a * MAX_LEGS + Math.max(0, this.aLegN[a] - 1)) * 3;
+        const st = net.stations[this.stationById.get(this.aLegs[lo + 2]) ?? -1];
+        const to: [number, number] = pm ? [this.aHx[a], this.aHy[a]] : [this.aWx[a], this.aWy[a]];
+        const from: [number, number] = st ? [st.x, st.y] : to;
+        const dur = (Math.hypot(to[0] - from[0], to[1] - from[1]) * COMMUTERS.walkDetour) / (COMMUTERS.walkSpeed * this.wx.walkSpeed);
+        return { events: [{ k: 'walk', t: Math.min(t, t1 - dur), t1, why: 'egress', from, to, station: -1, pm, j: true }], train: null };
+      }
+      const st = net.stations[this.stationById.get(this.aLegs[o + 1]) ?? -1];
+      if (!st) return { events: [], train: null };
+      let from: [number, number];
+      let why: 'access' | 'transfer' = 'access';
+      if (leg === 0) from = pm ? [this.aWx[a], this.aWy[a]] : [this.aHx[a], this.aHy[a]];
+      else {
+        const prev = net.stations[this.stationById.get(this.aLegs[(a * MAX_LEGS + leg - 1) * 3 + 2]) ?? -1];
+        from = prev ? [prev.x, prev.y] : [st.x, st.y];
+        why = 'transfer';
+      }
+      const dur = (Math.hypot(st.x - from[0], st.y - from[1]) * COMMUTERS.walkDetour) / (COMMUTERS.walkSpeed * this.wx.walkSpeed);
+      return { events: [{ k: 'walk', t: Math.min(t, t1 - dur), t1, why, from, to: [st.x, st.y], station: st.id, pm, j: true }], train: null };
+    }
+    return { events: [], train: null };
   }
 }
 

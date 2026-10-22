@@ -73,12 +73,15 @@ export class StationLayers {
   /** Stations closed by an incident (police activity): red outline, "· CLOSED" label. */
   closed = new Set<number>();
   private version = 0;
+  /** Bumped when the stations or the closures change (not by the per-snapshot stats). */
+  private layoutVersion = 0;
 
   /** Replace the closed set (from the active alerts). */
   setClosed(ids: Set<number>): void {
     if (ids.size === this.closed.size && [...ids].every((id) => this.closed.has(id))) return;
     this.closed = ids;
     this.version++;
+    this.layoutVersion++;
   }
 
   constructor(private game: Game) {}
@@ -161,6 +164,7 @@ export class StationLayers {
     }
     this.pills = pills;
     this.version++;
+    this.layoutVersion++;
   }
 
   /** Sizes and crowding from the stats: a pair by its combined boardings and its more crowded platform. */
@@ -229,23 +233,34 @@ export class StationLayers {
     };
     const pairLine = (d: PairDatum): [number, number, number, number] =>
       this.closed.has(d.id) || this.closed.has(d.b) ? [255, 93, 93, 255] : d.status === 'construction' ? [255, 194, 74, 255] : d.status === 'blueprint' ? [255, 255, 255, 160] : [22, 27, 33, 255];
-    // Cinematic: a warm glow around every built station at night (same data object until the stations change).
-    if (this.allCache?.version !== this.version) this.allCache = { version: this.version, all: all.filter((d) => d.status === 'built') };
+    // Cinematic: a warm glow around every built station at night; a closed one (police activity)
+    // is dark. The same data object until the stations or the closures change (not every snapshot).
+    if (this.allCache?.version !== this.layoutVersion) {
+      const closed = (d: StationDatum) => this.closed.has(d.id) || this.closed.has((d as PairDatum).b ?? -1);
+      this.allCache = { version: this.layoutVersion, all: all.filter((d) => d.status === 'built' && !closed(d)) };
+    }
     const lit = this.allCache.all;
     return [
-      glow >= GLOW_MIN &&
-        lit.length > 0 &&
-        new ScatterplotLayer<StationDatum>({
-          id: 'station-glow',
-          data: lit,
-          getPosition: posOf,
-          getRadius: (d) => d.radius + 10,
-          radiusUnits: 'pixels',
-          getFillColor: STATION_GLOW,
-          opacity: glow,
-          parameters: ADDITIVE,
-          updateTriggers: { getPosition: [this.version, zKey], getRadius: this.version },
-        }),
+      // Two soft discs (a wide faint one and a tight one) read as a pool of platform light.
+      ...([
+        ['station-glow', 11, 0.24],
+        ['station-glow-core', 4, 0.4],
+      ] as const).map(
+        ([id, extra, a]) =>
+          glow >= GLOW_MIN &&
+          lit.length > 0 &&
+          new ScatterplotLayer<StationDatum>({
+            id,
+            data: lit,
+            getPosition: posOf,
+            getRadius: (d) => d.radius + extra,
+            radiusUnits: 'pixels',
+            getFillColor: STATION_GLOW,
+            opacity: glow * a,
+            parameters: ADDITIVE,
+            updateTriggers: { getPosition: [this.layoutVersion, zKey], getRadius: this.version },
+          }),
+      ),
       new PathLayer<PillDatum>({
         id: 'station-pill-outline',
         data: this.pills,

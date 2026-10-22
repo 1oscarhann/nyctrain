@@ -57,73 +57,78 @@ export const DAY: Palette = {
   lightIntensity: 0.62,
 };
 
-/** Low sun (a few degrees up): the day's colours, warmed, with a long golden light. */
+/**
+ * Low sun (a few degrees up): the day's colours, warmed, with a long golden light. (Every light
+ * colour stays near white: MapLibre's fill-extrusion shading floors each channel at
+ * 0.3 · (1 − light), so a saturated light would tint the dark walls with its complement; the roof
+ * colour carries the mood.)
+ */
 export const GOLDEN: Palette = {
   colours: {
-    land: '#2f3238',
-    park: '#323d33',
-    water: '#213a4b',
-    street: '#3f434a',
-    avenue: '#52565b',
-    block: '#383c43',
-    blockLine: '#31353c',
-    roof: '#464950',
-    label: '#a9aab0',
-    labelHalo: '#2f3238',
-    waterLabel: '#667f8e',
-    waterLabelHalo: '#213a4b',
-    light: '#ffd29e',
-    sky: '#6c80a0',
-    horizon: '#f2c39a',
-    fog: '#35363b',
+    land: '#2d3137',
+    park: '#303c33',
+    water: '#203a4b',
+    street: '#3c4249',
+    avenue: '#4e5359',
+    block: '#363b43',
+    blockLine: '#30353c',
+    roof: '#424650',
+    label: '#a3a8af',
+    labelHalo: '#2d3137',
+    waterLabel: '#647f8f',
+    waterLabelHalo: '#203a4b',
+    light: '#ffe4c0',
+    sky: '#6a7ea0',
+    horizon: '#f0c59c',
+    fog: '#33363c',
   },
-  lightIntensity: 0.68,
+  lightIntensity: 0.66,
 };
 
-/** Morning civil twilight: cool violet with a pink horizon. */
+/** Morning civil twilight (blue hour): cool violet buildings and streets, a pink horizon. */
 export const DAWN: Palette = {
   colours: {
-    land: '#2a2a36',
-    park: '#2a3335',
-    water: '#1f2e47',
-    street: '#393945',
-    avenue: '#4d4a58',
-    block: '#302f3c',
-    blockLine: '#2a2935',
-    roof: '#403d4c',
-    label: '#aaa1b5',
-    labelHalo: '#2a2a36',
-    waterLabel: '#5e6e8c',
-    waterLabelHalo: '#1f2e47',
-    light: '#ffb69a',
-    sky: '#4b5b8f',
-    horizon: '#f0a38c',
-    fog: '#3a3448',
+    land: '#272a36',
+    park: '#28302f',
+    water: '#1d2a44',
+    street: '#35374a',
+    avenue: '#4b4756',
+    block: '#2e2f3f',
+    blockLine: '#282937',
+    roof: '#3a3a4e',
+    label: '#aaa4b8',
+    labelHalo: '#272a36',
+    waterLabel: '#5e6c8c',
+    waterLabelHalo: '#1d2a44',
+    light: '#f2e6ee',
+    sky: '#4a5a8e',
+    horizon: '#f0a48c',
+    fog: '#3b3649',
   },
-  lightIntensity: 0.44,
+  lightIntensity: 0.42,
 };
 
-/** Evening civil twilight: warmer than dawn, plum land and an orange horizon. */
+/** Evening civil twilight (blue hour): blue-violet buildings, the avenues' lights coming on, an orange afterglow on the horizon. */
 export const DUSK: Palette = {
   colours: {
-    land: '#2e2830',
-    park: '#2b302e',
-    water: '#232b45',
-    street: '#3f3840',
-    avenue: '#5a4a4c',
-    block: '#352e36',
-    blockLine: '#2e282f',
-    roof: '#4a3f48',
-    label: '#baa4a1',
-    labelHalo: '#2e2830',
-    waterLabel: '#6a6d8a',
-    waterLabelHalo: '#232b45',
-    light: '#ff9c6b',
-    sky: '#3d4a7a',
-    horizon: '#ff9466',
-    fog: '#3e3040',
+    land: '#262a35',
+    park: '#26302f',
+    water: '#1b2840',
+    street: '#33374a',
+    avenue: '#4a4450',
+    block: '#2c3040',
+    blockLine: '#262a37',
+    roof: '#363a4c',
+    label: '#a8a6b8',
+    labelHalo: '#262a35',
+    waterLabel: '#5f6d8c',
+    waterLabelHalo: '#1b2840',
+    light: '#e8e4f4',
+    sky: '#3b4677',
+    horizon: '#e8936e',
+    fog: '#3a3346',
   },
-  lightIntensity: 0.48,
+  lightIntensity: 0.45,
 };
 
 /** Night: blue-black land, the avenues warm under street lights, moonlight on the buildings. */
@@ -141,7 +146,7 @@ export const NIGHT: Palette = {
     labelHalo: '#121821',
     waterLabel: '#3e5566',
     waterLabelHalo: '#0a1621',
-    light: '#8fa6e0',
+    light: '#d0daf4',
     sky: '#070b16',
     horizon: '#1a2236',
     fog: '#121821',

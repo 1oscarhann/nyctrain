@@ -54,6 +54,7 @@ async function init(msg: Extract<ToWorker, { type: 'init' }>) {
       event: (title, body, tone) => post({ type: 'event', title, body, tone }),
       alert: (alert) => post({ type: 'alert', alert }),
       dayChaos: (info) => post({ type: 'dayChaos', info }),
+      dayStories: (stories) => post({ type: 'dayStories', stories }),
     },
   );
   const c = engine.commuters!;
@@ -107,6 +108,9 @@ function handle(msg: ToWorker) {
     case 'growthPace':
       engine.setGrowthPace(msg.pace);
       break;
+    case 'storiesDaily':
+      engine.setStoriesDaily(msg.on);
+      break;
   }
 }
 
@@ -138,6 +142,11 @@ function answer(q: Extract<ToWorker, { type: 'query' }>['q']): unknown {
       return null;
     case 'chaos':
       return engine!.chaos.state();
+    case 'storyPick':
+      return engine!.storyPick(q.pick);
+    case 'storyStop':
+      engine!.storyStop();
+      return null;
   }
 }
 

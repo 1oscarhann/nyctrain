@@ -139,10 +139,14 @@ export class TopBar {
     if (off) return;
     const w = feed.weather();
     const label = weatherLabel(w);
-    if (this.weatherKind !== w.kind) {
-      this.weatherKind = w.kind;
-      this.weatherIcon.replaceChildren(svgIcon(WEATHER_ICON[w.kind]));
+    // Cinematic: a clear night shows the moon (the day and night cycle's night factor).
+    const moon = w.kind === 'clear' && (this.app.cinematic?.glow ?? 0) > 0.5;
+    const iconKey = moon ? 'moon' : w.kind;
+    if (this.weatherKind !== iconKey) {
+      this.weatherKind = iconKey;
+      this.weatherIcon.replaceChildren(svgIcon(moon ? ICONS.moon : WEATHER_ICON[w.kind]));
       this.weather.dataset.kind = w.kind;
+      this.weather.toggleAttribute('data-night', moon);
     }
     if (this.weatherValue.textContent !== label) this.weatherValue.textContent = label;
     const fc = feed.forecast();

@@ -12,6 +12,10 @@ import type { CompiledNetwork, CRouteDir } from '../sim/protocol';
 import type { TrainView } from '../sim/client';
 import { hexRgb } from '../map/networkLayers';
 import { ADDITIVE, EXPRESS_GLOW, GLOW_MIN } from '../cinematic/glow';
+import { trainOffsetPx } from './trainPose';
+
+// The pose maths is pure (no deck.gl), so tests and the follow-cam use it without the renderer.
+export { drawnTrainPose, elementAt, trainOffsetPx } from './trainPose';
 
 export interface TrainDatum {
   id: number;
@@ -33,6 +37,8 @@ const offsetExt = new PathStyleExtension({ offset: true });
 export class TrainLayer {
   data: TrainDatum[] = [];
   selected: number | null = null;
+  /** Photo mode: the selected train is drawn like the others (no amber casing). */
+  hideSelection = false;
   /** Trains stalled or held by an incident (red casing). */
   alerted = new Set<number>();
   private alertedVersion = 0;
@@ -75,7 +81,7 @@ export class TrainLayer {
   layers(zoom: number, onPick: (id: number) => void, glow = 0): Layer[] {
     if (zoom < MAP.trainMinZoom || !this.data.length) return [];
     const DEPTH = { depthCompare: 'always', depthWriteEnabled: false } as const;
-    const sel = this.selected;
+    const sel = this.hideSelection ? null : this.selected;
     const al = this.alerted;
     const casing = (d: TrainDatum) => (d.id === sel || al.has(d.id) ? WIDTH + 5 : WIDTH + 2.5);
     // Stalled or held trains: a white rim outside the red casing, so it reads on red routes too.
@@ -148,19 +154,6 @@ export class TrainLayer {
   }
 }
 
-/**
- * The drawn sideways offset of a train (px at line scale 1 × scale, positive = right of travel):
- * its route's interline (and four-track pair) offset on the edge under its middle, plus the
- * right-hand running nudge. The follow-cam uses it to sit on the train as drawn.
- */
-export function trainOffsetPx(dir: CRouteDir, routeId: number, sMid: number, offsets: Map<string, number>, scale = 1): number {
-  const el = elementAt(dir, sMid);
-  const offAB = el ? (offsets.get(`${el.edge}:${routeId}`) ?? 0) : 0;
-  const travelOffset = el && el.edgeDir === 1 ? -offAB : offAB;
-  // Right-hand running: each direction sits slightly to its own side of the line.
-  return travelOffset * scale + 1.6;
-}
-
 /** Points of a route-direction polyline between path distances s0 and s1. */
 export function samplePath(dir: CRouteDir, s0: number, s1: number, is3D: boolean): [number, number, number][] {
   const { xs, ys, zs, cum } = dir;
@@ -187,15 +180,4 @@ export function samplePath(dir: CRouteDir, s0: number, s1: number, is3D: boolean
   for (let i = a.i + 1; i <= b.i; i++) push(xs[i], ys[i], zs[i]);
   push(b.x, b.y, b.z);
   return out;
-}
-
-export function elementAt(dir: CRouteDir, s: number) {
-  const els = dir.elems;
-  let lo = 0, hi = els.length - 1;
-  while (lo < hi) {
-    const m = (lo + hi + 1) >> 1;
-    if (els[m].s0 <= s) lo = m;
-    else hi = m - 1;
-  }
-  return els[lo];
 }

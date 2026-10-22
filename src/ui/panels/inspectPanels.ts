@@ -7,18 +7,31 @@ import { fmtClock, fmtCount, fmtDensity, fmtSpeed } from '../../core/units';
 import { formalTractName } from '../../map/placeNames';
 import type { App } from '../app';
 import { indexChart } from '../charts';
-import { bullet, h } from '../dom';
+import { bullet, h, svgIcon } from '../dom';
+import { ICONS } from '../icons';
 import { fmtSignedPct, indexSeries, startDateText, startMonth, tractGrowthSentence, tractPanelTitle, tractValueCaptureLine } from '../livingCity';
 import { kv, section, shareBar, shell, SHARE_COLORS, statCard, type Panel } from './common';
 import { SNAP_HELD, type TractGrowth } from '../../sim/protocol';
 
 export function trainPanel(app: App, id: number): Panel {
   const sh = shell('Train', '—', () => app.game.select(null));
-  const body = sh.body;
+  // Cinematic: Follow (F) locks the camera to the train; the button outlives the re-renders.
+  const follow = h('button', { class: 'hw-btn small', id: 'btn-follow', onclick: () => app.cinematic.toggleFollowTrain(id) }) as HTMLButtonElement;
+  const actions = h('div', { class: 'panel-actions' }, follow);
+  const body = h('div');
+  sh.body.append(actions, body);
+  const renderFollow = () => {
+    const on = app.cinematic.follow.trainId === id;
+    follow.classList.toggle('primary', on);
+    follow.replaceChildren(svgIcon(ICONS.follow), on ? 'Following · stop' : 'Follow');
+    follow.title = on ? 'Stop following (F or Esc)' : 'Follow this train with the camera (F); drag the map or Esc to stop';
+  };
   const render = () => {
+    renderFollow();
     const d = app.trains.data.find((t) => t.id === id);
     const t = d?.train;
     const r = t ? app.compiledRoute(t.route) : null;
+    follow.disabled = !t || !r;
     if (!t || !r) {
       sh.titleEl.textContent = 'Not in service';
       body.replaceChildren(h('div', { class: 'hw-muted' }, 'This train has finished its run or is turning around at a terminal.'));

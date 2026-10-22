@@ -79,6 +79,9 @@ export const CINEMATIC = {
   minLightDegrees: 2,
   /** Glow layers' opacity steps (the view is redrawn only when the night factor moves this much). */
   glowStep: 0.02,
+  /** The title screen's fixed light: just after sunset (blue hour, the windows lit), the sun west-southwest. */
+  titleSunAltitude: -6,
+  titleSunAzimuth: 250,
   /** Follow-cam: chase pitch (degrees), default distance behind the train (m), its wheel range, easing (s). */
   chasePitch: 72,
   chaseDistance: 260,
@@ -100,6 +103,27 @@ export const CINEMATIC = {
   /** Player: real seconds per month at 1×, and the speeds offered. */
   timelapseSecondsPerMonth: 1.1,
   timelapseSpeeds: [1, 2, 4] as const,
+};
+
+// ---------------------------------------------------------------------------
+// Commuter stories (v2, docs/v2/commuter-stories.md): one traced agent, crowd dots, the commuter
+// of the day. The worker only records; nothing here changes the simulation.
+export const STORIES = {
+  /** A trace keeps at most this many events (the oldest go first). */
+  maxEvents: 160,
+  /** Crowd dots from this zoom: one per agent waiting, at most dotsMax per platform. */
+  dotsMinZoom: 14.5,
+  dotsMax: 160,
+  /** The platform box the dots fill: half its length along the track (m, at most half the platform) and half its width across (px). */
+  dotsHalfLength: 75,
+  dotsHalfWidthPx: 7,
+  dotRadiusPx: 1.8,
+  /** Train fill bars (riders against crush capacity) from this zoom. */
+  fillMinZoom: 14,
+  /** The commuter of the day is toasted only when its day was notable (s). */
+  dailyMinSaved: 8 * MIN,
+  dailyMinWait: 6 * MIN,
+  dailyMinFanTrip: 15 * MIN,
 };
 
 // ---------------------------------------------------------------------------

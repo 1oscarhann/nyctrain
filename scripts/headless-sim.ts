@@ -1,5 +1,5 @@
 /**
- * Headless simulation run for balance tuning:  npm run sim [-- days=3 scale=10 chaos=off|calm|normal|wild seed=2030 ops=off pace=off|steady|boom dump=file.json timelapse=1 timelapseDump=file.json]
+ * Headless simulation run for balance tuning:  npm run sim [-- days=3 scale=10 chaos=off|calm|normal|wild seed=2030 ops=off pace=off|steady|boom dump=file.json timelapse=1 timelapseDump=file.json trace=1 traceDump=file.json]
  * Builds the spec's test network, runs it at full speed and prints a daily summary. Operations
  * control and the money market play as in a new game; ops=off turns them off (the output then
  * matches the code before them exactly). pace= is the Living City pace (default Steady, as a new
@@ -10,7 +10,7 @@ import { buildTestNetwork, createHeadlessGame, runDays } from '../src/sim/headle
 import { fmtMoney } from '../src/core/units';
 import { CHAOS, GROWTH, type ChaosLevel, type GrowthPace } from '../src/balance';
 import { weatherLabel } from '../src/core/cityCalendar';
-import { dumpRun, timelapseRun } from './dump';
+import { dumpRun, storyDriver, timelapseRun } from './dump';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=')));
 const days = Number(args.days ?? 3);
@@ -31,8 +31,11 @@ console.log(`routes: ${r1.name} (${r1.ownedCars} cars), ${r2.name} (${r2.ownedCa
 // timelapse=1: record a Cinematic timelapse frame at every day end (the game records one per
 // month close), through the game's own path, to show the sim doesn't notice.
 const recordTimelapse = args.timelapse === '1';
+// trace=1: Commuter stories in use (stories picked through the day, the commuter of the day on).
+const stories = args.trace === '1' ? storyDriver() : null;
 const run = runDays(game, days, {
   agentScale: scale,
+  ...(stories ? { onStep: stories.onStep, dayStories: stories.dayStories } : {}),
   onDay: (r) => {
     if (recordTimelapse) game.recordTimelapse(r.day);
     const f = game.finance.history[game.finance.history.length - 1];
@@ -59,4 +62,5 @@ const run = runDays(game, days, {
 const c = run.engine.commuters!;
 if (args.dump) dumpRun(args.dump, run.reports, game, run.engine);
 if (recordTimelapse) timelapseRun(game, args.timelapseDump);
+if (stories) stories.report(run.engine, args.traceDump);
 console.log(`agents ${c.A.toLocaleString()} in ${c.G.toLocaleString()} groups · pathfinding ${c.lastPathMs} ms · sim ${run.ms} ms for ${days} days · in flight now ${c.inFlight()} · stuck ${c.stuckCount()}`);

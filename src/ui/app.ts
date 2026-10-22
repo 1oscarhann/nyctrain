@@ -6,7 +6,7 @@
 import { ArcLayer, ScatterplotLayer, TextLayer, PathLayer } from '@deck.gl/layers';
 import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
 import type { Layer } from '@deck.gl/core';
-import { BONDS, CHAOS, COMMUTERS, ECONOMY, TIME, type ChaosLevel, type GrowthPace, type TrackClass, type TrackLevel } from '../balance';
+import { BONDS, CHAOS, CINEMATIC, COMMUTERS, ECONOMY, TIME, type ChaosLevel, type GrowthPace, type TrackClass, type TrackLevel } from '../balance';
 import { city, cityBalance } from '../cities';
 import { Game, newChaosSeed, type Selection } from '../core/game';
 import { toLonLat } from '../core/geo';
@@ -67,6 +67,7 @@ import { Tutorial } from './tutorial';
 import { showGameOver, showMonthReport, showYearReview } from './reports';
 import { fareToastBody, fmtMoneyFine, fmtRate, holdingToast, prepayOptions, refinanceText, saleText } from './opsMoney';
 import { districtWord, growthToasts, GROWTH_PACE_HINT, GROWTH_PACE_LABEL } from './livingCity';
+import { Cinematic } from '../cinematic';
 
 export interface AppOptions {
   sandbox: boolean;
@@ -117,6 +118,8 @@ export class App implements AppContext {
   /** City chaos: alerts, today's info and announced events; markers on the map. */
   readonly feed: AlertFeed;
   readonly chaosLayers = new ChaosLayers();
+  /** Cinematic (v2): day and night, the night glow, the follow-cam, photo mode and the timelapse. */
+  readonly cinematic: Cinematic;
   private chaosAnim: (() => void) | null = null;
   private lastIncidentToast = -Infinity;
   private focusEvent: number | null = null;
@@ -242,16 +245,18 @@ export class App implements AppContext {
     // ---- deck.gl layers, bottom to top
     view.addLayers('overlays', () => this.overlays.layers(view.is3D));
     view.addLayers('crowding', () => this.crowdLayers());
-    view.addLayers('elevated', () => this.elevated.layers(this.network, view.is3D, view.map.getZoom()));
-    view.addLayers('venues', () => this.chaosLayers.venueLayers());
+    view.addLayers('elevated', () => this.elevated.layers(this.network, view.is3D, view.map.getZoom(), this.cinematic.glow));
+    view.addLayers('venues', () => this.chaosLayers.venueLayers(this.cinematic.glow));
     view.addLayers('flows', () => this.flowLayers());
     view.addLayers('trains', () => this.trainLayers());
-    view.addLayers('stations', () => this.stations.layers(view.map.getZoom(), performance.now()));
+    view.addLayers('stations', () => this.stations.layers(view.map.getZoom(), performance.now(), this.cinematic.glow));
     view.addLayers('route-pattern', () => this.routePatternLayers());
     view.addLayers('venue-labels', () => this.chaosLayers.venueLabelLayers(view.map.getZoom()));
     view.addLayers('incidents', () => this.chaosLayers.incidentLayers(performance.now()));
     view.addLayers('construction', () => this.constructionLabels());
     view.addLayers('tool', () => this.tools.layers());
+    // (Cinematic adds the timelapse player's layers last; while it plays they are the only ones.)
+    this.cinematic = new Cinematic(this);
 
     // ---- events
     const g = this.game;
@@ -312,8 +317,10 @@ export class App implements AppContext {
     this.intervals.push(
       window.setInterval(() => {
         this.topbar.update();
+        // Day and night (paint pushed only when the palette moved), the photo caption, the follow chip.
+        this.cinematic.tick();
         if (++this.panelTimer % 2 === 0) this.panel?.update?.();
-      }, 250),
+      }, CINEMATIC.tickMs),
     );
     if (!this.tutorialDone) setTimeout(() => this.startTutorial(), 600);
     // A save from before city chaos: say once what's new.
@@ -340,6 +347,7 @@ export class App implements AppContext {
     window.removeEventListener('pagehide', this.onHide);
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.intervals.forEach((i) => clearInterval(i));
+    this.cinematic.destroy();
     this.stopAnim?.();
     this.chaosAnim?.();
     this.tutorial?.close();
@@ -534,6 +542,8 @@ export class App implements AppContext {
     this.applyStationStats();
     this.stations.update(this.view.is3D, this.network.quadOffsets);
     if (this.overlays.mode !== 'none') this.loadOverlayData(this.overlays.mode);
+    // Cinematic: the network at every month close goes into the timelapse (saved below).
+    if (isNewMonth(r.day + 1)) this.cinematic.recordMonth(r.day);
     if (isNewMonth(r.day + 1) && g.finance.months.length) {
       // The first weekday of January brings the year in review instead of December's report.
       if (monthKey(r.day + 1).endsWith('-01')) showYearReview(this, yearOf(r.day), r.growth ?? null);
@@ -890,7 +900,7 @@ export class App implements AppContext {
     const c = this.compiledForSnapshot();
     const zoom = this.view.map.getZoom();
     this.trains.update(c?.net ?? null, this.sim.trains(), this.network.routeOffsets, this.view.is3D, lineScale(zoom));
-    return this.trains.layers(zoom, (id) => this.game.select({ kind: 'train', id }));
+    return this.trains.layers(zoom, (id) => this.game.select({ kind: 'train', id }), this.cinematic.glow);
   }
 
   private patternCache: { along: AlongStation[]; color: string; data: [number, number][] } | null = null;
@@ -1298,6 +1308,9 @@ export class App implements AppContext {
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (document.querySelector('.modal-back')) return;
+    // Cinematic first: the timelapse takes every key, photo mode its own (P, L, C, F, Esc) and
+    // Space, 1–4 and V; P, F (a train selected) and Esc while following otherwise.
+    if (this.cinematic.key(e)) return;
     const ctrl = e.ctrlKey || e.metaKey;
     if (ctrl && (e.key === 'z' || e.key === 'Z')) {
       e.preventDefault();

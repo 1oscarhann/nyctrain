@@ -4,7 +4,7 @@
  */
 import { city } from '../cities';
 import { Emitter } from '../core/emitter';
-import type { Alert, ChaosInit, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, FarePolicy, FromWorker, GrowthData, GrowthPace, ModeState, Query, ServiceOverride, SimState, Snapshot, ToWorker } from './protocol';
+import type { Alert, ChaosInit, ChaosLevel, CompiledNetwork, DayChaosInfo, DayReport, DayStories, FarePolicy, FromWorker, GrowthData, GrowthPace, ModeState, Query, ServiceOverride, SimState, Snapshot, ToWorker } from './protocol';
 import { SKIP_LABEL, TRAIN_STRIDE } from './protocol';
 
 export interface SimEvents extends Record<string, unknown> {
@@ -19,6 +19,8 @@ export interface SimEvents extends Record<string, unknown> {
   alert: Alert;
   /** City chaos: today's level, weather and events with the expected mode split (3 am, or on start). */
   dayChaos: DayChaosInfo;
+  /** Commuter stories: the day's notable commuters (midnight, while storiesDaily is on). */
+  dayStories: DayStories;
 }
 
 export interface TrainView {
@@ -132,6 +134,11 @@ export class SimClient {
     this.send({ type: 'growthPace', pace });
   }
 
+  /** Commuter stories: look for the commuter of the day (reported at each midnight). */
+  setStoriesDaily(on: boolean): void {
+    this.send({ type: 'storiesDaily', on });
+  }
+
   query<T>(q: Query): Promise<T> {
     const id = this.qid++;
     return new Promise((resolve) => {
@@ -185,6 +192,9 @@ export class SimClient {
         break;
       case 'dayChaos':
         this.events.emit('dayChaos', m.info);
+        break;
+      case 'dayStories':
+        this.events.emit('dayStories', m.stories);
         break;
     }
   }

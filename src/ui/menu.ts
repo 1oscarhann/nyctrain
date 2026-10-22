@@ -10,6 +10,7 @@ import { modal } from './widgets';
 import { LEVEL_HINT, LEVEL_LABEL } from './alertFeed';
 import { GROWTH_PACE_HINT, GROWTH_PACE_LABEL } from './livingCity';
 import { storeSettings, storeUnits } from './settings';
+import { DAY_NIGHT_HINT, DAY_NIGHT_LABEL } from '../cinematic/prefs';
 
 const SLOT_LABEL: Record<SlotId, string> = { autosave: 'Autosave', slot1: 'Slot 1', slot2: 'Slot 2', slot3: 'Slot 3' };
 
@@ -79,6 +80,18 @@ export async function openMenu(app: App): Promise<void> {
     paceHint.textContent = `${GROWTH_PACE_HINT[app.game.growthPace]}. From the next month end; G: growth map.`;
   };
   renderPace();
+  // Cinematic: day and night, lit windows (per viewer, applied at once).
+  const light = h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' });
+  const lightHint = h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:4px' });
+  const renderLight = () => {
+    const c = app.cinematic;
+    light.replaceChildren(
+      h('div', { class: 'seg', id: 'menu-daynight' }, ...(['cycle', 'day'] as const).map((m) => h('button', { class: c.prefs.dayNight === m ? 'on' : '', title: DAY_NIGHT_HINT[m], onclick: () => { c.setDayNight(m); renderLight(); } }, DAY_NIGHT_LABEL[m]))),
+      h('div', { class: 'seg' }, ...([true, false] as const).map((on) => h('button', { class: c.prefs.windows === on ? 'on' : '', disabled: c.prefs.dayNight === 'day', onclick: () => { c.setWindows(on); renderLight(); } }, on ? 'Lit windows' : 'Dark'))),
+    );
+    lightHint.textContent = `${DAY_NIGHT_HINT[c.prefs.dayNight]}. P: photo mode; the film button replays your network.`;
+  };
+  renderLight();
   const scale = h('div', { class: 'seg' });
   for (const s of COMMUTERS.agentScaleChoices) {
     scale.append(
@@ -122,6 +135,9 @@ export async function openMenu(app: App): Promise<void> {
     h('div', { class: 'section' }, 'City growth (neighbourhoods grow around good transit)'),
     pace,
     paceHint,
+    h('div', { class: 'section' }, 'Light'),
+    light,
+    lightHint,
     h('div', { class: 'section' }, 'Units'),
     units,
     h('div', { class: 'section' }, 'Agent scale (real commuters per simulated agent)'),

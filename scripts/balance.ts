@@ -2,7 +2,7 @@
  * Balance tuning: build scenario networks in code, run them to near-equilibrium and report
  * ridership and daily money.  npm run balance [-- city=nyc|london scenario=core|sprawl|test days=8 scale=10
  * chaos=off|calm|normal|wild seed=2030 money=1 ops=off control=default|legacy|tp|off farePeak= fareOff= low=1|0.5|0
- * pace=off|steady|boom months=N monthDays=5 dump=file.json]
+ * pace=off|steady|boom months=N monthDays=5 dump=file.json trace=1 traceDump=file.json timelapse=1]
  * (scenario=test is New York only; chaos defaults to off; with chaos on, or money=1, each day also
  * shows its operating result. Operations control and fares default to a new game's: control=legacy
  * is a migrated route (no holding or recovery), tp adds suggested timepoints, and ops=off turns
@@ -49,7 +49,7 @@ import { creditScore, spreadOf } from '../src/economy/credit';
 import { fareSummary } from '../src/economy/fares';
 import { defaultControl, legacyControl, offControl, suggestTimepoints } from '../src/routes/control';
 import type { RouteControl } from '../src/routes/types';
-import { dumpRun, timelapseRun } from './dump';
+import { dumpRun, storyDriver, timelapseRun } from './dump';
 import { edgeReport } from '../src/construction/validate';
 import { fmtMoney } from '../src/core/units';
 import { TIME } from '../src/balance';
@@ -159,8 +159,11 @@ const growthLine = (r: DayReport) => {
 const monthWeekdays = (day: number) => (months > 0 ? ECONOMY.daysPerYear / 12 : weekdaysInMonth(day));
 const total0 = game.world.tracts.reduce((a, t) => a + t.residents, 0);
 const growthReports: DayReport[] = [];
+// trace=1: Commuter stories in use (stories picked through the day, the commuter of the day on).
+const stories = args.trace === '1' ? storyDriver() : null;
 const run = runDays(game, months > 0 ? months * monthDays : days, {
   agentScale: scale,
+  ...(stories ? { onStep: stories.onStep, dayStories: stories.dayStories } : {}),
   ...(months > 0 ? { monthEvery: monthDays } : {}),
   onDay: (r) => {
     // timelapse=1: a Cinematic timelapse frame at every day end, through the game's own path.
@@ -286,6 +289,7 @@ if (!opsOff) {
 }
 if (args.dump) dumpRun(args.dump, run.reports, game, run.engine);
 if (args.timelapse === '1') timelapseRun(game, args.timelapseDump);
+if (stories) stories.report(run.engine, args.traceDump);
 if (growthReports.length) {
   // Living City summary: value capture per day of each growth month, the riders' trend, the city.
   const vcDay = (r: DayReport) => r.growth!.valueCapture / monthWeekdays(r.day);

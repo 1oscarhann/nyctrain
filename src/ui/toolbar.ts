@@ -42,6 +42,11 @@ export class Toolbar {
     attachTip(this.viewBtn, app.tooltip, 'Flat / 3D view', 'V', 'Tilt the camera and raise the skyline');
     this.overlayBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-overlays', onclick: () => this.toggleOverlayMenu() }, svgIcon(ICONS.layers));
     attachTip(this.overlayBtn, app.tooltip, 'Overlays', undefined, 'Residents, jobs, city growth (G), unserved demand, crowding, flows');
+    // Cinematic (v2): the timelapse and photo mode.
+    const timelapse = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-timelapse', onclick: () => app.cinematic.openTimelapse() }, svgIcon(ICONS.film));
+    attachTip(timelapse, app.tooltip, 'Timelapse', undefined, 'Replay your network growing, month by month, from the start to now');
+    const photo = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-photo', onclick: () => app.cinematic.photo.toggle(true) }, svgIcon(ICONS.camera));
+    attachTip(photo, app.tooltip, 'Photo mode', 'P', 'Hide the interface; L letterbox, C caption'); 
     const routes = h('button', { class: 'hw-btn ghost tool-btn', onclick: () => app.game.select({ kind: 'routes' }) }, svgIcon(ICONS.routes));
     attachTip(routes, app.tooltip, 'Routes', undefined, 'All routes and their ridership');
     const fin = (this.finBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-finance', onclick: () => app.toggleFinance() }, svgIcon(ICONS.finance)));
@@ -63,7 +68,7 @@ export class Toolbar {
         ),
       );
     }
-    this.el = h('div', { id: 'toolbar', class: 'hw-panel' }, ...btns, h('div', { class: 'tool-sep' }), this.viewBtn, this.overlayBtn, h('div', { class: 'tool-sep' }), routes, fin, goals, this.alertsBtn, help);
+    this.el = h('div', { id: 'toolbar', class: 'hw-panel' }, ...btns, h('div', { class: 'tool-sep' }), this.viewBtn, this.overlayBtn, timelapse, photo, h('div', { class: 'tool-sep' }), routes, fin, goals, this.alertsBtn, help);
     this.options = h('div', { id: 'tool-options', class: 'hw-panel' });
     app.root.append(this.overlayMenu);
     app.view.events.on('view3d', () => this.update());

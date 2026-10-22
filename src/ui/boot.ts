@@ -18,6 +18,8 @@ import { ICONS } from './icons';
 import { loadChaosLevel, loadLastCity, loadSettings, storeChaosLevel, storeLastCity, storeSettings, storeUnits } from './settings';
 import { LEVEL_HINT, LEVEL_LABEL } from './alertFeed';
 import { modal } from './widgets';
+import { titleLight } from '../cinematic';
+import { DAY_NIGHT_HINT, DAY_NIGHT_LABEL, loadPrefs, storePrefs } from '../cinematic/prefs';
 
 let world: World;
 let land: LandCollection;
@@ -78,6 +80,8 @@ function freshMapContainer(root: HTMLElement): HTMLElement {
 
 async function showTitle(root: HTMLElement, notice: string | null = null): Promise<void> {
   const view = await MapView.create(freshMapContainer(root));
+  // Cinematic: blue hour over the skyline, windows lit (Always day: the plain map); a game takes the light over.
+  titleLight(view.map);
   // A slow orbit over the city's centre while you decide.
   const cam = cityBalance().titleCamera;
   view.map.jumpTo({ center: cam.center, zoom: cam.zoom, bearing: cam.bearing });
@@ -219,9 +223,17 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
     const s = loadSettings();
     const units = h('div', { class: 'seg' });
     const scale = h('div', { class: 'seg' });
+    // Cinematic: day and night, lit windows (per viewer, never in a save).
+    const dayNight = h('div', { class: 'seg', id: 'set-daynight' });
+    const windows = h('div', { class: 'seg', id: 'set-windows' });
+    const dnHint = h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:6px' });
     const render = () => {
       units.replaceChildren(...(['imperial', 'metric'] as const).map((u) => h('button', { class: s.units === u ? 'on' : '', onclick: () => { s.units = u; setUnits(u); storeUnits(u); render(); } }, u === 'imperial' ? 'Miles, mph' : 'Kilometres, km/h')));
       scale.replaceChildren(...COMMUTERS.agentScaleChoices.map((n) => h('button', { class: s.agentScale === n ? 'on' : '', onclick: () => { s.agentScale = n; storeSettings(s); render(); } }, `1 : ${n}`)));
+      const cp = loadPrefs();
+      dayNight.replaceChildren(...(['cycle', 'day'] as const).map((m) => h('button', { class: cp.dayNight === m ? 'on' : '', title: DAY_NIGHT_HINT[m], onclick: () => { storePrefs({ dayNight: m }); titleLight(view.map); render(); } }, DAY_NIGHT_LABEL[m])));
+      windows.replaceChildren(...([true, false] as const).map((on) => h('button', { class: cp.windows === on ? 'on' : '', disabled: cp.dayNight === 'day', onclick: () => { storePrefs({ windows: on }); render(); } }, on ? 'Lit windows' : 'Dark')));
+      dnHint.textContent = `${DAY_NIGHT_HINT[cp.dayNight]}.`;
     };
     render();
     close = modal(
@@ -235,6 +247,9 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
         h('div', { class: 'section' }, 'Agent scale (real commuters per simulated agent)'),
         scale,
         h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:6px' }, 'Applies to new and loaded games. 1 : 10 simulates about 285,000 agents; 1 : 5 is twice as detailed and slower.'),
+        h('div', { class: 'section' }, 'Light'),
+        h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, dayNight, windows),
+        dnHint,
         h('div', { class: 'actions' }, h('button', { class: 'hw-btn primary', onclick: () => close() }, 'Done')),
       ),
     );

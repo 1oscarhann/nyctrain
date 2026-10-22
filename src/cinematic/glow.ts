@@ -20,9 +20,9 @@ export const ADDITIVE = {
 /** Glow halos of express trains: white, so an express sliding past a local still reads at night. */
 export const EXPRESS_GLOW: [number, number, number, number] = [235, 242, 255, 150];
 /** Station glow: warm platform light. */
-export const STATION_GLOW: [number, number, number, number] = [255, 226, 170, 120];
+export const STATION_GLOW: [number, number, number, number] = [255, 226, 170, 255];
 /** Today's event venues: stadium floodlights (lavender-white). */
-export const VENUE_GLOW: [number, number, number, number] = [232, 214, 255, 120];
+export const VENUE_GLOW: [number, number, number, number] = [232, 214, 255, 255];
 
 /** Night factor below which the glow layers are not drawn at all. */
 export const GLOW_MIN = 0.02;

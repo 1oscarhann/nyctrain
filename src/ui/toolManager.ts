@@ -16,17 +16,39 @@ export class ToolManager {
   onChange: (id: ToolId) => void = () => {};
   /** Extra condition for x-ray (e.g. an underground item is selected). */
   xrayExtra: () => boolean = () => false;
+  /** Photo mode and the timelapse: the map's pointer input pans and zooms only (no tool sees it). */
+  private _suspended = false;
+
+  get suspended(): boolean {
+    return this._suspended;
+  }
+
+  set suspended(on: boolean) {
+    if (on === this._suspended) return;
+    this._suspended = on;
+    if (on) {
+      // A drag in progress ends where it is; hover previews go.
+      if (this.dragging) {
+        this.dragging = false;
+        this.view.map.dragPan.enable();
+        this.active?.up?.();
+      }
+      this.active?.leave?.();
+    }
+    this.view.invalidate();
+  }
 
   constructor(private view: MapView) {
     const map = view.map;
     const canvas = map.getCanvasContainer();
     map.on('mousemove', (e) => {
+      if (this._suspended) return;
       const p = this.pointer(e);
       if (this.dragging) this.active?.drag?.(p);
       else this.active?.move?.(p);
     });
     map.on('mousedown', (e) => {
-      if (e.originalEvent.button !== 0 || !this.active?.down) return;
+      if (this._suspended || e.originalEvent.button !== 0 || !this.active?.down) return;
       if (this.active.down(this.pointer(e))) {
         this.dragging = true;
         map.dragPan.disable();
@@ -43,11 +65,12 @@ export class ToolManager {
     map.on('mouseup', (e) => endDrag(e));
     window.addEventListener('mouseup', () => endDrag());
     map.on('click', (e) => {
-      if (performance.now() < this.suppressUntil) return;
+      if (this._suspended || performance.now() < this.suppressUntil) return;
       this.active?.click?.(this.pointer(e));
     });
     map.on('dblclick', (e) => {
       e.preventDefault();
+      if (this._suspended) return;
       this.active?.dblclick?.(this.pointer(e));
     });
     canvas.addEventListener('mouseleave', () => this.active?.leave?.());
@@ -82,10 +105,12 @@ export class ToolManager {
   }
 
   key(e: KeyboardEvent): boolean {
+    if (this._suspended) return false;
     return this.active?.key?.(e) ?? false;
   }
 
   layers() {
+    if (this._suspended) return [];
     return this.active?.layers?.() ?? [];
   }
 

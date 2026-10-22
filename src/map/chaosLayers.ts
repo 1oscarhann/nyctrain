@@ -144,21 +144,26 @@ export class ChaosLayers {
       // Cinematic: today's venues are floodlit at night (additive halo; its own data until the markers change).
       if (glow >= GLOW_MIN) {
         if (this.todayCache?.version !== v) this.todayCache = { version: v, list: this.venues.filter((d) => d.today) };
+        // Floodlights: a wide faint pool and a brighter core, as the station glow.
         if (this.todayCache.list.length)
-          out.push(
-            new ScatterplotLayer<VenueMarker>({
-              id: 'chaos-venue-glow',
-              data: this.todayCache.list,
-              getPosition: (d) => d.pos,
-              getRadius: (d) => d.radius * 3.2 + 10,
-              radiusUnits: 'pixels',
-              getFillColor: VENUE_GLOW,
-              billboard: true,
-              opacity: glow,
-              parameters: ADDITIVE,
-              updateTriggers: { getPosition: v, getRadius: v },
-            }),
-          );
+          for (const [id, k, extra, a] of [
+            ['chaos-venue-glow', 2.6, 8, 0.16],
+            ['chaos-venue-glow-core', 1.5, 4, 0.24],
+          ] as const)
+            out.push(
+              new ScatterplotLayer<VenueMarker>({
+                id,
+                data: this.todayCache.list,
+                getPosition: (d) => d.pos,
+                getRadius: (d) => d.radius * k + extra,
+                radiusUnits: 'pixels',
+                getFillColor: VENUE_GLOW,
+                billboard: true,
+                opacity: glow * a,
+                parameters: ADDITIVE,
+                updateTriggers: { getPosition: v, getRadius: v },
+              }),
+            );
       }
       out.push(
         new ScatterplotLayer<VenueMarker>({

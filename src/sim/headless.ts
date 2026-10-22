@@ -403,6 +403,10 @@ export interface EngineRunOptions {
   growth?: GrowthData | null;
   /** Tuning only: close a growth month every N days instead of at calendar month ends. */
   monthEvery?: number;
+  /** Commuter stories: the day's notable commuters (turns the commuter of the day on). */
+  dayStories?: EngineCallbacks['dayStories'];
+  /** After every sim step (scripts that pick stories as the day goes on). */
+  onStep?: (engine: Engine) => void;
 }
 
 /**
@@ -438,9 +442,11 @@ export function startEngine(game: Game, opts: EngineRunOptions & { reports?: Day
         game.setChaosToday(info);
         opts.dayChaos?.(info);
       },
+      dayStories: opts.dayStories,
     },
   );
   engine.setNetwork(compileNetwork(game).net);
+  if (opts.dayStories) engine.setStoriesDaily(true);
   return engine;
 }
 
@@ -465,7 +471,11 @@ export function runDays(game: Game, days: number, opts: EngineRunOptions = {}): 
   const engine = startEngine(game, { ...opts, reports });
   const t0 = Date.now();
   const end = (Math.floor(game.time / 86400) + days) * 86400 + 60;
-  while (engine.time < end) engine.step(TIME.simStep);
+  const onStep = opts.onStep;
+  while (engine.time < end) {
+    engine.step(TIME.simStep);
+    onStep?.(engine);
+  }
   game.time = engine.time;
   return { engine, reports, ms: Date.now() - t0 };
 }

@@ -5,19 +5,20 @@
  * under MapLibre's control layer, and only the attribution control is left there.
  */
 import { city } from '../cities';
-import { dayIndex, fmtDate, timeOfDay } from '../core/calendar';
-import { fmtClock } from '../core/units';
+import { dayIndex, timeOfDay } from '../core/calendar';
+import type { DayWeather } from '../core/cityCalendar';
 import { Emitter } from '../core/emitter';
 import { h } from '../ui/dom';
+import { captionText } from '../ui/cinematicText';
 
 export interface PhotoPrefs {
   letterbox: boolean;
   caption: boolean;
 }
 
-/** The caption: "Tue 14 May 2030 · 18:42 · New York". */
-export function photoCaption(gameTime: number, cityName = city().name): string {
-  return `${fmtDate(dayIndex(gameTime))} · ${fmtClock(timeOfDay(gameTime))} · ${cityName}`;
+/** The caption: "Tue 14 May 2030 · 18:42 · New York" (and the weather when it isn't clear). */
+export function photoCaption(gameTime: number, cityName = city().name, weather?: DayWeather | null): string {
+  return captionText(dayIndex(gameTime), timeOfDay(gameTime), cityName, weather);
 }
 
 export class PhotoMode {
@@ -79,9 +80,9 @@ export class PhotoMode {
   }
 
   /** The caption text (a few times a second, only while it shows). */
-  tick(gameTime: number): void {
+  tick(gameTime: number, weather?: DayWeather | null): void {
     if (!this._active || !this.prefs.caption) return;
-    const text = photoCaption(gameTime);
+    const text = photoCaption(gameTime, city().name, weather);
     if (text !== this.lastCaption) {
       this.lastCaption = text;
       this.caption.textContent = text;

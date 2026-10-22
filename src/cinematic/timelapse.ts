@@ -620,9 +620,17 @@ export function drawSchedule(tl: Timelapse, prev: TLFrame | null, ids: number[])
   return out;
 }
 
-/** Track length (km of double track) and counts in a frame, for the player's caption. */
+/**
+ * Track length (km of double track) and counts in a frame, for the player's caption. The two
+ * platforms of a cross-platform station (a few metres apart) count as one station.
+ */
 export function frameStats(tl: Timelapse, f: TLFrame): { trackM: number; stations: number; routes: number } {
   let trackM = 0;
+  const places: { x: number; y: number }[] = [];
+  for (const s of f.stations) {
+    const p = tl.stations.get(s.id);
+    if (p && !places.some((q) => Math.abs(q.x - p.x) < 25 && Math.abs(q.y - p.y) < 25)) places.push(p);
+  }
   for (const e of f.edges) {
     const pts = tl.edges.get(e.id)?.pts;
     if (pts) {
@@ -631,7 +639,7 @@ export function frameStats(tl: Timelapse, f: TLFrame): { trackM: number; station
       trackM += (c[c.length - 1] ?? 0) * ((tl.edges.get(e.id)?.away ?? 0) !== 0 ? 0.5 : 1);
     }
   }
-  return { trackM, stations: f.stations.length, routes: f.routes.filter((r) => r.running).length };
+  return { trackM, stations: places.length, routes: f.routes.filter((r) => r.running).length };
 }
 
 /** One route's stretch of one edge in a frame, as the player draws it. */
@@ -690,4 +698,122 @@ export function cloneTimelapse(tl: Timelapse): Timelapse {
     shapes: tl.shapes.map((s) => ({ ...s, legs: s.legs.map((l) => [l[0], l[1], l[2]] as [number, number, number]) })),
     frames: tl.frames.map((f) => ({ day: f.day, edges: f.edges.map((e) => ({ ...e })), stations: f.stations.map((s) => ({ ...s })), routes: f.routes.map((r) => ({ ...r })) })),
   };
+}
+
+// ------------------------------------------------------------------ the replay (pure; the player draws it)
+/** Share of a step spent drawing the new edges in; the rest holds the month's network. */
+export const DRAW_PHASE = 0.8;
+
+/**
+ * The frames a replay walks through: an empty city at the start, the recorded month closes, then
+ * the network as it is now (`now`, from snapshotFrame on a clone), which replaces a recorded
+ * frame of the same day.
+ */
+export function replayFrames(tl: Timelapse, now: TLFrame | null, startDay = 0): TLFrame[] {
+  const first = tl.frames[0]?.day ?? now?.day ?? startDay;
+  const out: TLFrame[] = [{ day: Math.min(startDay, first), edges: [], stations: [], routes: [] }];
+  for (const f of tl.frames) if (f.day > out[out.length - 1].day || out.length === 1) out.push(f);
+  if (now) {
+    if (out.length > 1 && out[out.length - 1].day >= now.day) out[out.length - 1] = now;
+    else out.push(now);
+  }
+  return out;
+}
+
+/** Real seconds a step takes at 1×: its length in months (21.75 weekdays), between ⅔ and 3 months' worth. */
+export function stepSeconds(from: TLFrame, to: TLFrame, secondsPerMonth: number): number {
+  const months = Math.max(0, to.day - from.day) / 21.75;
+  return Math.max(0.6, Math.min(3, months)) * secondsPerMonth;
+}
+
+/** Where a replay is at `t` seconds: the step (1-based: frames[step-1] → frames[step]) and its progress 0–1. */
+export function replayAt(durations: readonly number[], t: number): { step: number; p: number } {
+  // durations[i] is the step into frame i (durations[0] = 0).
+  let acc = 0;
+  for (let i = 1; i < durations.length; i++) {
+    const d = durations[i];
+    if (t < acc + d) return { step: i, p: d > 0 ? Math.max(0, (t - acc) / d) : 1 };
+    acc += d;
+  }
+  return { step: Math.max(1, durations.length - 1), p: 1 };
+}
+
+/** How much of a new edge is drawn at step progress p (0–1). */
+export function drawnFraction(slot: DrawSlot, p: number): number {
+  const q = Math.min(1, Math.max(0, p) / DRAW_PHASE);
+  if (slot.t1 <= slot.t0) return q >= slot.t0 ? 1 : 0;
+  return Math.max(0, Math.min(1, (q - slot.t0) / (slot.t1 - slot.t0)));
+}
+
+/** The drawn part [a, b] (metres from node a) of an edge of length L, `f` of it drawn from its starting end. */
+export function drawnRange(L: number, slot: DrawSlot, f: number): [number, number] {
+  return slot.fromA ? [0, f * L] : [L * (1 - f), L];
+}
+
+export interface ReplayStep {
+  from: TLFrame;
+  to: TLFrame;
+  /** Edges of `to` drawn whole from the start (old ones, and track split off old track). */
+  oldEdges: TLFrameEdge[];
+  /** New edges and when each draws in. */
+  newEdges: { e: TLFrameEdge; slot: DrawSlot }[];
+  /** `to`'s route pieces (those on new edges draw in with their edge). */
+  pieces: RoutePiece[];
+  /** `to`'s stations with the draw-phase share at which each appears (0: from the start). */
+  stations: { id: number; x: number; y: number; built: boolean; t: number }[];
+}
+
+/**
+ * One step of the replay: what is there from the start, what draws in (and when), the route
+ * pieces, and when each new station pops up (as the line being drawn reaches it).
+ */
+export function replayStep(tl: Timelapse, from: TLFrame, to: TLFrame, spacingPx: number, lineWidthPx: number, pairGapPx: number): ReplayStep {
+  const fresh = new Set(newEdgeIds(tl, from.edges.length ? from : null, to));
+  const slots = drawSchedule(tl, from.edges.length ? from : null, [...fresh]);
+  const oldEdges = to.edges.filter((e) => !fresh.has(e.id) || !slots.has(e.id));
+  const newEdges = to.edges.filter((e) => fresh.has(e.id) && slots.has(e.id)).map((e) => ({ e, slot: slots.get(e.id)! }));
+  const before = new Set(from.stations.map((s) => s.id));
+  const stations: ReplayStep['stations'] = [];
+  for (const s of to.stations) {
+    const p = tl.stations.get(s.id);
+    if (!p) continue;
+    let t = 0;
+    if (!before.has(s.id)) {
+      // When the draw passes the station's nearest point on a new edge (within 40 m); else at once.
+      let best = 40;
+      for (const { e, slot } of newEdges) {
+        const pts = tl.edges.get(e.id)?.pts;
+        if (!pts) continue;
+        const near = nearestOnPts(pts, p.x, p.y);
+        if (near.d < best) {
+          best = near.d;
+          const frac = near.L > 0 ? near.s / near.L : 0;
+          t = slot.t0 + (slot.t1 - slot.t0) * (slot.fromA ? frac : 1 - frac);
+        }
+      }
+    }
+    stations.push({ id: s.id, x: p.x, y: p.y, built: s.built, t });
+  }
+  return { from, to, oldEdges, newEdges, pieces: routePieces(tl, to, spacingPx, lineWidthPx, pairGapPx), stations };
+}
+
+/** Nearest point of a point list to (x, y): its distance, its distance along, and the list's length. */
+export function nearestOnPts(pts: ArrayLike<number>, x: number, y: number): { d: number; s: number; L: number } {
+  const n = pts.length / 2;
+  let best = Infinity, bestS = 0, acc = 0;
+  for (let i = 1; i < n; i++) {
+    const ax = pts[2 * i - 2], ay = pts[2 * i - 1], bx = pts[2 * i], by = pts[2 * i + 1];
+    const dx = bx - ax, dy = by - ay;
+    const L2 = dx * dx + dy * dy;
+    const len = Math.sqrt(L2);
+    const t = L2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L2)) : 0;
+    const d = Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
+    if (d < best) {
+      best = d;
+      bestS = acc + t * len;
+    }
+    acc += len;
+  }
+  if (n === 1) best = Math.hypot(x - pts[0], y - pts[1]);
+  return { d: best, s: bestS, L: acc };
 }

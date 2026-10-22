@@ -138,6 +138,8 @@ export interface Snapshot {
   /** Today so far. */
   live: LiveStats;
   simRate: number;
+  /** Commuter stories (v2): the traced agent's trace id and version, with the whole trace when it changed. Absent: nobody traced. */
+  story?: StoryLive;
 }
 
 export const TRAIN_STRIDE = 9; // id, route, dir, s, v, load, late, state, nextStop
@@ -193,7 +195,9 @@ export type ToWorker =
   /** The full list of event service overrides (replaces the previous list). */
   | { type: 'service'; overrides: ServiceOverride[] }
   /** Living City pace; applies from the next month close. */
-  | { type: 'growthPace'; pace: GrowthPace };
+  | { type: 'growthPace'; pace: GrowthPace }
+  /** Commuter stories (v2): look for the commuter of the day (candidate checks at boarding and arrival; off by default). */
+  | { type: 'storiesDaily'; on: boolean };
 
 export type Query =
   /** Reply: SimState (mode shares and the growth they belong to, captured together). */
@@ -209,7 +213,11 @@ export type Query =
   | { kind: 'flows'; limit: number }
   | { kind: 'segmentLoads' }
   /** Reply: ChaosState (resync after a load or when a panel opens). */
-  | { kind: 'chaos' };
+  | { kind: 'chaos' }
+  /** Commuter stories (v2). Reply: TraceData of the agent now traced, or null (nobody fits; the old story goes on). */
+  | { kind: 'storyPick'; pick: StoryPick }
+  /** Reply: null. Nobody is traced any more. */
+  | { kind: 'storyStop' };
 
 export type FromWorker =
   | { type: 'ready'; agents: number; groups: number; baseline: number }
@@ -227,7 +235,9 @@ export type FromWorker =
   /** An incident started or cleared, today's weather (3 am), or an event wrap-up. */
   | { type: 'alert'; alert: Alert }
   /** 3 am (or on start after 3 am): today's level, weather and events with their expected mode split. */
-  | { type: 'dayChaos'; info: DayChaosInfo };
+  | { type: 'dayChaos'; info: DayChaosInfo }
+  /** Commuter stories (v2): midnight, the day's notable commuters (only while storiesDaily is on). */
+  | { type: 'dayStories'; stories: DayStories };
 
 export interface DayReport {
   day: number;
@@ -569,4 +579,133 @@ export interface TractGrowth {
   nearestStation: number | null;
   /** This tract's monthly value-capture levy at current values (city currency). */
   levy: number;
+}
+
+// ---------------------------------------------------------------------------
+// Commuter stories (v2, docs/v2/commuter-stories.md): one traced agent, recorded read-only.
+
+/**
+ * Who a story is about. A commuter is agent k of its group (home tract, work tract, earnings
+ * band), which a month-close regeneration keeps; an event-goer (`event`) exists for one day only
+ * (home = origin tract, work = −1, k = its index in the day's pool).
+ */
+export interface StoryWho {
+  home: number;
+  work: number;
+  band: number;
+  k: number;
+  /** Seed for the generated first name (a hash of the identity and the game's agent seed). */
+  nameSeed: number;
+  event?: { id: number; label: string; venue: number; start: number; end: number };
+}
+
+/** Today's itinerary and the mode choice behind it (all from the sim's own arithmetic). */
+export interface StoryPlan {
+  day: number;
+  /** Today's mode as drawn at 3 am: 0 walk, 1 drive, 2 transit. */
+  mode: number;
+  /** When the morning trip starts (game s) and how long they stay at work or the event before heading home (s). */
+  depart: number;
+  stay: number;
+  /** Generalised minutes of walk, drive and transit as mode choice saw them today (null: not available). */
+  costs: [number | null, number | null, number | null];
+  walk: { min: number; penalty: number } | null;
+  drive: { min: number; money: number; moneyMin: number; constant: number } | null;
+  transit: { min: number; transfers: number; transferMin: number; crowdMin: number; fare: number; fareMin: number; observed: boolean } | null;
+  /** The group's shares today (walk, drive, transit); null for event-goers. */
+  shares: [number, number, number] | null;
+  /** Planned trips: legs [route id, board station id, alight station id] × n and the timetable door-to-door seconds. */
+  am: { legs: number[]; time: number } | null;
+  pm: { legs: number[]; time: number } | null;
+  /** Home and work (or venue) points, local metres. */
+  home: [number, number];
+  work: [number, number];
+  /** The fare each trip is billed (its band, and the period it starts in). */
+  fares: [number, number];
+  /** Value of time of their band (money per hour). */
+  vot: number;
+}
+
+/** Why a trip ended by cab. */
+export type CabWhy = 'giveup' | 'closed' | 'gone' | 'cantRide' | 'evacuated' | 'network';
+
+/**
+ * One step of a traced trip (game seconds). `j` marks the event synthesised at a pick for where
+ * the agent already was (its start time may be estimated).
+ */
+export type TraceEvent =
+  | { k: 'day'; t: number; day: number }
+  | { k: 'walk'; t: number; t1: number; why: 'access' | 'transfer' | 'across' | 'egress'; from: [number, number]; to: [number, number]; station: number; pm: boolean; j?: true }
+  | { k: 'drive'; t: number; t1: number; pm: boolean }
+  | { k: 'wait'; t: number; station: number; route: number; towards: number; j?: true }
+  | { k: 'closed'; t: number; station: number; until: number; cab: boolean }
+  | { k: 'board'; t: number; train: number; route: number; station: number; alight: number; fare: number; load: number; cap: number; waited: number; either: boolean; j?: true }
+  | { k: 'left'; t: number; station: number; route: number }
+  | { k: 'alight'; t: number; station: number; route: number; train: number }
+  | { k: 'switch'; t: number; station: number; route: number; train: number; alight: number }
+  | { k: 'across'; t: number; station: number; route: number; eta: number }
+  | { k: 'past'; t: number; station: number }
+  | { k: 'held'; t: number; station: number }
+  | { k: 'incident'; t: number; kind: 'stalled' | 'sick'; until: number; station: number }
+  | { k: 'giveup'; t: number; station: number; waited: number }
+  | { k: 'cab'; t: number; t1: number; why: CabWhy }
+  | { k: 'arrive'; t: number; pm: boolean; dur: number; boarded: boolean }
+  | { k: 'stuck'; t: number }
+  | { k: 'regen'; t: number };
+
+export interface TraceData {
+  /** Increments with each pick (stale snapshots and replies are ignored). */
+  id: number;
+  /** Bumped by every new event or plan. */
+  version: number;
+  who: StoryWho;
+  plan: StoryPlan;
+  /** Chronological (by t); the oldest go first past STORIES.maxEvents. */
+  events: TraceEvent[];
+  /** The story is over: the household moved away at a month close, or an event-goer's day ended. */
+  ended: 'moved' | 'eventOver' | null;
+  /** Train the agent rides now (−1: none). */
+  train: number;
+}
+
+export interface StoryLive {
+  id: number;
+  version: number;
+  /** The whole trace, when its version changed since the last snapshot. */
+  data?: TraceData;
+}
+
+export type StoryPick =
+  /** Someone travelling by transit right now (else a transit commuter still to travel today, else one of today's). */
+  | { kind: 'random'; salt: number }
+  /** Someone waiting on these stations' platforms (else on the way to board there, else boarding there today). */
+  | { kind: 'station'; stations: number[]; salt: number }
+  /** This commuter (the commuter of the day, tomorrow). */
+  | { kind: 'who'; who: StoryWho };
+
+/** Commuter of the day (v2): one real agent of the day and what made it notable. */
+export interface DayStory {
+  cat: 'saved' | 'wait' | 'fan' | 'cross';
+  who: StoryWho;
+  /** Seconds: saved against the faster of walking and driving (saved, cross), waited (wait), the trip (fan). */
+  value: number;
+  /** The trip: start and end (game s), the evening trip or not, legs as ridden [route, board, alight] × n. */
+  t0: number;
+  t1: number;
+  pm: boolean;
+  legs: number[];
+  /** The faster no-transit alternative (saved, cross): seconds and mode (0 walk, 1 drive). */
+  alt?: number;
+  altMode?: number;
+  /** wait: where (station and route ids) and whether a full train left them behind first. */
+  station?: number;
+  route?: number;
+  left?: boolean;
+  /** fan: arrived after the start. */
+  late?: boolean;
+}
+
+export interface DayStories {
+  day: number;
+  stories: DayStory[];
 }

@@ -837,6 +837,9 @@ input[type='checkbox'] {
 .weather-card[data-kind='clear'] .weather-icon {
   color: var(--amber);
 }
+.tb-weather[data-night] .tb-weather-icon {
+  color: #c9d6f2 !important;
+}
 .tb-weather[data-kind='rain'] .tb-weather-icon,
 .weather-card[data-kind='rain'] .weather-icon {
   color: #7fb6f2;
@@ -1535,4 +1538,184 @@ table.fleet td {
 }
 .yr-grid .chart {
   margin: 0 -4px;
+}
+
+/* ---------------------------------------------------------------- Cinematic (v2, docs/v2/cinematic.md) */
+/* Photo mode and the timelapse hide the chrome; it stays in the DOM, so panels come back as they were. */
+.hw-photo > .hw-panel,
+.hw-photo > #toasts,
+.hw-photo > .hw-tip,
+.hw-timelapse > .hw-panel:not(#tl-bar),
+.hw-timelapse > #toasts,
+.hw-timelapse > .hw-tip {
+  display: none !important;
+}
+/* The map's own controls go too, except the attribution (a licence requirement). */
+.hw-photo .maplibregl-ctrl-group,
+.hw-photo .maplibregl-ctrl-scale,
+.hw-timelapse .maplibregl-ctrl-group,
+.hw-timelapse .maplibregl-ctrl-scale {
+  display: none !important;
+}
+/* Letterbox bars sit under MapLibre's control layer (z-index 2), so the attribution stays on top. */
+.hw-letterbox {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  background: #05070a;
+  z-index: 1;
+  pointer-events: none;
+  transition: height 0.35s ease;
+}
+.hw-letterbox.top {
+  top: 0;
+}
+.hw-letterbox.bottom {
+  bottom: 0;
+}
+.hw-photo-letterbox .hw-letterbox {
+  height: 10.5vh;
+}
+.hw-photo-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 30px;
+  transform: translateX(-50%);
+  z-index: 1;
+  pointer-events: none;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(231, 235, 239, 0.82);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.65);
+}
+.hw-photo-letterbox .hw-photo-caption {
+  bottom: calc(5.25vh - 7px);
+}
+.hw-photo-hint {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(22, 27, 33, 0.82);
+  color: var(--muted);
+  font-size: 12.5px;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+.hw-photo-hint.show {
+  opacity: 1;
+}
+
+/* Follow-cam chip: who is followed, where, and any incident or hold. */
+#follow-chip {
+  position: absolute;
+  bottom: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px 7px 12px;
+  z-index: 22;
+  max-width: min(600px, calc(100vw - 32px));
+}
+#blueprint-bar.open ~ #follow-chip {
+  bottom: 100px;
+}
+#follow-chip .fc-icon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--amber);
+  display: block;
+}
+#follow-chip .fc-text {
+  min-width: 0;
+}
+#follow-chip .fc-title {
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+#follow-chip .fc-status {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.panel-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.panel-actions .hw-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* The timelapse player: a date counter over the map and a control bar. */
+#tl-head {
+  position: absolute;
+  top: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  z-index: 25;
+  pointer-events: none;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.7);
+}
+#tl-head .tl-kicker {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+#tl-head .tl-date {
+  font-size: 44px;
+  font-weight: 800;
+  line-height: 1.1;
+  margin-top: 4px;
+}
+#tl-head .tl-stats {
+  font-size: 14px;
+  color: rgba(231, 235, 239, 0.86);
+}
+#tl-bar {
+  position: absolute;
+  bottom: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  z-index: 25;
+  width: min(640px, calc(100vw - 32px));
+}
+#tl-bar .tl-scrub {
+  flex: 1;
+  min-width: 80px;
+  accent-color: var(--green);
+}
+#tl-bar .tl-keys {
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  #tl-bar .tl-keys {
+    display: none;
+  }
+  #tl-head .tl-date {
+    font-size: 32px;
+  }
 }

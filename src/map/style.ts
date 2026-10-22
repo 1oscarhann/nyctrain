@@ -133,7 +133,8 @@ export function bindingsFor(layer: { id: string; type: string }): [prop: string,
     case 'water_name_line_label':
       return WATER_TEXT;
     default:
-      return layer.type === 'symbol' ? [['text-color', 'label'], ['text-halo-color', 'labelHalo']] : [];
+      // The basemap's own labels (the game's layers are 'hw-' and keep their colours).
+      return layer.type === 'symbol' && !layer.id.startsWith('hw-') ? [['text-color', 'label'], ['text-halo-color', 'labelHalo']] : [];
   }
 }
 

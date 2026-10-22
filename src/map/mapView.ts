@@ -23,6 +23,10 @@ export class MapView {
   readonly events = new Emitter<MapViewEvents>();
   private overlay: MapboxOverlay;
   private providers = new Map<string, LayerProvider>();
+  /** Only this provider is drawn (the timelapse player), or null. */
+  private solo: string | null = null;
+  /** Providers left out (photo mode: the tool's previews, the selection's flows and pattern rings). */
+  private hidden = new Set<string>();
   private dirty = true;
   private animating = 0;
   private _is3D = false;
@@ -110,9 +114,22 @@ export class MapView {
     };
   }
 
+  /** Draw only one provider's layers (null: all of them again). */
+  setSolo(id: string | null): void {
+    this.solo = id;
+    this.invalidate();
+  }
+
+  /** Leave these providers out (an empty list draws them all again). */
+  setHidden(ids: readonly string[]): void {
+    this.hidden = new Set(ids);
+    this.invalidate();
+  }
+
   private collectLayers(): Layer[] {
     const out: Layer[] = [];
-    for (const p of this.providers.values()) {
+    for (const [id, p] of this.providers) {
+      if (this.solo !== null ? id !== this.solo : this.hidden.has(id)) continue;
       for (const l of p()) if (l) out.push(l);
     }
     return out;

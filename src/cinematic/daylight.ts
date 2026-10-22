@@ -25,7 +25,7 @@ function hash(n: number): number {
   return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
 }
 
-/** A night facade: dark wall, a grid of windows, about a third of them lit in warm (a few cool) light. */
+/** A night facade: dark wall, a grid of windows, about a quarter of them lit in warm (a few cool) light. */
 export function windowsImage(size = 64): { width: number; height: number; data: Uint8Array } {
   const data = new Uint8Array(size * size * 4);
   const put = (x: number, y: number, [r, g, b]: [number, number, number]) => {
@@ -35,8 +35,8 @@ export function windowsImage(size = 64): { width: number; height: number; data: 
     data[i + 2] = b;
     data[i + 3] = 255;
   };
-  const wall: [number, number, number] = [24, 30, 39];
-  const dark: [number, number, number] = [34, 41, 52];
+  const wall: [number, number, number] = [22, 28, 37];
+  const dark: [number, number, number] = [29, 35, 45];
   const warm: [number, number, number][] = [[255, 206, 120], [255, 224, 160], [244, 190, 104], [255, 236, 190]];
   const cool: [number, number, number] = [196, 218, 255];
   for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) put(x, y, wall);
@@ -44,7 +44,7 @@ export function windowsImage(size = 64): { width: number; height: number; data: 
   for (let gy = 0; gy < size / ch; gy++)
     for (let gx = 0; gx < size / cw; gx++) {
       const h = hash(gy * 97 + gx * 13 + 7);
-      const col = h < 0.3 ? warm[Math.floor(hash(gx * 31 + gy) * warm.length)] : h < 0.36 ? cool : dark;
+      const col = h < 0.22 ? warm[Math.floor(hash(gx * 31 + gy) * warm.length)] : h < 0.26 ? cool : dark;
       for (let y = 1; y < ch - 2; y++) for (let x = 2; x < cw - 1; x++) put(gx * cw + x, gy * ch + y, col);
     }
   return { width: size, height: size, data };
@@ -57,7 +57,18 @@ export interface DaylightOptions {
   onNight?: (night: number) => void;
 }
 
+/** One Daylight per map: the title screen and the game that starts on its map share what the map shows. */
+const BY_MAP = new WeakMap<MLMap, Daylight>();
+
 export class Daylight {
+  /** The map's Daylight (created on first use; later callers get it with their options applied). */
+  static for(map: MLMap, opts: DaylightOptions): Daylight {
+    let d = BY_MAP.get(map);
+    if (!d) BY_MAP.set(map, (d = new Daylight(map, opts)));
+    else d.configure(opts);
+    return d;
+  }
+
   /** Night factor last given to the glow layers. */
   night = 0;
   /** The sun at the last tick (null in Always day). */
@@ -69,7 +80,7 @@ export class Daylight {
   private bindings: Map<ColourKey, PaintBinding[]>;
   private dayApplied = false;
 
-  constructor(
+  private constructor(
     private map: MLMap,
     private opts: DaylightOptions,
   ) {
@@ -85,6 +96,12 @@ export class Daylight {
 
   get mode(): DayNightMode {
     return this.opts.mode;
+  }
+
+  /** New options (a game taking over the title screen's map): the next tick re-evaluates. */
+  configure(opts: DaylightOptions): void {
+    this.opts = { ...opts };
+    this.dayApplied = false;
   }
 
   setMode(mode: DayNightMode): void {
