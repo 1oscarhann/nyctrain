@@ -182,17 +182,19 @@ select {
   white-space: nowrap;
 }
 .tb-stat .label {
-  font-size: 10.5px;
+  font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   color: var(--muted);
+  font-weight: 600;
 }
 .tb-stat .value {
-  font-size: 15px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink);
 }
 .tb-stat .sub {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--muted);
 }
 .tb-spacer {
@@ -431,13 +433,22 @@ select {
   padding: 8px 10px;
 }
 .stat-card .label {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
+  font-weight: 600;
 }
 .stat-card .value {
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 800;
+  line-height: 1.2;
   font-variant-numeric: tabular-nums;
+}
+/* One plain-English line under a stat's number. */
+.stat-card .hint {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.3;
+  margin-top: 1px;
 }
 .chart {
   margin: 6px -4px 0;
@@ -1718,4 +1729,95 @@ table.fleet td {
   #tl-head .tl-date {
     font-size: 32px;
   }
+}
+
+/* ======================================================================================
+   London style (html[data-theme="tfl"], src/cities/types.ts CityTheme). In the spirit of a London
+   transport map and signage: navy panels, a corporate-blue primary action, a humanist sans (Cabin),
+   line bars instead of round bullets. Deliberately no roundel and no Johnston (both are TfL's).
+   ====================================================================================== */
+:root[data-theme='tfl'] {
+  --panel: rgba(8, 8, 10, 0.96);
+  --panel-solid: #08080a;
+  --panel-raised: #1a1a1e;
+  --panel-line: rgba(255, 255, 255, 0.09);
+  --panel-line-strong: rgba(255, 255, 255, 0.2);
+  --ink: #f4f4f5;
+  --muted: #a8a8b0;
+  --dim: #6b6b73;
+  --tfl-blue: #1f3bc4;
+  --tfl-blue-hi: #3452e0;
+  --tfl-red: #dc241f;
+  --font: 'Cabin', 'Overpass', system-ui, sans-serif;
+}
+:root[data-theme='tfl'] body {
+  background: #111113;
+  letter-spacing: 0.005em;
+}
+:root[data-theme='tfl'] .hw-btn {
+  border-radius: 3px;
+}
+:root[data-theme='tfl'] .hw-btn:hover {
+  background: #26262b;
+}
+:root[data-theme='tfl'] .hw-btn.primary {
+  background: var(--tfl-blue);
+  border-color: var(--tfl-blue);
+  color: #fff;
+}
+:root[data-theme='tfl'] .hw-btn.primary:hover {
+  background: var(--tfl-blue-hi);
+  border-color: var(--tfl-blue-hi);
+}
+:root[data-theme='tfl'] .hw-panel {
+  border-radius: 4px;
+}
+/* Line bar: a squared-off rounded rectangle carrying the line's code. */
+.bullet.bar {
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-shadow: none;
+}
+
+/* Train type picker (route draft). */
+.stock-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.stock-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--panel-line-strong);
+  background: var(--panel-raised);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12.5px;
+}
+.stock-btn span {
+  font-size: 11px;
+}
+.stock-btn.on {
+  border-color: var(--amber);
+  background: rgba(255, 194, 74, 0.1);
+}
+
+/* Title screen: Metro / Intertown mode switch. */
+.seg.mode-seg button {
+  height: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.seg.mode-seg .mode-sub {
+  font-size: 11px;
+  opacity: 0.7;
+  font-weight: 400;
 }

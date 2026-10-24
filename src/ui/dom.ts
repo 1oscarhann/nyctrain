@@ -52,6 +52,15 @@ export function svgIcon(path: string, viewBox = '0 0 24 24'): SVGSVGElement {
  */
 export function bullet(color: string, text: string, size = 22, express = false): HTMLElement {
   const fontSize = Math.round(size * (text.length > 1 ? 0.48 : 0.6)) + 'px';
+  // London style: a line bar (a rounded rectangle in the line colour) instead of a disc; express
+  // services keep the lozenge so they still read as different at a glance.
+  if (!express && document.documentElement.dataset.theme === 'tfl') {
+    return h(
+      'span',
+      { class: 'bullet bar', style: { background: color, width: Math.round(size * 1.55) + 'px', height: Math.round(size * 0.78) + 'px', fontSize: Math.round(size * 0.5) + 'px', color: barInk(color) } },
+      text,
+    );
+  }
   if (express) {
     return h(
       'span',
@@ -72,4 +81,13 @@ export function bullet(color: string, text: string, size = 22, express = false):
     },
     text,
   );
+}
+
+/** Text colour on a line bar: navy on light colours (yellow, pink, aqua), white on the rest. */
+function barInk(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return '#fff';
+  const n = parseInt(m[1], 16);
+  const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return lum > 0.68 ? '#111' : '#fff';
 }

@@ -27,6 +27,7 @@ const NORTH = [
 const SOUTH = ['Lambeth', 'Southwark', 'Wandsworth', 'Lewisham', 'Greenwich', 'Bexley', 'Bromley', 'Croydon', 'Sutton', 'Merton', 'Kingston upon Thames'];
 
 export const LONDON: CityConfig = {
+  theme: 'tfl',
   id: 'london',
   name: 'London',
   dataPath: 'data/london/',

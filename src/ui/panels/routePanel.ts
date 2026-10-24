@@ -7,9 +7,8 @@
  * Express pattern and All stops buttons), the Line list (every station along the line, served or
  * skipped, with Skip / Stop here) and the Overtakes card.
  */
-import { OPERATIONS, OPS_CONTROL, STATION, TRAINS } from '../../balance';
-import { cap } from '../../construction/describe';
-import { fmtClock, fmtCount, fmtDistance, fmtMinutes, fmtMoney } from '../../core/units';
+import { gaugeOf, OPERATIONS, OPS_CONTROL, stocksFor, TRAINS, type StockId } from '../../balance';
+import { fmtClock, fmtCount, fmtDistance, fmtMinutes, fmtMoney, fmtSpeed } from '../../core/units';
 import { describeAlert, shortDate } from '../alertFeed';
 import { trainsNeeded } from '../../routes/compile';
 import { suggestTimepoints } from '../../routes/control';
@@ -17,8 +16,9 @@ import { carSaleValue, fleetPlan, purchaseFleet } from '../../routes/fleet';
 import type { RouteTool } from '../../routes/routeTool';
 import { allStopsPattern, expressPattern, serveStops, skipStops, stationsAlongRoute, type AlongStation } from '../../routes/express';
 import { lineRows, OVERTAKES_TIP, overtakesValue, pairWord, routeOnQuad, sameStopList, SERVICE_TIP, serviceEditNoop, skipsText, type LineRow } from '../express';
-import { maxCarsFor } from '../../routes/routeSet';
-import { PERIOD_IDS, ROUTE_COLORS, type PeriodId, type Route, type RouteControl } from '../../routes/types';
+import { carsFitting, maxCarsFor, validStock } from '../../routes/routeSet';
+import { PERIOD_IDS, routePalette, type PeriodId, type Route, type RouteControl } from '../../routes/types';
+import { city } from '../../cities';
 import type { RouteRegularityDetail } from '../../sim/protocol';
 import type { App } from '../app';
 import { loadChart, regularityChart } from '../charts';
@@ -118,7 +118,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
   const net = game.network;
   const path = game.routes.path(net, r);
   const op = game.routes.operational(net, r);
-  const sh = shell(`Route · ${r.express ? 'Express · ' : ''}${cap(r.cls)} metro · ${r.cars} cars`, r.name, () => game.select(null), bullet(r.color, r.bullet, 34, r.express));
+  const sh = shell(`Route · ${r.express ? 'Express · ' : ''}${TRAINS[r.stock].name} · ${r.cars} cars`, r.name, () => game.select(null), bullet(r.color, r.bullet, 34, r.express));
   const body = sh.body;
   const tip = (el: HTMLElement, title: string, text?: string, key?: string) => attachTip(el, app.tooltip, title, key, text);
   if (!op.ok) body.append(h('div', { class: path.ok ? 'warn' : 'err' }, op.reason ?? 'Not running'));
@@ -255,7 +255,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
   const fleetWrap = h('div');
   const maxCars = maxCarsFor(net, r);
   const carsWrap = h('div');
-  const renderCars = () => carsWrap.replaceChildren(carsPicker(TRAINS[r.cls].minCars, Math.max(TRAINS[r.cls].minCars, maxCars), draft.cars, (c) => { draft.cars = c; renderCars(); changed(); }));
+  const renderCars = () => carsWrap.replaceChildren(carsPicker(TRAINS[r.stock].minCars, Math.max(TRAINS[r.stock].minCars, maxCars), draft.cars, (c) => { draft.cars = c; renderCars(); changed(); }));
   const renderFleet = () => fleetWrap.replaceChildren(fleetLine(app, draftRoute(), { sell: true, dirty: dirty() }));
 
   // Operations control (§2.1)
@@ -444,12 +444,12 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
   let chartObjs: { destroy(): void }[] = [];
   const renderStats = () => {
     const lateness = app.report?.routeLateness[r.id];
-    const late = statCard('Avg lateness', lateness !== undefined ? `${Math.round(lateness)} s` : '—', lateness !== undefined && lateness > 120 ? 'red' : lateness !== undefined && lateness > 45 ? 'amber' : undefined);
+    const late = statCard('Running late', lateness === undefined ? '—' : lateness < 30 ? 'On time' : lateness < 90 ? `${Math.round(lateness)} s` : `${(lateness / 60).toFixed(1)} min`, lateness !== undefined && lateness > 120 ? 'red' : lateness !== undefined && lateness > 45 ? 'amber' : lateness !== undefined ? 'green' : undefined, 'average at each stop, yesterday');
     tip(late, 'Average lateness (yesterday)', LATENESS_TIP);
     const cards = [
-      statCard('Riders yesterday', fmtCount(detail?.ridersYesterday ?? app.report?.routeRiders[r.id] ?? 0)),
-      statCard('Riders today', fmtCount(detail?.ridersToday ?? 0)),
-      statCard('Trains in service', `${detail?.inService ?? 0} / ${Math.floor(r.ownedCars / r.cars)}`),
+      statCard('Riders yesterday', fmtCount(detail?.ridersYesterday ?? app.report?.routeRiders[r.id] ?? 0), undefined, 'trips on this line'),
+      statCard('Riders today', fmtCount(detail?.ridersToday ?? 0), undefined, 'so far, live'),
+      statCard('Trains running', `${detail?.inService ?? 0} of ${Math.floor(r.ownedCars / r.cars)}`, undefined, 'out on the line right now'),
       late,
     ];
     // Four-track sections (v2): overtakes between cross-platform stations.
@@ -469,7 +469,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
     reg.append(section(`Service regularity${d ? (d.yesterday ? ' · yesterday' : ' · today so far') : ''}`));
     const grid = h('div', { class: 'stat-grid' });
     for (const c of regularityCards(s)) {
-      const card = statCard(c.label, c.value, c.tone);
+      const card = statCard(c.label, c.value, c.tone, c.hint);
       tip(card, c.label, c.tip);
       grid.append(card);
     }
@@ -480,7 +480,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
     }
     const stopNames = detail.dirs[0]?.stations ?? [];
     const has = d.cvByStop[0].some((v) => v >= 0) || d.cvByStop[1].some((v) => v >= 0);
-    reg.append(h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:8px' }, `Headway spread along the line (CV by stop${d.fromReport ? ', today so far' : ''})`));
+    reg.append(h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:8px' }, `How even the gaps are at each stop${d.fromReport ? ' (today so far)' : ''} · lower is better, under the dashed line is even`));
     if (has && stopNames.length) {
       const wrap = h('div', { class: 'chart' });
       reg.append(wrap);
@@ -622,12 +622,28 @@ export function routeEditor(app: App, tool: RouteTool): Panel {
   });
   bul.addEventListener('keydown', (e) => e.stopPropagation());
   const colors = h('div', { class: 'color-grid' });
-  for (const c of ROUTE_COLORS) colors.append(h('button', { class: c === d.color ? 'on' : '', style: { background: c }, title: c, onclick: () => { d.color = c; tool.recompute(); } }));
+  for (const c of routePalette(city().theme)) colors.append(h('button', { class: c === d.color ? 'on' : '', style: { background: c }, title: c, onclick: () => { d.color = c; tool.recompute(); } }));
   body.append(section('Name and bullet'), h('div', { style: 'display:flex;gap:6px' }, name, bul), section('Colour'), colors);
   // Train length and frequency
   if (d.cls) {
-    const maxCars = Math.min(STATION.cars[d.cls].max, ...d.stops.map((sid) => net.stations.get(sid)?.cars ?? 99));
-    body.append(section('Train length'), carsPicker(TRAINS[d.cls].minCars, Math.max(TRAINS[d.cls].minCars, maxCars), d.cars, (c) => { d.cars = c; tool.recompute(); }));
+    const cls = d.cls;
+    const stock = validStock(d.stock, cls);
+    const fits = (s: StockId) => Math.min(TRAINS[s].maxCars, ...d.stops.map((sid) => { const st = net.stations.get(sid); return st ? carsFitting(net, st, s) : 99; }));
+    const options = stocksFor(gaugeOf(cls));
+    if (options.length > 1) {
+      const pick = (s: StockId) => {
+        d.stock = s;
+        d.cars = Math.max(TRAINS[s].minCars, Math.min(d.cars, fits(s)));
+        tool.recompute();
+      };
+      body.append(
+        section('Trains'),
+        h('div', { class: 'stock-grid' }, ...options.map((s) => h('button', { class: 'stock-btn' + (s === stock ? ' on' : ''), title: TRAINS[s].blurb, onclick: () => pick(s) }, h('b', null, TRAINS[s].name), h('span', { class: 'hw-muted' }, `${fmtSpeed(TRAINS[s].topSpeed)} · ${TRAINS[s].capacityComfort}/car · ${fmtMoney(TRAINS[s].costPerCar)}/car`)))),
+        h('div', { class: 'opt-hint', style: 'margin-top:4px' }, TRAINS[stock].blurb + (stock === 'highspeed' ? '. Build high-speed line (track tool) for its full speed.' : '')),
+      );
+    }
+    const maxCars = fits(stock);
+    body.append(section('Train length'), carsPicker(TRAINS[stock].minCars, Math.max(TRAINS[stock].minCars, maxCars), d.cars, (c) => { d.cars = c; tool.recompute(); }));
   }
   const fleetWrap = h('div', { style: 'margin-top:8px' });
   const renderFleet = () => {

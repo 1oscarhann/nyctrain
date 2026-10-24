@@ -76,7 +76,7 @@ const LONDON: readonly Pool[] = [
   },
 ];
 
-const POOLS: Record<CityId, readonly Pool[]> = { nyc: NYC, london: LONDON };
+const POOLS: Record<CityId, readonly Pool[]> = { nyc: NYC, london: LONDON, southeast: LONDON };
 
 /** Uniform in [0, 1) from a seed and a salt. */
 const u01 = (seed: number, salt: number) => hash32x4(seed, salt, 0x6e61, 0x6d65) / 4294967296;

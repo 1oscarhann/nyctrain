@@ -3,7 +3,7 @@
  * operational routes with paths, speed limits, directed track elements, junction merge locks
  * and timetables.
  */
-import { OPERATIONS, QUAD, TRAINS, type TrackLevel } from '../balance';
+import { OPERATIONS, QUAD, TRACK, TRAINS, type TrackLevel } from '../balance';
 import type { Game } from '../core/game';
 import { curveSpeed, otherEnd } from '../construction/geometry';
 import type { Network } from '../construction/network';
@@ -110,8 +110,12 @@ function buildDir(
       const a = Math.max(lo, p.s0), b = Math.min(hi, p.s1);
       if (b <= a) continue;
       const sa = leg.dir === 0 ? s + (a - lo) : s + (hi - b);
-      limits.push({ s0: sa, s1: sa + (b - a), v: curveSpeed(p.r) });
+      limits.push({ s0: sa, s1: sa + (b - a), v: curveSpeed(p.r, e.cls) });
     }
+    // Line speed (train types): the most any train may run on this class of track. Metro trains
+    // are slower than heavy and light track allow, so their profiles are as before.
+    const line = TRACK.lineSpeed[e.cls];
+    if (isFinite(line) && line < TRAINS[r.stock].topSpeed && len > 0) limits.push({ s0: s, s1: s + len, v: line });
     // Outdoor stretches in edge coordinates: the whole edge, or the exposed half of a ramp (the
     // same half-way rule as Network.levelAt).
     const la = net.nodes.get(e.a)!.level, lb = net.nodes.get(e.b)!.level;
@@ -179,7 +183,7 @@ function buildDir(
     }
     stopS[i] = Math.max(0, found) * k;
   });
-  const spec = TRAINS[r.cls];
+  const spec = TRAINS[r.stock];
   limits.sort((a, b) => a.s0 - b.s0);
   const prof = runProfile(length, limits, [...stopS], spec.accel, spec.brake, spec.topSpeed, OPERATIONS.scheduledDwell);
   return {
@@ -274,13 +278,14 @@ function compileRoute(
   const tps = new Set(r.control.timepoints);
   const d0 = buildDir(net, path.legs, r.stops, stopEdgeU, ext, r, trackIdx, locks, stationIndex, tps);
   const d1 = buildDir(net, reverseLegs(path.legs), [...r.stops].reverse(), [...stopEdgeU].reverse(), [ext[1], ext[0]], r, trackIdx, locks, stationIndex, tps);
-  const spec = TRAINS[r.cls];
+  const spec = TRAINS[r.stock];
   return {
     id: r.id,
     name: r.name,
     bullet: r.bullet,
     color: r.color,
     cls: r.cls,
+    stock: r.stock,
     cars: r.cars,
     trainLength: tl,
     capComfort: spec.capacityComfort * r.cars,

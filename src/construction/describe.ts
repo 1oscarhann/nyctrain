@@ -1,4 +1,5 @@
 /** Human-readable descriptions of track for tooltips and panels. */
+import { trackClassName } from '../core/trackNames';
 import { QUAD } from '../balance';
 import { fmtDistance, fmtMoney, fmtSpeed } from '../core/units';
 import type { Game } from '../core/game';
@@ -46,7 +47,7 @@ export function edgeTooltip(game: Game, edgeId: number): string {
   const cost = e.status === 'blueprint' ? r.cost : e.cost;
   const curve = isFinite(r.minRadius) ? `${fmtDistance(r.minRadius, true)} radius` : 'Straight';
   const lines = [
-    `<div class="title">${levelLabel(net, edgeId)} · ${cap(e.cls)} metro</div>`,
+    `<div class="title">${levelLabel(net, edgeId)} · ${trackClassName(e.cls)}</div>`,
     `<div class="row"><span class="hw-muted">Length</span><span class="num">${fmtDistance(r.length)}</span></div>`,
     `<div class="row"><span class="hw-muted">Curve</span><span class="num">${curve} · ${fmtSpeed(r.speedLimit)} max</span></div>`,
     `<div class="row"><span class="hw-muted">${e.status === 'blueprint' ? 'Cost' : 'Built for'}</span><span class="num">${fmtMoney(cost)}</span></div>`,

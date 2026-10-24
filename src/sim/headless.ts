@@ -2,7 +2,7 @@
  * Headless game harness (no rendering, no worker): used by the headless test and the balance
  * tuning script. Builds networks in code, runs the engine at full speed and settles finances.
  */
-import { ECONOMY, EVENTS, OPERATIONS, STATION, TIME, TRAINS, type ChaosLevel, type GrowthPace, type TrackClass, type TrackLevel } from '../balance';
+import { ECONOMY, EVENTS, MAP, OPERATIONS, STATION, TIME, TRAINS, type ChaosLevel, type GrowthPace, type TrackClass, type TrackLevel } from '../balance';
 import { cityBalance } from '../cities';
 import { MAX_VENUES, type CityEvent } from '../core/cityCalendar';
 import { Game } from '../core/game';
@@ -57,7 +57,7 @@ export interface HeadlessGameOptions {
  * code before them).
  */
 export function createHeadlessGame(world: World, land: LandCollection, opts: HeadlessGameOptions = {}): Game {
-  const terrain = new WorldTerrain(new LandMask(land), new TractIndex(world.tracts));
+  const terrain = new WorldTerrain(new LandMask(land, MAP.landCell), new TractIndex(world.tracts));
   const off = opts.ops === 'off';
   const fares = off ? flatFares(opts.fare ?? ECONOMY.fareDefault) : (opts.fares ?? (opts.fare !== undefined ? flatFares(opts.fare) : defaultFares()));
   const game = new Game(world, terrain, { sandbox: opts.sandbox ?? false, fares, chaos: opts.chaos ?? 'off', chaosSeed: opts.chaosSeed, marketSeed: opts.marketSeed, fixedRate: off, growthPace: opts.growthPace });

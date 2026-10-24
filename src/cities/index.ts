@@ -4,16 +4,17 @@
  * New York defaults in balance.ts, applies the city's CITY_BALANCE overrides, and sets the
  * map projection origin and the currency symbol.
  */
-import { CITY_BALANCE, COMMUTERS, CREDIT, ECONOMY, GOALS, GROWTH, MAP, VALUE_CAPTURE, type CityBalance, type CityId, type ZoneRule } from '../balance';
+import { CITY_BALANCE, COMMUTERS, CREDIT, ECONOMY, GOALS, GROWTH, MAP, TRACK, VALUE_CAPTURE, type CityBalance, type CityId, type ZoneRule } from '../balance';
 import { setOrigin } from '../core/geo';
 import { setCurrency } from '../core/units';
 import { LONDON } from './london';
 import { NYC } from './nyc';
+import { SOUTHEAST } from './southeast';
 import type { CityConfig } from './types';
 
 export type { CityConfig, CityId };
 
-export const CITIES: Record<CityId, CityConfig> = { nyc: NYC, london: LONDON };
+export const CITIES: Record<CityId, CityConfig> = { nyc: NYC, london: LONDON, southeast: SOUTHEAST };
 export const CITY_IDS = Object.keys(CITIES) as CityId[];
 
 // New York's values as written in balance.ts, captured before any city is applied.
@@ -25,6 +26,7 @@ const DEFAULTS = {
   CREDIT: structuredClone(CREDIT),
   GROWTH: structuredClone(GROWTH),
   VALUE_CAPTURE: structuredClone(VALUE_CAPTURE),
+  TRACK: structuredClone(TRACK),
 };
 
 let current: CityConfig = NYC;
@@ -42,9 +44,12 @@ export function applyCity(id: CityId): CityConfig {
   Object.assign(CREDIT, structuredClone(DEFAULTS.CREDIT), structuredClone(b.credit));
   Object.assign(GROWTH, structuredClone(DEFAULTS.GROWTH), structuredClone(b.growth));
   Object.assign(VALUE_CAPTURE, structuredClone(DEFAULTS.VALUE_CAPTURE), structuredClone(b.valueCapture));
+  Object.assign(TRACK, structuredClone(DEFAULTS.TRACK), structuredClone(b.track ?? {}));
   setOrigin(b.origin[0], b.origin[1]);
   current = CITIES[id];
   setCurrency(current.currency);
+  // The look follows the city (CSS custom properties under [data-theme]); no DOM in the worker.
+  if (typeof document !== 'undefined') document.documentElement.dataset.theme = current.theme;
   return current;
 }
 

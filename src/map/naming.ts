@@ -70,8 +70,13 @@ function nearestOnGeometry(px: number, py: number, geom: { type: string; coordin
  * classes. Station names and Living City's tract names (PlaceNames) both use these.
  */
 export function placeClasses(): string[] {
+  // Intertown: stations are named after the town or village they serve ("Crawley", "Barnham").
+  if (city().intertown) return ['city', 'town', 'neighbourhood', 'quarter', 'suburb', 'village', 'hamlet'];
   return city().naming === 'place' ? ['neighbourhood', 'quarter', 'suburb', 'village', 'hamlet'] : ['neighbourhood', 'quarter', 'suburb'];
 }
+
+/** How far away a place label may name a station, m (intertown stations sit outside towns). */
+const placeSearch = (): number => (city().intertown ? 8000 : 2500);
 
 /**
  * Tract names (PlaceNames) also take London's `town` labels (Greenwich, Ilford, Lewisham,
@@ -85,7 +90,7 @@ export function tractPlaceClasses(): string[] {
 /** Streets crossing at less than this angle count as parallel ("W 47th St & W 46th St"). */
 const MIN_CROSSING_SIN = Math.sin((35 * Math.PI) / 180);
 
-export function nameStationAt(map: MLMap | null, x: number, y: number, taken: Set<string>, onLand?: (x: number, y: number) => boolean): string {
+export function nameStationAt(map: MLMap | null, x: number, y: number, taken: Set<string>, onLand?: (x: number, y: number) => boolean, regionAt?: (x: number, y: number) => string | null): string {
   const style = city().naming;
   if (map) {
     try {
@@ -114,7 +119,7 @@ export function nameStationAt(map: MLMap | null, x: number, y: number, taken: Se
         const [px, py] = toLocal(c[0], c[1]);
         if (onLand && !onLand(px, py)) continue;
         const d = Math.hypot(px - x, py - y);
-        if (d < 2500 && !places.some((q) => q.name === nm && q.d <= d)) places.push({ name: nm, d });
+        if (d < placeSearch() && !places.some((q) => q.name === nm && q.d <= d)) places.push({ name: nm, d });
       }
       places.sort((a, b) => a.d - b.d);
       if (style === 'cross-streets') {
@@ -135,6 +140,11 @@ export function nameStationAt(map: MLMap | null, x: number, y: number, taken: Se
         // you're on ("Old Street").
         const place = places.find((p) => p.d <= STATION.placeNameRadius && !taken.has(p.name));
         if (place) return place.name;
+        // Intertown: the nearest town or village, then a street ("Crawley", "Hassocks").
+        if (city().intertown) {
+          const town = places.find((p) => !taken.has(p.name));
+          if (town) return town.name;
+        }
         for (const radius of [STATION.nameSearchRadius, STATION.nameSearchRadius * 2]) {
           const st = ranked.find(([n, v]) => v.d <= radius && !taken.has(n));
           if (st) return st[0];
@@ -151,6 +161,13 @@ export function nameStationAt(map: MLMap | null, x: number, y: number, taken: Se
     } catch {
       // Tiles not loaded — fall through to a numbered name.
     }
+  }
+  // Intertown, with no label near enough (tiles at low zoom carry few): the district's name.
+  const region = city().intertown ? regionAt?.(x, y) : null;
+  if (region) {
+    const short = region.replace(/ and .*$| upon .*$/, '');
+    if (!taken.has(short)) return short;
+    for (let k = 2; k < 50; k++) if (!taken.has(`${short} ${k}`)) return `${short} ${k}`;
   }
   for (let k = 1; k < 10000; k++) if (!taken.has(`Station ${k}`)) return `Station ${k}`;
   return 'Station';

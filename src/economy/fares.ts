@@ -20,6 +20,12 @@ export interface FarePolicy {
   lowIncome: number;
 }
 
+/** Distance fares (ECONOMY.fareDistanceKm): the multiplier on the fare for a home–work distance in metres (1 in the metro cities). */
+export function distanceFareMult(distanceM: number): number {
+  if (!isFinite(ECONOMY.fareDistanceKm)) return 1;
+  return 1 + Math.max(0, distanceM / 1000 - ECONOMY.fareFreeKm) / ECONOMY.fareDistanceKm;
+}
+
 /** One fare all day for everyone (v1's policy). */
 export function flatFares(f: number): FarePolicy {
   return { peak: f, offPeak: f, lowIncome: 1 };

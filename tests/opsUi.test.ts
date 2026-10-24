@@ -113,13 +113,14 @@ describe('fares tab', () => {
 describe('route panel', () => {
   it('regularity cards grade, tone and clamp', () => {
     const even = regularityCards(stats({ cv: 0.21, bunched: 0.06, ewt: -2, holds: 142, holdSec: 142 * 37 }));
-    expect(even.map((c) => c.value)).toEqual(['Even · CV 0.21', '6%', '+0 s', '142 · avg 37 s']);
+    expect(even.map((c) => c.value)).toEqual(['Even', '6%', '+0 s', '142']);
     expect(even.map((c) => c.tone)).toEqual(['green', undefined, undefined, undefined]);
     const uneven = regularityCards(stats({ cv: 0.38, bunched: 0.12, ewt: 61 }));
-    expect(uneven.map((c) => c.value)).toEqual(['Uneven · 0.38', '12%', '+61 s', '0']);
+    expect(uneven.map((c) => c.value)).toEqual(['Uneven', '12%', '+61 s', '0']);
     expect(uneven.map((c) => c.tone)).toEqual(['amber', 'amber', 'amber', undefined]);
     const bunched = regularityCards(stats({ cv: 0.61, bunched: 0.3, ewt: 130 }));
-    expect(bunched[0].value).toBe('Bunched · 0.61');
+    expect(bunched[0].value).toBe('Bunching');
+    expect(even[3].hint).toContain('37 s');
     expect(bunched.map((c) => c.tone)).toEqual(['red', 'red', 'red', undefined]);
     expect(regularityCards(null).map((c) => c.value)).toEqual(['—', '—', '—', '—']);
     expect(regularityTag(stats({ cv: 0.2 }))).toEqual({ text: 'gaps even', tone: 'green' });
@@ -166,7 +167,7 @@ describe('route panel', () => {
     const d = regularityWithReport(fresh, saved, 1800)!;
     expect(d.fromReport).toBe(true);
     expect(d.yesterday).toBe(saved);
-    expect(regularityCards(d.yesterday)[0].value).toBe('Bunched · 0.54');
+    expect(regularityCards(d.yesterday)[0].value).toBe('Bunching');
     // 1.5 × 296 s on a 30-minute run is 24.7%: the largest choice.
     expect(d.suggestRecovery).toBe(0.2);
     expect(recoveryAdvice(d, 0.1)).toBe('Suggested: 20% — trains reached terminals 4.9 min late on average yesterday');

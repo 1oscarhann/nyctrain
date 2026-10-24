@@ -65,8 +65,8 @@ export function trainPanel(app: App, id: number): Panel {
       h(
         'div',
         { class: 'stat-grid' },
-        statCard('On board', fmtCount(people), lf > 1.4 ? 'red' : lf > 1 ? 'amber' : undefined),
-        statCard('Load', `${Math.round(lf * 100)}%`, lf > 1.4 ? 'red' : lf > 1 ? 'amber' : undefined),
+        statCard('On board', fmtCount(people), lf > 1.4 ? 'red' : lf > 1 ? 'amber' : undefined, 'passengers'),
+        statCard('How full', `${Math.round(lf * 100)}%`, lf > 1.4 ? 'red' : lf > 1 ? 'amber' : undefined, lf > 1.4 ? 'packed: people being left behind' : lf > 1 ? 'standing room only' : 'of comfortable space'),
         statCard(held ? 'Held at' : dwelling ? 'At' : 'Next stop', next, held ? 'amber' : undefined),
         statCard('Lateness', t.late > 30 ? `${Math.round(t.late / 60)} min late` : 'On time', t.late > 180 ? 'red' : t.late > 60 ? 'amber' : 'green'),
       ),
@@ -75,7 +75,8 @@ export function trainPanel(app: App, id: number): Panel {
         ['Speed', held ? 'Held by the dispatcher' : dwelling ? 'Dwelling' : fmtSpeed(t.v)],
         ['Cars', String(r.cars)],
         ['Capacity', `${fmtCount(r.capComfort)} comfortable · ${fmtCount(r.capCrush)} crush`],
-        ['Top speed', fmtSpeed(TRAINS[r.cls].topSpeed)],
+        ['Train type', TRAINS[r.stock ?? 'heavy'].name],
+        ['Top speed', fmtSpeed(r.vmax)],
       ]),
     );
   };
@@ -118,8 +119,8 @@ export function tractPanel(app: App, index: number): Panel {
       // Residents and jobs as they are now (the start until the growth query answers).
       statCard('Residents', fmtCount(tg ? tg.residents : t.residents)),
       statCard('Jobs', fmtCount(tg ? tg.jobs : t.jobs)),
-      statCard('Avg commute', d ? `${d.avgCommute.toFixed(1)} min` : '—'),
-      statCard('No good transit', d ? fmtCount(d.unserved) : '—', d && d.unserved > 0 ? 'amber' : undefined),
+      statCard('Average commute', d ? `${d.avgCommute.toFixed(1)} min` : '—', undefined, 'door to door, by any mode'),
+      statCard('No good option', d ? fmtCount(d.unserved) : '—', d && d.unserved > 0 ? 'amber' : undefined, 'commuters your trains don\'t help yet'),
     );
   };
   const render = () => {

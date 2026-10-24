@@ -7,7 +7,7 @@
  * Each edge owns the second half of the fillet at its start vertex and the first half of the
  * fillet at its end vertex, so edges meet at arc midpoints with matching headings.
  */
-import { TRACK } from '../balance';
+import { TRACK, type TrackClass } from '../balance';
 import type { TrackEdge, TrackNode } from './types';
 
 export interface Fillet {
@@ -75,9 +75,9 @@ export function radiusForTangent(t: number, theta: number): number {
 }
 
 /** Maximum speed on a curve of radius r: v = √(a_lat·r). */
-export function curveSpeed(r: number): number {
+export function curveSpeed(r: number, cls?: TrackClass): number {
   if (!isFinite(r) || r <= 0) return Infinity;
-  return Math.sqrt(TRACK.lateralAccel * r);
+  return Math.sqrt((cls === 'highspeed' ? TRACK.lateralAccelHighSpeed : TRACK.lateralAccel) * r);
 }
 
 // ---------------------------------------------------------------------------

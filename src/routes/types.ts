@@ -1,4 +1,4 @@
-import type { TrackClass } from '../balance';
+import type { StockId, TrackClass } from '../balance';
 
 export type PeriodId = 'night' | 'am' | 'midday' | 'pm' | 'evening';
 export const PERIOD_IDS: PeriodId[] = ['night', 'am', 'midday', 'pm', 'evening'];
@@ -27,7 +27,10 @@ export interface Route {
   /** Letter or number shown in the bullet. */
   bullet: string;
   color: string;
+  /** Track family the route runs on: 'heavy' (heavy and high-speed track) or 'light'. */
   cls: TrackClass;
+  /** Train type (balance.ts TRAINS). Routes from before train types load as their track's metro trains. */
+  stock: StockId;
   /** Station ids in order (direction 0 runs first → last). */
   stops: number[];
   cars: number;
@@ -58,6 +61,29 @@ export interface RoutePath {
   /** Distance along the direction-0 path to each stop. */
   stopS: number[];
   length: number;
+}
+
+/** London-style line colours (the player's lines, in the spirit of a London transport map). */
+export const ROUTE_COLORS_TFL = [
+  '#DC241F', // red
+  '#0098D4', // sky blue
+  '#FFD329', // yellow
+  '#00782A', // green
+  '#9B0056', // magenta
+  '#F3A9BB', // pink
+  '#B36305', // brown
+  '#6950A1', // violet
+  '#EE7C0E', // orange
+  '#00A4A7', // teal
+  '#A0A5A9', // grey
+  '#95CDBA', // pale aqua
+  '#1C3F94', // navy
+  '#84B817', // lime
+];
+
+/** The palette for a theme ('tfl' London style; anything else New York style). */
+export function routePalette(theme: string): string[] {
+  return theme === 'tfl' ? ROUTE_COLORS_TFL : ROUTE_COLORS;
 }
 
 export const ROUTE_COLORS = [

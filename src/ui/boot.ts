@@ -24,6 +24,8 @@ import { DAY_NIGHT_HINT, DAY_NIGHT_LABEL, loadPrefs, storePrefs } from '../cinem
 let world: World;
 let land: LandCollection;
 let current: App | null = null;
+/** The metro city to go back to from Intertown. */
+let lastMetro: CityId = 'london';
 const cache = new Map<CityId, { world: World; land: LandCollection }>();
 
 /** Make `id` the current city: balance overrides, origin, currency, then its (cached) data. */
@@ -134,15 +136,29 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
 
   const c = city();
   const synthetic = world.meta.synthetic;
+  // Two modes: Metro (a city's subway: New York or London) and Intertown (regional rail: the South
+  // East, with a New York region to come). The mode follows the city.
+  const intertown = c.intertown === true;
+  if (!intertown) lastMetro = c.id;
+  const metroIds = CITY_IDS.filter((id) => !CITIES[id].intertown);
+  const interIds = CITY_IDS.filter((id) => CITIES[id].intertown);
+  const modePicker = h(
+    'div',
+    { class: 'seg mode-seg', style: 'margin:16px 0 0;width:100%;display:flex' },
+    h('button', { class: !intertown ? 'on' : '', style: 'flex:1', title: 'Build a subway inside one city', onclick: () => switchCity(lastMetro) }, h('b', null, 'Metro'), h('span', { class: 'mode-sub' }, 'one city, underground')),
+    h('button', { class: intertown ? 'on' : '', style: 'flex:1', title: 'Build regional rail between towns', onclick: () => switchCity(interIds[0]) }, h('b', null, 'Intertown'), h('span', { class: 'mode-sub' }, 'regional rail, high speed')),
+  );
   const cityPicker = h(
     'div',
-    { class: 'seg', style: 'margin:16px 0 0;width:100%;display:flex' },
-    ...CITY_IDS.map((id) => h('button', { class: id === c.id ? 'on' : '', style: 'flex:1', onclick: () => switchCity(id), title: `Play in ${CITIES[id].name}` }, CITIES[id].name)),
+    { class: 'seg', style: 'margin:8px 0 0;width:100%;display:flex' },
+    ...(intertown ? interIds : metroIds).map((id) => h('button', { class: id === c.id ? 'on' : '', style: 'flex:1', onclick: () => switchCity(id), title: `Play in ${CITIES[id].name}` }, intertown ? `${CITIES[id].name} · from Victoria` : CITIES[id].name)),
+    intertown ? h('button', { disabled: true, style: 'flex:1', title: 'Coming later' }, 'New York region · soon') : null,
   );
   const card = h(
     'div',
     { class: 'hw-panel', style: 'width:min(440px,calc(100vw - 32px));padding:26px 26px 20px' },
     h('div', { style: 'display:flex;align-items:center;gap:12px' }, h('span', { style: 'width:44px;height:44px;display:inline-flex' }, svgIcon(ICONS.logo)), h('div', null, h('div', { style: 'font-size:30px;font-weight:800;letter-spacing:.01em;line-height:1' }, 'Headway'), h('div', { class: 'hw-muted', style: 'font-size:15px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;margin-top:4px' }, c.name))),
+    modePicker,
     cityPicker,
     h('p', { style: 'line-height:1.55;margin:14px 0 18px' }, c.blurb),
     h(
@@ -246,7 +262,7 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
         units,
         h('div', { class: 'section' }, 'Agent scale (real commuters per simulated agent)'),
         scale,
-        h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:6px' }, 'Applies to new and loaded games. 1 : 10 simulates about 285,000 agents; 1 : 5 is twice as detailed and slower.'),
+        h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:6px' }, 'Applies to new and loaded games. 1 : 10 simulates about 285,000 agents; 1 : 5 is twice as detailed and slower. Intertown runs at 1 : 20 or coarser.'),
         h('div', { class: 'section' }, 'Light'),
         h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, dayNight, windows),
         dnHint,
@@ -258,6 +274,8 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
 
 function startGame(root: HTMLElement, view: MapView, p: { sandbox: boolean; save: SaveFile | null; tutorial: boolean; chaos?: ChaosLevel }): void {
   const settings = loadSettings();
+  // Intertown has 6.35M commuters (twice a metro city): at least 1 : 20 keeps the agent count where New York's is at 1 : 10.
+  if (city().intertown) settings.agentScale = Math.max(settings.agentScale, 20);
   current = new App(root, view, world, land, {
     sandbox: p.sandbox,
     save: p.save,

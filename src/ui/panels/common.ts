@@ -25,8 +25,9 @@ export function shell(kicker: string, title: Node | string, onClose: () => void,
   return { el, body, titleEl };
 }
 
-export function statCard(label: string, value: string, tone?: 'green' | 'amber' | 'red'): HTMLElement {
-  return h('div', { class: 'stat-card' }, h('div', { class: 'label' }, label), h('div', { class: `value ${tone ? 'hw-' + tone : ''}` }, value));
+/** A big number with a plain-English label and, optionally, a one-line explanation under it. */
+export function statCard(label: string, value: string, tone?: 'green' | 'amber' | 'red', hint?: string): HTMLElement {
+  return h('div', { class: 'stat-card' }, h('div', { class: 'label' }, label), h('div', { class: `value ${tone ? 'hw-' + tone : ''}` }, value), hint ? h('div', { class: 'hint' }, hint) : null);
 }
 
 export function kv(rows: [string, string | Node][]): HTMLElement {

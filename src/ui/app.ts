@@ -6,7 +6,7 @@
 import { ArcLayer, ScatterplotLayer, TextLayer, PathLayer } from '@deck.gl/layers';
 import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
 import type { Layer } from '@deck.gl/core';
-import { BONDS, CHAOS, CINEMATIC, COMMUTERS, ECONOMY, TIME, type ChaosLevel, type GrowthPace, type TrackClass, type TrackLevel } from '../balance';
+import { BONDS, CHAOS, CINEMATIC, COMMUTERS, ECONOMY, MAP, TIME, TRAINS, type ChaosLevel, type GrowthPace, type StockId, type TrackLevel } from '../balance';
 import { city, cityBalance } from '../cities';
 import { Game, newChaosSeed, type Selection } from '../core/game';
 import { toLonLat } from '../core/geo';
@@ -17,6 +17,7 @@ import { dayKpi } from '../economy/finance';
 import { yearsWithData } from '../economy/yearReview';
 import { carSaleValue, fleetPlan, sellIdleCars, sellSpareCars } from '../routes/fleet';
 import { checkGoals, emptyGoals, goalTitle, type GoalState } from '../core/goals';
+import { placeHubs } from '../core/hubs';
 import { LandMask } from '../data/landMask';
 import { TractIndex, type LandCollection, type World } from '../data/world';
 import { WorldTerrain } from '../construction/terrain';
@@ -180,7 +181,7 @@ export class App implements AppContext {
     this.settings = { ...opts.settings };
     setUnits(this.settings.units);
     this.tractIndex = new TractIndex(world.tracts);
-    this.terrain = new WorldTerrain(new LandMask(land), this.tractIndex);
+    this.terrain = new WorldTerrain(new LandMask(land, MAP.landCell), this.tractIndex);
     this.game = new Game(world, this.terrain, { sandbox: opts.sandbox, fares: defaultFares() });
     this.goals = emptyGoals();
     this.tutorialDone = !opts.tutorial;
@@ -199,6 +200,8 @@ export class App implements AppContext {
       // market's walk both derive from it.
       this.game.setGameSeed(newChaosSeed());
       if (opts.chaos) this.game.chaos.level = this.game.chaos.levelToday = opts.chaos;
+      // Intertown: the London terminal (Victoria) is there from day one.
+      placeHubs(this.game);
     }
     this.feed = new AlertFeed(this.game);
 
@@ -368,7 +371,7 @@ export class App implements AppContext {
   }
   nameStation(x: number, y: number): string {
     const taken = new Set([...this.game.network.stations.values()].map((s) => s.name));
-    return nameStationAt(this.view.map, x, y, taken, (px, py) => !this.terrain.isWater(px, py));
+    return nameStationAt(this.view.map, x, y, taken, (px, py) => !this.terrain.isWater(px, py), (px, py) => city().regions.find((r) => r.code === this.terrain.borough(px, py))?.name ?? null);
   }
   redraw(): void {
     this.view.invalidate();
@@ -1215,10 +1218,10 @@ export class App implements AppContext {
   }
 
   /** Sell the spare pool's cars of a class (confirmed). */
-  async sellSpareCars(cls: TrackClass): Promise<void> {
+  async sellSpareCars(cls: StockId): Promise<void> {
     const n = this.game.routes.spareCars[cls];
     if (!n) return;
-    if (!(await this.confirm(`Sell ${n} spare ${cls} cars for ${fmtMoneyFine(carSaleValue(cls, n))}?`, saleText(cls, n), 'Sell'))) return;
+    if (!(await this.confirm(`Sell ${n} spare ${TRAINS[cls].name} cars for ${fmtMoneyFine(carSaleValue(cls, n))}?`, saleText(cls, n), 'Sell'))) return;
     const res = sellSpareCars(this.game, cls);
     if (res.ok) this.toast(`Sold ${res.cars} cars for ${fmtMoneyFine(res.proceeds)}`, this.game.sandbox ? 'Sandbox: money is unlimited' : undefined, 'green');
     else this.toast("Couldn't sell", res.reason, 'amber');
@@ -1230,7 +1233,7 @@ export class App implements AppContext {
     if (!r) return;
     const n = fleetPlan(this.game, r).idleCars;
     if (!n) return;
-    if (!(await this.confirm(`Sell ${n} idle cars from ${r.bullet} ${r.name} for ${fmtMoneyFine(carSaleValue(r.cls, n))}?`, saleText(r.cls, n), 'Sell'))) return;
+    if (!(await this.confirm(`Sell ${n} idle cars from ${r.bullet} ${r.name} for ${fmtMoneyFine(carSaleValue(r.stock, n))}?`, saleText(r.stock, n), 'Sell'))) return;
     const res = sellIdleCars(this.game, r);
     if (res.ok) this.toast(`Sold ${res.cars} cars for ${fmtMoneyFine(res.proceeds)}`, `${r.bullet} ${r.name}${this.game.sandbox ? ' · sandbox: money is unlimited' : ''}`, 'green');
     else this.toast("Couldn't sell", res.reason, 'amber');

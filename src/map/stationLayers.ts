@@ -1,5 +1,5 @@
 /**
- * Stations (deck.gl): white circles with a dark outline, sized by daily ridership.
+ * Stations (deck.gl): small off-white dots with a thin soft outline, sized by daily ridership.
  * Interchanges are white pills joining the platforms. Crowded stations pulse amber, then red.
  * A cross-platform station (v2, docs/v2/express-quad.md §2.5) is one wide capsule laid across the
  * four-track section from one pair's route bundle to the other's, with one label.
@@ -13,6 +13,29 @@ import type { Game } from '../core/game';
 import { progress } from '../construction/blueprint';
 import { computeInterchanges } from '../routes/interchange';
 import { ADDITIVE, GLOW_MIN, STATION_GLOW } from '../cinematic/glow';
+import { city } from '../cities';
+
+/** Station dot look: small and quiet so the route lines lead (radii in pixels). */
+const DOT_MIN = 3.5;
+const DOT_GROW = 4;
+const DOT_FILL: [number, number, number, number] = [226, 231, 236, 225];
+const DOT_FILL_BLUEPRINT: [number, number, number, number] = [226, 231, 236, 110];
+const DOT_OUTLINE: [number, number, number, number] = [22, 27, 33, 170];
+const DOT_OUTLINE_PX = 1.25;
+const dotRadius = (boardings: number) => DOT_MIN + Math.min(DOT_GROW, Math.sqrt(boardings / 4000));
+
+/** London style (theme 'tfl'): ticks for one-line stations, white rings for interchanges. */
+const TFL_RING_FILL: [number, number, number, number] = [255, 255, 255, 255];
+const TFL_RING_LINE: [number, number, number, number] = [10, 10, 12, 255];
+const TFL_RING_PX = 4.5;
+const TFL_RING_LINE_PX = 2;
+/** How far a tick sticks out beyond the line's edge, px. */
+const TFL_TICK_PX = 6;
+
+function hexRgb(hex: string): [number, number, number, number] {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return Number.isFinite(n) ? [n >> 16, (n >> 8) & 255, n & 255, 255] : [255, 255, 255, 255];
+}
 
 export interface StationStat {
   /** Daily boardings (real people, scaled up). */
@@ -37,6 +60,16 @@ interface StationDatum {
    * pushed side, and the quad group.
    */
   push?: { x: number; y: number; ax: number; ay: number; g: number };
+  /** Local metres and the unit normal of the track there (London-style ticks). */
+  lx?: number;
+  ly?: number;
+  nx?: number;
+  ny?: number;
+}
+
+interface TickDatum {
+  d: StationDatum;
+  color: [number, number, number, number];
 }
 
 interface PillDatum {
@@ -67,6 +100,9 @@ export class StationLayers {
   private data: StationDatum[] = [];
   private pills: PillDatum[] = [];
   private pairs: PairDatum[] = [];
+  /** London style: one-line stations drawn as ticks (the rest stay discs, drawn as rings). */
+  private ticks: TickDatum[] = [];
+  private tickIds = new Set<number>();
   /** Four-track pair push per quad group (px at line scale 1), from NetworkLayers. */
   private quadQ = new Map<number, number>();
   stats = new Map<number, StationStat>();
@@ -112,7 +148,7 @@ export class StationLayers {
           pos: [lon, lat, z],
           name: s.name,
           status: least.status,
-          radius: 5,
+          radius: DOT_MIN,
           crowding: 0,
           progress: progress(least, this.game.time),
           cx,
@@ -131,7 +167,7 @@ export class StationLayers {
       const p = net.stationPos(s);
       const [lon, lat] = toLonLat(p.x, p.y);
       const z = is3D ? Math.max(0, net.heightAt(s.edge, s.u)) : 0;
-      const dd: StationDatum = { id: s.id, pos: [lon, lat, z], name: s.name, status: s.status, radius: 5, crowding: 0, progress: progress(s, this.game.time) };
+      const dd: StationDatum = { id: s.id, pos: [lon, lat, z], name: s.name, status: s.status, radius: DOT_MIN, crowding: 0, progress: progress(s, this.game.time), lx: p.x, ly: p.y, nx: p.hy, ny: -p.hx };
       const t = net.edges.get(s.edge)?.quad;
       // `away` is to the right of the edge's a→b heading (h); its right normal is (hy, −hx).
       if (t && t.role !== 'link' && t.away) dd.push = { x: p.x, y: p.y, ax: t.away * p.hy, ay: -t.away * p.hx, g: t.g };
@@ -163,6 +199,21 @@ export class StationLayers {
       }
     }
     this.pills = pills;
+    // London style: a built station served by exactly one route, and not part of an interchange,
+    // is a tick in that route's colour on the side of the line.
+    this.ticks = [];
+    this.tickIds = new Set();
+    if (city().theme === 'tfl') {
+      const inGroup = new Set(ic.groups.filter((g) => g.length > 1).flat());
+      const served = new Map<number, string[]>();
+      for (const r of this.game.routes.list()) for (const sid of new Set(r.stops)) (served.get(sid) ?? served.set(sid, []).get(sid)!).push(r.color);
+      for (const d of data) {
+        const cols = served.get(d.id);
+        if (d.status !== 'built' || d.push || inGroup.has(d.id) || !cols || new Set(cols).size !== 1) continue;
+        this.ticks.push({ d, color: hexRgb(cols[0]) });
+        this.tickIds.add(d.id);
+      }
+    }
     this.version++;
     this.layoutVersion++;
   }
@@ -171,12 +222,12 @@ export class StationLayers {
   private applyStats(): void {
     for (const d of this.data) {
       const st = this.stats.get(d.id);
-      d.radius = 5 + Math.min(7, Math.sqrt((st?.boardings ?? 0) / 2500));
+      d.radius = dotRadius(st?.boardings ?? 0);
       d.crowding = st?.crowding ?? 0;
     }
     for (const d of this.pairs) {
       const a = this.stats.get(d.id), b = this.stats.get(d.b);
-      d.radius = 5 + Math.min(7, Math.sqrt(((a?.boardings ?? 0) + (b?.boardings ?? 0)) / 2500));
+      d.radius = dotRadius((a?.boardings ?? 0) + (b?.boardings ?? 0));
       d.crowding = Math.max(a?.crowding ?? 0, b?.crowding ?? 0);
     }
   }
@@ -211,6 +262,7 @@ export class StationLayers {
 
   layers(zoom: number, time: number, glow = 0): Layer[] {
     const pulse = 0.5 + 0.5 * Math.sin(time / 260);
+    const tfl = city().theme === 'tfl';
     const showLabels = zoom >= 13.2;
     const zKey = Math.round(zoom * 20);
     const pxPerM = 1 / metresPerPixel(zoom);
@@ -218,10 +270,10 @@ export class StationLayers {
     const all: StationDatum[] = this.pairs.length ? [...this.data, ...this.pairs] : this.data;
     const labelOffset = (d: StationDatum): [number, number] => {
       const p = d as PairDatum;
-      if (p.b === undefined) return [d.radius + 6, 0];
+      if (p.b === undefined) return [d.radius + 5, 0];
       // Clear the capsule: its horizontal reach on screen (it lies across the track), plus the radius.
       const reach = (p.half + (this.quadQ.get(p.g) ?? MAP.routeLineWidthPx / 2 + QUAD.pairGapPx / 2) * lineScale(zoom) * metresPerPixel(zoom)) * pxPerM;
-      return [d.radius + 6 + reach * Math.abs(p.nx), 0];
+      return [d.radius + 5 + reach * Math.abs(p.nx), 0];
     };
     // Lone platforms on a four-track pair follow their pair's push (zoom-dependent).
     const posOf = (d: StationDatum): [number, number, number] => {
@@ -232,7 +284,7 @@ export class StationLayers {
       return [lon, lat, d.pos[2]];
     };
     const pairLine = (d: PairDatum): [number, number, number, number] =>
-      this.closed.has(d.id) || this.closed.has(d.b) ? [255, 93, 93, 255] : d.status === 'construction' ? [255, 194, 74, 255] : d.status === 'blueprint' ? [255, 255, 255, 160] : [22, 27, 33, 255];
+      this.closed.has(d.id) || this.closed.has(d.b) ? [255, 93, 93, 255] : d.status === 'construction' ? [255, 194, 74, 255] : d.status === 'blueprint' ? [255, 255, 255, 140] : DOT_OUTLINE;
     // Cinematic: a warm glow around every built station at night; a closed one (police activity)
     // is dark. The same data object until the stations or the closures change (not every snapshot).
     if (this.allCache?.version !== this.layoutVersion) {
@@ -243,8 +295,8 @@ export class StationLayers {
     return [
       // Two soft discs (a wide faint one and a tight one) read as a pool of platform light.
       ...([
-        ['station-glow', 11, 0.24],
-        ['station-glow-core', 4, 0.4],
+        ['station-glow', 7, 0.2],
+        ['station-glow-core', 2.5, 0.32],
       ] as const).map(
         ([id, extra, a]) =>
           glow >= GLOW_MIN &&
@@ -265,10 +317,10 @@ export class StationLayers {
         id: 'station-pill-outline',
         data: this.pills,
         getPath: (d) => d.path,
-        getWidth: (d) => d.width + 3,
+        getWidth: (d) => d.width + (tfl ? TFL_RING_LINE_PX : DOT_OUTLINE_PX) * 2,
         widthUnits: 'pixels',
         capRounded: true,
-        getColor: [22, 27, 33, 255],
+        getColor: tfl ? TFL_RING_LINE : DOT_OUTLINE,
         parameters: DEPTH_OFF,
         updateTriggers: { getPath: this.version, getWidth: this.version },
       }),
@@ -279,7 +331,7 @@ export class StationLayers {
         getWidth: (d) => d.width,
         widthUnits: 'pixels',
         capRounded: true,
-        getColor: [255, 255, 255, 255],
+        getColor: tfl ? TFL_RING_FILL : DOT_FILL,
         parameters: DEPTH_OFF,
         updateTriggers: { getPath: this.version, getWidth: this.version },
       }),
@@ -289,7 +341,7 @@ export class StationLayers {
           id: 'station-pair-outline',
           data: this.pairs,
           getPath: (d) => this.capsulePath(d, zoom),
-          getWidth: (d) => d.radius * 2 + (d.status === 'construction' || this.closed.has(d.id) || this.closed.has(d.b) ? 6 : 4),
+          getWidth: (d) => d.radius * 2 + (d.status === 'construction' || this.closed.has(d.id) || this.closed.has(d.b) ? 5 : DOT_OUTLINE_PX * 2),
           widthUnits: 'pixels',
           capRounded: true,
           getColor: pairLine,
@@ -304,7 +356,7 @@ export class StationLayers {
           getWidth: (d) => d.radius * 2,
           widthUnits: 'pixels',
           capRounded: true,
-          getColor: (d) => (d.status === 'blueprint' ? [255, 255, 255, 120] : [255, 255, 255, 255]),
+          getColor: (d) => (d.status === 'blueprint' ? DOT_FILL_BLUEPRINT : DOT_FILL),
           parameters: DEPTH_OFF,
           updateTriggers: { getPath: [this.version, zKey], getWidth: this.version, getColor: this.version },
         }),
@@ -313,22 +365,45 @@ export class StationLayers {
         id: 'station-crowd',
         data: all.filter((d) => d.crowding > 0.6 && d.status === 'built'),
         getPosition: posOf,
-        getRadius: (d) => d.radius + 4 + pulse * 6,
+        getRadius: (d) => d.radius + 3 + pulse * 4,
         radiusUnits: 'pixels',
         getFillColor: (d) => (d.crowding > 1 ? [255, 93, 93, 90 + 80 * pulse] : [255, 194, 74, 70 + 70 * pulse]),
         parameters: DEPTH_OFF,
         updateTriggers: { getPosition: [this.version, zKey], getRadius: [this.version, Math.round(pulse * 20)], getFillColor: [this.version, Math.round(pulse * 20)] },
       }),
+      tfl &&
+        this.ticks.length > 0 &&
+        new PathLayer<TickDatum>({
+          id: 'station-ticks',
+          data: this.ticks.filter((t) => !this.closed.has(t.d.id)),
+          getPath: (t) => {
+            const d = t.d;
+            const mpp = metresPerPixel(zoom);
+            const half = (MAP.routeLineWidthPx * lineScale(zoom)) / 2;
+            const [lon1, lat1] = toLonLat(d.lx! + d.nx! * (half + TFL_TICK_PX) * mpp, d.ly! + d.ny! * (half + TFL_TICK_PX) * mpp);
+            const [lon0, lat0] = toLonLat(d.lx!, d.ly!);
+            return [
+              [lon0, lat0, d.pos[2]],
+              [lon1, lat1, d.pos[2]],
+            ];
+          },
+          getWidth: () => Math.max(2.5, MAP.routeLineWidthPx * lineScale(zoom) * 0.85),
+          widthUnits: 'pixels',
+          capRounded: false,
+          getColor: (t) => t.color,
+          parameters: DEPTH_OFF,
+          updateTriggers: { getPath: [this.version, zKey], getWidth: zKey, getColor: this.version },
+        }),
       new ScatterplotLayer<StationDatum>({
         id: 'stations',
-        data: this.data,
+        data: tfl ? this.data.filter((d) => !this.tickIds.has(d.id) || this.closed.has(d.id)) : this.data,
         getPosition: posOf,
-        getRadius: (d) => d.radius,
+        getRadius: (d) => (tfl && d.status === 'built' ? TFL_RING_PX + (d.radius - DOT_MIN) * 0.4 : d.radius),
         radiusUnits: 'pixels',
         stroked: true,
-        getFillColor: (d) => (d.status === 'blueprint' ? [255, 255, 255, 120] : [255, 255, 255, 255]),
-        getLineColor: (d) => (this.closed.has(d.id) ? [255, 93, 93, 255] : d.status === 'construction' ? [255, 194, 74, 255] : d.status === 'blueprint' ? [255, 255, 255, 160] : [22, 27, 33, 255]),
-        getLineWidth: (d) => (d.status === 'construction' || this.closed.has(d.id) ? 3 : 2),
+        getFillColor: (d) => (d.status === 'blueprint' ? DOT_FILL_BLUEPRINT : tfl ? TFL_RING_FILL : DOT_FILL),
+        getLineColor: (d) => (this.closed.has(d.id) ? [255, 93, 93, 255] : d.status === 'construction' ? [255, 194, 74, 255] : d.status === 'blueprint' ? [255, 255, 255, 140] : tfl ? TFL_RING_LINE : DOT_OUTLINE),
+        getLineWidth: (d) => (d.status === 'construction' || this.closed.has(d.id) ? 2.5 : tfl ? TFL_RING_LINE_PX : DOT_OUTLINE_PX),
         lineWidthUnits: 'pixels',
         pickable: true,
         parameters: DEPTH_OFF,
@@ -345,7 +420,7 @@ export class StationLayers {
           getPixelOffset: labelOffset,
           getTextAnchor: 'start',
           getAlignmentBaseline: 'center',
-          fontFamily: 'Overpass, sans-serif',
+          fontFamily: tfl ? 'Cabin, Overpass, sans-serif' : 'Overpass, sans-serif',
           fontWeight: 700,
           fontSettings: { sdf: true, fontSize: 48, buffer: 6 },
           outlineWidth: 3,

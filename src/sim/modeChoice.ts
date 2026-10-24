@@ -48,14 +48,17 @@ export function walkTime(d: number, wx?: WeatherMods): number {
 
 /** One-way drive time in seconds (door to door, including parking) and money cost. */
 export function driveTripTime(g: PairGeometry, wx?: WeatherMods): number {
-  const road = g.distance * COMMUTERS.driveDetour;
+  const road0 = g.distance * COMMUTERS.driveDetour;
   const f = wx?.driveSpeed ?? 1;
   const vM = COMMUTERS.driveSpeedCore * f;
   const vO = COMMUTERS.driveSpeedOther * f;
+  // Intertown: the part of a long trip beyond driveLongAfter is on fast roads (off: Infinity).
+  const road = Math.min(road0, COMMUTERS.driveLongAfter);
   let t: number;
   if (g.homeCore && g.workCore) t = road / vM;
   else if (g.homeCore || g.workCore) t = road * (0.5 / vM + 0.5 / vO);
   else t = road / vO;
+  if (road0 > road) t += (road0 - road) / (COMMUTERS.driveSpeedLong * f);
   return t + (g.workCbd ? COMMUTERS.parkingCbdTime : COMMUTERS.parkingOtherTime);
 }
 

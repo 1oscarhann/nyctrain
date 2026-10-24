@@ -3,7 +3,7 @@
  * regularity, the finance tabs, the year in review, toasts). Pure — no DOM — so the wording, the
  * currency and each city's fare split are unit-tested in both cities (tests/opsUi.test.ts).
  */
-import { BONDS, CREDIT, ECONOMY, FARES, OPERATIONS, OPS_CONTROL, TRAINS, type TrackClass } from '../balance';
+import { BONDS, CREDIT, ECONOMY, FARES, OPERATIONS, OPS_CONTROL, TRAINS, type StockId } from '../balance';
 import { city } from '../cities';
 import { dateOfDay, monthKey } from '../core/calendar';
 import { goalTitle } from '../core/goals';
@@ -134,37 +134,43 @@ export interface StatText {
   value: string;
   tone: Tone;
   tip: string;
+  /** One plain line under the number. */
+  hint?: string;
 }
 
 /** The four Service regularity cards (§2.2): regularity grade, bunched, extra wait, holds. */
 export function regularityCards(s: RegularityStats | null): StatText[] {
   const none = !s || s.samples === 0;
   const g = s ? grade(s.cv) : 'even';
-  const gw = g === 'even' ? 'Even' : g === 'uneven' ? 'Uneven' : 'Bunched';
+  const gw = g === 'even' ? 'Even' : g === 'uneven' ? 'Uneven' : 'Bunching';
   const ewt = s ? Math.max(0, Math.round(s.ewt)) : 0;
   return [
     {
-      label: 'Regularity',
-      value: none ? '—' : g === 'even' ? `${gw} · CV ${s!.cv.toFixed(2)}` : `${gw} · ${s!.cv.toFixed(2)}`,
+      label: 'Train spacing',
+      value: none ? '—' : gw,
       tone: none ? undefined : g === 'even' ? 'green' : g === 'uneven' ? 'amber' : 'red',
-      tip: `Headway variation (CV of the gaps between trains). Under ${OPS_CONTROL.cvGood} is even, under ${OPS_CONTROL.cvFair} uneven, above that trains bunch.`,
+      hint: none ? 'No trains measured yet' : g === 'even' ? 'Trains arrive at steady gaps' : g === 'uneven' ? 'Gaps vary: some long waits' : 'Trains arrive in clumps',
+      tip: `How evenly trains are spaced (spread of the gaps ${s ? s.cv.toFixed(2) : '—'}; under ${OPS_CONTROL.cvGood} is even, under ${OPS_CONTROL.cvFair} uneven, above that trains bunch).`,
     },
     {
-      label: 'Bunched',
+      label: 'Trains bunched',
       value: none ? '—' : `${Math.round(s!.bunched * 100)}%`,
       tone: none ? undefined : s!.bunched > 0.25 ? 'red' : s!.bunched > 0.1 ? 'amber' : undefined,
-      tip: `Share of gaps under ${Math.round(OPS_CONTROL.bunchFactor * 100)}% of the scheduled headway: two trains arriving close together.`,
+      hint: 'of trains came right behind another',
+      tip: `Share of gaps under ${Math.round(OPS_CONTROL.bunchFactor * 100)}% of the timetable gap: two trains arriving close together.`,
     },
     {
       label: 'Extra wait',
       value: none ? '—' : `+${ewt} s`,
       tone: none ? undefined : ewt > 120 ? 'red' : ewt > 60 ? 'amber' : undefined,
+      hint: 'per rider, from uneven gaps',
       tip: 'How much longer a rider arriving at random waits than with perfectly even gaps.',
     },
     {
-      label: 'Holds',
-      value: s && s.holds ? `${fmtCount(s.holds)} · avg ${Math.round(s.holdSec / s.holds)} s` : none ? '—' : '0',
+      label: 'Trains held',
+      value: s && s.holds ? fmtCount(s.holds) : none ? '—' : '0',
       tone: undefined,
+      hint: s && s.holds ? `about ${Math.round(s.holdSec / s.holds)} s each, to even the gaps` : 'held to even out the gaps',
       tip: 'Trains held by the dispatcher (at the first stop and at timepoints) and their average wait.',
     },
   ];
@@ -336,7 +342,7 @@ export function refinanceText(q: { fee: number; saving: number; paybackMonths: n
 // ---------------------------------------------------------------------------------- fleet
 
 /** "They cost $60M new. Maintenance falls by $0.6M a year." */
-export function saleText(cls: TrackClass, cars: number): string {
+export function saleText(cls: StockId, cars: number): string {
   const cost = cars * TRAINS[cls].costPerCar;
   return `They cost ${fmtMoneyFine(cost)} new. Maintenance falls by ${fmtMoneyFine(cost * ECONOMY.maintenanceRatePerYear)} a year.`;
 }

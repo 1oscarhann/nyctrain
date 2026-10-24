@@ -2,7 +2,7 @@
  * The track network: nodes, edges and stations, plus the editing operations used by the tools.
  * Pure data + geometry — no rendering, no DOM — so it runs in tests and in the headless sim.
  */
-import { QUAD, STATION, TRACK, type TrackClass, type TrackLevel } from '../balance';
+import { gaugeOf, PLATFORM_CAR_M, QUAD, STATION, TRACK, type TrackClass, type TrackLevel } from '../balance';
 import {
   computeEdgeGeom,
   concentric,
@@ -223,7 +223,7 @@ export class Network implements GraphView {
   canAttachAtNode(id: number, cls: TrackClass): { ok: boolean; reason?: string } {
     const n = this.nodes.get(id);
     if (!n) return { ok: false, reason: 'No track here' };
-    if (n.cls !== cls) return { ok: false, reason: `Heavy and light metro track can't connect` };
+    if (gaugeOf(n.cls) !== gaugeOf(cls)) return { ok: false, reason: `Light track can't connect to heavy or high-speed track` };
     const deg = this.degree(id);
     if (deg >= TRACK.maxJunctionDegree) return { ok: false, reason: 'This junction is full' };
     if (deg <= 1 || n.anchor) return { ok: true };
@@ -240,7 +240,7 @@ export class Network implements GraphView {
   canSplitAt(edgeId: number, u: number, cls: TrackClass): { ok: boolean; reason?: string } {
     const e = this.edges.get(edgeId);
     if (!e) return { ok: false, reason: 'No track here' };
-    if (e.cls !== cls) return { ok: false, reason: `Heavy and light metro track can't connect` };
+    if (gaugeOf(e.cls) !== gaugeOf(cls)) return { ok: false, reason: `Light track can't connect to heavy or high-speed track` };
     const g = this.geom(edgeId);
     if (u < 15 || u > g.length - 15) return { ok: false, reason: 'Too close to a node' };
     if (this.isRamp(edgeId)) return { ok: false, reason: `Can't branch from a ramp` };
@@ -442,7 +442,7 @@ export class Network implements GraphView {
         n.r = 0;
         continue;
       }
-      let t = n.leadOf !== null ? Infinity : TRACK.filletMaxTangent;
+      let t = n.leadOf !== null ? Infinity : TRACK.filletMaxTangent[n.cls];
       for (const eid of this.incident(id)) {
         const e = this.edges.get(eid)!;
         const o = this.nodes.get(otherEnd(e, id))!;
@@ -791,7 +791,7 @@ export class Network implements GraphView {
 const EMPTY: readonly number[] = [];
 
 export function platformLength(cars: number, cls: TrackClass): number {
-  const carLen = cls === 'heavy' ? 18 : 20;
+  const carLen = PLATFORM_CAR_M[cls];
   return cars * carLen + STATION.platformMargin;
 }
 

@@ -9,7 +9,9 @@
 import { PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
 import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
-import { QUAD, STATION, TRACK, type TrackClass } from '../balance';
+import { PLATFORM_CAR_M, QUAD, STATION, TRACK, type TrackClass } from '../balance';
+import { trackClassName } from '../core/trackNames';
+import { city } from '../cities';
 import { toLonLat } from '../core/geo';
 import { fmtDistance, fmtMoney } from '../core/units';
 import type { AppContext } from '../ui/context';
@@ -43,7 +45,8 @@ const offsetExt = new PathStyleExtension({ offset: true });
 export class StationTool implements Tool {
   readonly id = 'station' as const;
   readonly xray = true;
-  cars: Record<TrackClass, number> = { heavy: STATION.cars.heavy.default, light: STATION.cars.light.default };
+  /** Platform length per class (intertown: long main-line platforms by default, 12 commuter cars). */
+  cars: Record<TrackClass, number> = { heavy: city().intertown ? 14 : STATION.cars.heavy.default, light: STATION.cars.light.default, highspeed: STATION.cars.highspeed.default };
   private hover: Hover | null = null;
   private pointer: Pointer | null = null;
 
@@ -226,7 +229,7 @@ export class StationTool implements Tool {
         btns.push(
           h('button', { class: this.cars[cls] === c ? 'on' : '', onclick: () => { this.cars[cls] = c; this.ctx.refreshOptions(); if (this.pointer) this.move(this.pointer); } }, String(c)),
         );
-      return h('div', { class: 'opt-row' }, h('span', { class: 'opt-label' }, cls === 'heavy' ? 'Heavy' : 'Light'), h('div', { class: 'seg' }, ...btns), h('span', { class: 'hw-muted', style: 'font-size:12px' }, 'cars'));
+      return h('div', { class: 'opt-row' }, h('span', { class: 'opt-label' }, trackClassName(cls).replace(/ (metro|line|rail)$/, '')), h('div', { class: 'seg' }, ...btns), h('span', { class: 'hw-muted', style: 'font-size:12px' }, `× ${PLATFORM_CAR_M[cls]} m`));
     };
     return h(
       'div',
@@ -235,6 +238,9 @@ export class StationTool implements Tool {
       row('heavy'),
       h('div', { style: 'height:6px' }),
       row('light'),
+      h('div', { style: 'height:6px' }),
+      row('highspeed'),
+      h('div', { class: 'opt-hint', style: 'margin-top:6px' }, 'Main-line trains have longer cars: a 12-car commuter train (20 m cars) needs a 14-car heavy platform; high-speed platforms are counted in high-speed cars.'),
       h('div', { class: 'opt-hint', style: 'margin-top:8px' }, `Stations need nearly straight, level track and ${fmtDistance(STATION.minSpacing, true)} between them. Stations within ${fmtDistance(STATION.interchangeRadius, true)} of each other become interchanges. Circle shows the ${fmtDistance(STATION.catchment, true)} walking catchment.`),
       h('div', { class: 'opt-hint', style: 'margin-top:6px' }, `Four tracks: a click places a cross-platform station (a platform on each pair, ${Math.round(QUAD.pairPlatformCostShare * 100)}% each); Shift-click places one platform on the pair under the cursor (a local-only stop).`),
     );

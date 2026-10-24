@@ -9,7 +9,7 @@
  * - Fleet: cars per class (on routes, needed, idle, spare) and car sales.
  * The open tab is remembered for the session (App.financeTab), not saved.
  */
-import { BONDS, ECONOMY, TRAINS, type TrackClass } from '../../balance';
+import { BONDS, ECONOMY, STOCK_IDS, TRAINS, type StockId } from '../../balance';
 import { city } from '../../cities';
 import { monthKey, monthLabel, yearOf } from '../../core/calendar';
 import { fmtFare, fmtMoney } from '../../core/units';
@@ -302,24 +302,24 @@ export function financePanel(app: App): Panel {
   // ------------------------------------------------------------------ Fleet
   const fleet = () => {
     const routes = game.routes.list();
-    const classes: TrackClass[] = (['heavy', 'light'] as TrackClass[]).filter((c) => c === 'heavy' || routes.some((r) => r.cls === c) || game.routes.spareCars[c] > 0);
+    const classes: StockId[] = STOCK_IDS.filter((c) => (c === 'heavy' && !routes.length) || routes.some((r) => r.stock === c) || game.routes.spareCars[c] > 0);
     const plans = new Map(routes.map((r) => [r.id, fleetPlan(game, r)]));
     const table = h('table', { class: 'fleet' }, h('tr', null, h('th', null, 'Cars'), h('th', null, 'On routes'), h('th', null, 'Needed'), h('th', null, 'Idle'), h('th', null, 'Spare pool')));
     for (const c of classes) {
-      const rs = routes.filter((r) => r.cls === c);
+      const rs = routes.filter((r) => r.stock === c);
       const owned = rs.reduce((s, r) => s + r.ownedCars, 0);
       const needed = rs.reduce((s, r) => s + (plans.get(r.id)?.carsNeeded ?? 0), 0);
       const idle = rs.reduce((s, r) => s + (plans.get(r.id)?.idleCars ?? 0), 0);
-      table.append(h('tr', null, h('td', null, c === 'heavy' ? 'Heavy metro' : 'Light metro'), h('td', null, String(owned)), h('td', null, String(needed)), h('td', { class: idle ? 'hw-amber' : '' }, String(idle)), h('td', { class: game.routes.spareCars[c] ? 'hw-amber' : '' }, String(game.routes.spareCars[c]))));
+      table.append(h('tr', null, h('td', null, TRAINS[c].name), h('td', null, String(owned)), h('td', null, String(needed)), h('td', { class: idle ? 'hw-amber' : '' }, String(idle)), h('td', { class: game.routes.spareCars[c] ? 'hw-amber' : '' }, String(game.routes.spareCars[c]))));
     }
-    content.append(table, muted(`Used cars sell for ${Math.round((carSaleValue('heavy', 1) / TRAINS.heavy.costPerCar) * 100)}% of the new price (${fmtMoneyFine(carSaleValue('heavy', 1))} a heavy car${classes.includes('light') ? `, ${fmtMoneyFine(carSaleValue('light', 1))} a light car` : ''}). Maintenance is ${Math.round(ECONOMY.maintenanceRatePerYear * 100)}% of the new price a year.`));
+    content.append(table, muted(`Used cars sell for ${Math.round((carSaleValue('heavy', 1) / TRAINS.heavy.costPerCar) * 100)}% of the new price (${classes.map((c) => `${fmtMoneyFine(carSaleValue(c, 1))} a ${TRAINS[c].name.toLowerCase()} car`).join(', ')}). Maintenance is ${Math.round(ECONOMY.maintenanceRatePerYear * 100)}% of the new price a year.`));
     content.append(section('Spare pool'));
     let anySpare = false;
     for (const c of classes) {
       const n = game.routes.spareCars[c];
       if (!n) continue;
       anySpare = true;
-      content.append(h('div', { style: 'margin:4px 0' }, h('button', { class: 'hw-btn small', onclick: () => app.sellSpareCars(c) }, `Sell spare ${c} cars (${n}) for ${fmtMoneyFine(carSaleValue(c, n))}`)));
+      content.append(h('div', { style: 'margin:4px 0' }, h('button', { class: 'hw-btn small', onclick: () => app.sellSpareCars(c) }, `Sell spare ${TRAINS[c].name} cars (${n}) for ${fmtMoneyFine(carSaleValue(c, n))}`)));
     }
     if (!anySpare) content.append(h('div', { class: 'hw-muted', style: 'font-size:12.5px' }, 'No spare cars. Deleting a route puts its cars here.'));
     content.append(section('Idle cars on routes'));
@@ -334,7 +334,7 @@ export function financePanel(app: App): Panel {
           { class: 'list-item', style: 'cursor:default' },
           bullet(r.color, r.bullet, 20, r.express),
           h('span', { class: 'grow' }, r.name, h('div', { class: 'hw-muted', style: 'font-size:11.5px' }, `Idle: ${trains ? `${trains} train${trains > 1 ? 's' : ''} (${n} cars)` : `${n} cars`}`)),
-          h('button', { class: 'hw-btn small', onclick: () => app.sellIdleCars(r.id) }, `Sell for ${fmtMoneyFine(carSaleValue(r.cls, n))}`),
+          h('button', { class: 'hw-btn small', onclick: () => app.sellIdleCars(r.id) }, `Sell for ${fmtMoneyFine(carSaleValue(r.stock, n))}`),
         ),
       );
     }

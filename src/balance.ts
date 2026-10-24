@@ -66,6 +66,8 @@ export const MAP = {
   growthColumnMetresPerSqrtPerson: 6,
   growthColumnMinPeople: 10,
   growthColumnMaxMetres: 500,
+  /** Land mask cell, m (the regional intertown map uses coarser cells). */
+  landCell: 20,
 };
 
 // ---------------------------------------------------------------------------
@@ -129,7 +131,15 @@ export const STORIES = {
 // ---------------------------------------------------------------------------
 // Track
 export type TrackLevel = 'elevated' | 'at-grade' | 'cut-and-cover' | 'deep';
-export type TrackClass = 'heavy' | 'light';
+export type TrackClass = 'heavy' | 'light' | 'highspeed';
+export const TRACK_CLASSES: TrackClass[] = ['heavy', 'light', 'highspeed'];
+/**
+ * Track families. Trains run on any track of their family and junctions join any two classes of a
+ * family: high-speed line is heavy-rail track built straight and fast, so high-speed trains can
+ * run onto ordinary track to reach a city terminal (at its line speed).
+ */
+export type Gauge = 'heavy' | 'light';
+export const gaugeOf = (c: TrackClass): Gauge => (c === 'light' ? 'light' : 'heavy');
 
 export const LEVELS: TrackLevel[] = ['elevated', 'at-grade', 'cut-and-cover', 'deep'];
 
@@ -156,19 +166,31 @@ export const TRACK = {
   >,
   /** Construction days per km. */
   daysPerKm: { elevated: 5, 'at-grade': 3, 'cut-and-cover': 8, deep: 12 } as Record<TrackLevel, number>,
-  maxGrade: { heavy: 0.04, light: 0.06 } as Record<TrackClass, number>,
-  minRadius: { heavy: 150, light: 100 } as Record<TrackClass, number>,
+  maxGrade: { heavy: 0.04, light: 0.06, highspeed: 0.035 } as Record<TrackClass, number>,
+  minRadius: { heavy: 150, light: 100, highspeed: 1500 } as Record<TrackClass, number>,
   /** Lateral acceleration used for curve speed limits: v = √(a·r). */
   lateralAccel: 1.0,
-  /** Fillet tangent length cap at ordinary vertices (bounds how far a curve cuts the corner). */
-  filletMaxTangent: 250,
+  /** High-speed line is canted for speed: curves allow more (300 km/h needs r ≈ 5 km, not 7). */
+  lateralAccelHighSpeed: 1.4,
+  /**
+   * Line speed by track class: the most any train may run there (curves can lower it). The metro
+   * trains top out below heavy and light track's limits, so metro play is unchanged.
+   */
+  lineSpeed: { heavy: 200 * KMH, light: 100 * KMH, highspeed: 320 * KMH } as Record<TrackClass, number>,
+  /**
+   * Fillet tangent length cap at ordinary vertices (bounds how far a curve cuts the corner), by
+   * class: high-speed line sweeps in wide curves (a 20° bend at 3 km tangents is r ≈ 17 km).
+   */
+  filletMaxTangent: { heavy: 250, light: 250, highspeed: 3000 } as Record<TrackClass, number>,
   /** Preferred radius for auto-placed lead curves where a branch leaves existing track. */
-  leadPreferredRadius: { heavy: 350, light: 220 } as Record<TrackClass, number>,
+  leadPreferredRadius: { heavy: 350, light: 220, highspeed: 1500 } as Record<TrackClass, number>,
   leadMinLength: 40,
   /** Deflections below this (radians) need no curve. */
   straightEpsilon: 0.0035,
   /** Light metro structures are smaller. */
   lightCostMultiplier: 0.7,
+  /** High-speed line: heavier formation, overhead power for 300+ km/h, gentle alignments. */
+  highSpeedCostMultiplier: 1.8,
   /** Snap distance in screen pixels for track tools. */
   snapPx: 14,
   /** Bulldozing built track refunds this fraction of its cost. */
@@ -191,7 +213,8 @@ export const STATION = {
   walkSpeed: 1.2,
   transferBase: 60,
   catchment: 800,
-  cars: { heavy: { min: 2, max: 10, default: 8 }, light: { min: 2, max: 4, default: 4 } } as Record<
+  /** Platform length in cars of PLATFORM_CAR_M[gauge] (long platforms for main-line trains). */
+  cars: { heavy: { min: 2, max: 14, default: 8 }, light: { min: 2, max: 4, default: 4 }, highspeed: { min: 4, max: 16, default: 12 } } as Record<
     TrackClass,
     { min: number; max: number; default: number }
   >,
@@ -267,7 +290,20 @@ export const QUAD = {
 
 // ---------------------------------------------------------------------------
 // Trains
+/**
+ * Rolling stock. 'heavy' and 'light' are the metro trains every save has (the ids are the old track
+ * classes, so old routes and spare pools load as they were); the rest came with train types.
+ */
+export type StockId = 'heavy' | 'light' | 'commuter' | 'intercity' | 'highspeed';
+export const STOCK_IDS: StockId[] = ['heavy', 'light', 'commuter', 'intercity', 'highspeed'];
+
 export interface TrainSpec {
+  /** "Metro", "Commuter EMU"… */
+  name: string;
+  /** One line for the picker. */
+  blurb: string;
+  /** The track family it runs on. */
+  gauge: Gauge;
   carLength: number;
   minCars: number;
   maxCars: number;
@@ -279,8 +315,11 @@ export interface TrainSpec {
   costPerCar: number;
 }
 
-export const TRAINS: Record<TrackClass, TrainSpec> = {
+export const TRAINS: Record<StockId, TrainSpec> = {
   heavy: {
+    name: 'Metro',
+    blurb: 'Packed standing room, quick to start and stop, 90 km/h',
+    gauge: 'heavy',
     carLength: 18,
     minCars: 2,
     maxCars: 10,
@@ -292,6 +331,9 @@ export const TRAINS: Record<TrackClass, TrainSpec> = {
     costPerCar: 2.5e6,
   },
   light: {
+    name: 'Light metro',
+    blurb: 'Short trains on light track, 100 km/h',
+    gauge: 'light',
     carLength: 20,
     minCars: 2,
     maxCars: 4,
@@ -302,7 +344,56 @@ export const TRAINS: Record<TrackClass, TrainSpec> = {
     topSpeed: 100 * KMH,
     costPerCar: 2.0e6,
   },
+  commuter: {
+    name: 'Commuter EMU',
+    blurb: 'The suburban workhorse: seats and standing, 160 km/h',
+    gauge: 'heavy',
+    carLength: 20,
+    minCars: 4,
+    maxCars: 12,
+    capacityComfort: 80,
+    capacityCrush: 140,
+    accel: 0.8,
+    brake: 0.9,
+    topSpeed: 160 * KMH,
+    costPerCar: 2.2e6,
+  },
+  intercity: {
+    name: 'Intercity',
+    blurb: 'Mostly seats, slow to get going, 200 km/h',
+    gauge: 'heavy',
+    carLength: 24,
+    minCars: 4,
+    maxCars: 11,
+    capacityComfort: 70,
+    capacityCrush: 95,
+    accel: 0.5,
+    brake: 0.7,
+    topSpeed: 200 * KMH,
+    costPerCar: 3.0e6,
+  },
+  highspeed: {
+    name: 'High-speed',
+    blurb: '300 km/h on high-speed line (200 on ordinary track); all seats, pricey',
+    gauge: 'heavy',
+    carLength: 26,
+    minCars: 4,
+    maxCars: 16,
+    capacityComfort: 60,
+    capacityCrush: 75,
+    accel: 0.45,
+    brake: 0.65,
+    topSpeed: 300 * KMH,
+    costPerCar: 4.5e6,
+  },
 };
+
+/** Metro trains for routes from before train types (and the default on each track family). */
+export const defaultStock = (g: Gauge): StockId => (g === 'light' ? 'light' : 'heavy');
+/** The stock a family can run. */
+export const stocksFor = (g: Gauge): StockId[] => STOCK_IDS.filter((s) => TRAINS[s].gauge === g);
+/** Platform car length by track class: platform lengths are counted in these (high-speed platforms in high-speed cars). */
+export const PLATFORM_CAR_M: Record<TrackClass, number> = { heavy: 18, light: 20, highspeed: 26 };
 
 export const OPERATIONS = {
   turnaround: 3 * MIN,
@@ -356,6 +447,12 @@ export const COMMUTERS = {
   /** Driving speed when either end is in the city's core regions (CITY_BALANCE.coreRegions). */
   driveSpeedCore: 14 * KMH,
   driveSpeedOther: 24 * KMH,
+  /**
+   * Long trips (intertown): road distance beyond driveLongAfter runs at driveSpeedLong (A roads and
+   * motorways). Infinity = off: every metro-city trip is driven at street speeds, as in v1.
+   */
+  driveLongAfter: Infinity,
+  driveSpeedLong: 70 * KMH,
   /** Parking time and cost for jobs in the CBD (CITY_BALANCE.cbd). */
   parkingCbdTime: 20 * MIN,
   parkingCbdCost: 20,
@@ -414,6 +511,13 @@ export const ECONOMY = {
   bondRate: 0.025,
   bondYears: 30,
   bankruptcyDays: 30,
+  /**
+   * Distance fares (intertown): a journey's fare is the fare × (1 + km beyond fareFreeKm ÷
+   * fareDistanceKm), km being the straight line from home to work. Infinity = one fare for any
+   * distance (the metro cities, exactly v1).
+   */
+  fareDistanceKm: Infinity,
+  fareFreeKm: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -901,7 +1005,7 @@ const LONDON_CHAOS: CityChaos = {
 
 // ---------------------------------------------------------------------------
 // Cities
-export type CityId = 'nyc' | 'london';
+export type CityId = 'nyc' | 'london' | 'southeast';
 type LL = [number, number];
 
 /** Where a job counts as being in the CBD (parking penalty). */
@@ -912,14 +1016,14 @@ export type ZoneRule =
 export interface CityBalance {
   /** Local projection origin (lon, lat). */
   origin: LL;
-  map: { startCenter: LL; startZoom: number; bounds: [number, number, number, number] };
+  map: { startCenter: LL; startZoom: number; bounds: [number, number, number, number]; minZoom?: number; landCell?: number };
   /** Camera behind the title screen (slow 3D orbit). */
   titleCamera: { center: LL; zoom: number; bearing: number };
   /** Regions (boroughs) with slow, congested driving. */
   coreRegions: string[];
   cbd: ZoneRule;
-  commuters: Partial<Pick<typeof COMMUTERS, 'driveSpeedCore' | 'driveSpeedOther' | 'parkingCbdTime' | 'parkingCbdCost' | 'parkingOtherTime' | 'valueOfTime' | 'driveCostPerKm' | 'modeConstant'>>;
-  economy: Partial<Pick<typeof ECONOMY, 'startingCash' | 'fareDefault' | 'fareMin' | 'fareMax' | 'fareStep'>>;
+  commuters: Partial<Pick<typeof COMMUTERS, 'driveSpeedCore' | 'driveSpeedOther' | 'driveLongAfter' | 'driveSpeedLong' | 'maxAccessWalk' | 'parkingCbdTime' | 'parkingCbdCost' | 'parkingOtherTime' | 'valueOfTime' | 'driveCostPerKm' | 'modeConstant'>>;
+  economy: Partial<Pick<typeof ECONOMY, 'startingCash' | 'fareDefault' | 'fareMin' | 'fareMax' | 'fareStep' | 'fareDistanceKm' | 'fareFreeKm'>>;
   /**
    * The fare policy of a new game (v2): peak (FARES.peakPeriods) and off-peak fares, and the
    * low-income multiplier for FARES.lowIncomeBand (1 = full fare). `ECONOMY.fareDefault` stays the
@@ -935,14 +1039,73 @@ export interface CityBalance {
   goals: Partial<typeof GOALS>;
   /** Event venues and kinds, and the climate (CHAOS_BY_CITY). */
   chaos: CityChaos;
+  /** Track numbers that differ from TRACK (intertown: wider main-line curves). */
+  track?: Partial<Pick<typeof TRACK, 'filletMaxTangent'>>;
+  /**
+   * Stations every new game starts with, built and free (intertown: the London terminal). Each is
+   * a straight stub of track (lon/lat ends) with a platform at `at` metres from the first end.
+   */
+  hubs?: HubDef[];
   /** Living City (v2): growth numbers that differ from GROWTH (nested sides are replaced whole). */
   growth: Partial<typeof GROWTH>;
   /** Living City (v2): value-capture numbers that differ from VALUE_CAPTURE (money in the city's currency). */
   valueCapture: Partial<typeof VALUE_CAPTURE>;
 }
 
+export interface HubDef {
+  name: string;
+  from: LL;
+  to: LL;
+  level: TrackLevel;
+  cls: TrackClass;
+  /** Platform length in platform cars, and the platform centre's distance from `from`, m. */
+  cars: number;
+  at: number;
+}
+
+/**
+ * South East (intertown): London's venues plus the region's big days out. Weekday-only calendar, so
+ * the race meetings and festivals are their weekday days.
+ */
+const SOUTHEAST_CHAOS: CityChaos = {
+  venues: [
+    ...LONDON_CHAOS.venues.filter((v) => ['wembley', 'twickenham', 'wimbledon', 'greenwich-arena', 'hyde-park'].includes(v.key)),
+    { key: 'falmer', name: 'Falmer stadium', lon: -0.0835, lat: 50.8616, region: 'Brighton and Hove', parkingTime: 30 * MIN, parkingCost: 20 },
+    { key: 'st-marys', name: 'Southampton stadium', lon: -1.391, lat: 50.9058, region: 'Southampton', parkingTime: 30 * MIN, parkingCost: 15 },
+    { key: 'goodwood', name: 'Goodwood', lon: -0.7598, lat: 50.8592, region: 'Chichester', parkingTime: 45 * MIN, parkingCost: 25 },
+    { key: 'ascot', name: 'Ascot racecourse', lon: -0.6743, lat: 51.4116, region: 'Windsor and Maidenhead', parkingTime: 40 * MIN, parkingCost: 30 },
+    { key: 'epsom', name: 'Epsom Downs', lon: -0.2559, lat: 51.3123, region: 'Epsom and Ewell', parkingTime: 40 * MIN, parkingCost: 25 },
+  ],
+  kinds: [
+    ...LONDON_CHAOS.kinds.filter((k) => ['wembley', 'twickenham', 'wimbledon', 'greenwich-arena', 'hyde-park'].includes(k.venue)),
+    { venue: 'falmer', label: 'Brighton football', months: FOOTBALL_MONTHS, weekdays: MIDWEEK, chance: 0.08, attendance: [28_000, 31_800],
+      starts: [[19.75, 0.6], [20, 0.4]], duration: 1.9 * HOUR, arrive: [-90 * MIN, 5 * MIN], leave: [-5 * MIN, 40 * MIN] },
+    { venue: 'st-marys', label: 'Southampton football', months: FOOTBALL_MONTHS, weekdays: MIDWEEK, chance: 0.08, attendance: [25_000, 32_000],
+      starts: [[19.75, 0.6], [20, 0.4]], duration: 1.9 * HOUR, arrive: [-90 * MIN, 5 * MIN], leave: [-5 * MIN, 40 * MIN] },
+    { venue: 'goodwood', label: 'Goodwood motor festival', months: [6], window: [6, 9, 6, 11], chance: 1, attendance: [40_000, 60_000],
+      starts: [[9, 1]], duration: 9 * HOUR, arrive: [-60 * MIN, 4 * HOUR], leave: [-5 * HOUR, 30 * MIN], announce: 7 },
+    { venue: 'goodwood', label: 'Goodwood summer race week', months: [6, 7], window: [6, 28, 7, 1], chance: 1, attendance: [18_000, 30_000],
+      starts: [[13, 1]], duration: 5 * HOUR, arrive: [-2 * HOUR, 30 * MIN], leave: [-60 * MIN, 30 * MIN] },
+    { venue: 'ascot', label: 'Ascot summer race week', months: [5], window: [5, 16, 5, 20], chance: 1, attendance: [50_000, 70_000],
+      starts: [[14.5, 1]], duration: 4 * HOUR, arrive: [-2.5 * HOUR, 0], leave: [-30 * MIN, 45 * MIN], announce: 7 },
+    { venue: 'epsom', label: 'Epsom race day', months: [5], window: [5, 3, 5, 6], weekdays: [5], chance: 1, attendance: [30_000, 45_000],
+      starts: [[13.5, 1]], duration: 5 * HOUR, arrive: [-2 * HOUR, 30 * MIN], leave: [-60 * MIN, 40 * MIN], announce: 5 },
+  ],
+  climate: LONDON_CHAOS.climate,
+};
+
 /** Each city's events and weather (the shared chaos tunables are CHAOS, WEATHER and EVENTS above). */
-export const CHAOS_BY_CITY: Record<CityId, CityChaos> = { nyc: NYC_CHAOS, london: LONDON_CHAOS };
+export const CHAOS_BY_CITY: Record<CityId, CityChaos> = { nyc: NYC_CHAOS, london: LONDON_CHAOS, southeast: SOUTHEAST_CHAOS };
+
+/** Central London: roughly the congestion-charge zone, inside the inner ring road (London and the South East). */
+const CITY_BALANCE_LONDON_CBD: ZoneRule = {
+  kind: 'polygon',
+  ring: [
+        [-0.1627, 51.5185], [-0.159, 51.5225], [-0.146, 51.524], [-0.134, 51.5265], [-0.123, 51.531], [-0.105, 51.532],
+        [-0.0876, 51.526], [-0.0745, 51.5225], [-0.0715, 51.5105], [-0.076, 51.504], [-0.088, 51.4985], [-0.1003, 51.4946],
+        [-0.114, 51.49], [-0.127, 51.4875], [-0.144, 51.496], [-0.153, 51.501], [-0.1525, 51.507], [-0.1586, 51.5131],
+  ],
+};
 
 export const CITY_BALANCE: Record<CityId, CityBalance> = {
   nyc: {
@@ -1048,5 +1211,67 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
       /** A slightly larger pledge (business-rate growth, as at Nine Elms) lands the London core in proportion to New York's: ≈ 11% of its fares by month 12. */
       captureShare: 0.14,
     },
+  },
+  southeast: {
+    origin: [-0.1276, 51.5073], // Charing Cross, as London (the region's lines run to London)
+    map: { startCenter: [-0.42, 51.22], startZoom: 8.4, bounds: [-2.3, 50.35, 1.8, 52.35], minZoom: 7.2, landCell: 60 },
+    titleCamera: { center: [-0.1385, 50.8185], zoom: 14.4, bearing: 35 }, // Brighton seafront
+    /** Inner London and the big town centres: congested streets, slow driving. */
+    coreRegions: ['City of London', 'Camden', 'Hackney', 'Hammersmith and Fulham', 'Haringey', 'Islington', 'Kensington and Chelsea', 'Lambeth', 'Lewisham', 'Newham', 'Southwark', 'Tower Hamlets', 'Wandsworth', 'Westminster', 'Brighton and Hove', 'Portsmouth', 'Southampton', 'Oxford', 'Reading'],
+    /** Central London (the congestion-charge zone, as the London map). */
+    cbd: CITY_BALANCE_LONDON_CBD,
+    commuters: {
+      driveSpeedCore: 13 * KMH,
+      driveSpeedOther: 26 * KMH,
+      /** Beyond 12 km of road, A roads and motorways at about 70 km/h door to door (M23, M3, A3, M20…). */
+      driveLongAfter: 12_000,
+      driveSpeedLong: 70 * KMH,
+      /** Out of town people will walk (or be dropped off) further to a station. */
+      maxAccessWalk: 3500,
+      parkingCbdTime: 20 * MIN,
+      parkingCbdCost: 25,
+      parkingOtherTime: 5 * MIN,
+      valueOfTime: [8, 14, 26],
+      driveCostPerKm: 0.25,
+      /** Car ownership outside London is high: driving carries a smaller penalty than in the London map. */
+      modeConstant: { walk: 0, drive: 18, transit: 0 },
+    },
+    economy: {
+      /** Regional rail is long: ~£3B is one Victoria–Brighton line at grade. */
+      startingCash: 15e9,
+      fareDefault: 2.8,
+      fareMin: 0,
+      fareMax: 8,
+      fareStep: 0.1,
+      /** Distance fares: +1 fare per 20 km beyond the first 3 (Victoria–Brighton, 75 km, ≈ 4.6 fares). */
+      fareDistanceKm: 20,
+      fareFreeKm: 3,
+    },
+    fares: { peak: 2.8, offPeak: 2.3, lowIncome: 1 },
+    credit: {
+      farebox: { x: [0.3, 0.6, 0.9, 1.2], y: [0, 50, 80, 100] },
+      coverage: { x: [-0.5, 0, 0.5, 1.0, 2.5], y: [0, 30, 55, 75, 100] },
+    },
+    goals: {
+      /** Victoria to Brighton in under an hour, door to door. */
+      tripMinutes: 60,
+      tripFrom: [-0.1441, 51.4952],
+      tripTo: [-0.141, 50.829],
+      valueCaptureMonth: 6e6,
+    },
+    chaos: CHAOS_BY_CITY.southeast,
+    growth: { cityGrowthPerYear: 0.009 },
+    valueCapture: {
+      /** Homes outside London are cheaper: ≈ £480k per resident commuter across the map. */
+      valuePerResident: 480_000,
+      valuePerJob: 110_000,
+      taxRateHomes: 0.003,
+      taxRateJobs: 0.025,
+      captureShare: 0.14,
+    },
+    /** Main lines sweep wider: a 20° bend with 1.2 km tangents is r ≈ 6.8 km (fine for 200 km/h). */
+    track: { filletMaxTangent: { heavy: 1200, light: 250, highspeed: 3000 } },
+    /** Victoria: a 14-car terminal platform, elevated so a new line can cross the river straight away (and ramp down beyond). */
+    hubs: [{ name: 'Victoria', from: [-0.1441, 51.4955], to: [-0.1466, 51.4905], level: 'elevated', cls: 'heavy', cars: 14, at: 190 }],
   },
 };

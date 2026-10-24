@@ -3,6 +3,10 @@ import '@fontsource/overpass/400.css';
 import '@fontsource/overpass/600.css';
 import '@fontsource/overpass/700.css';
 import '@fontsource/overpass/800.css';
+// London style (data-theme="tfl"): Cabin, a humanist sans in the Johnston/Gill tradition (SIL OFL).
+import '@fontsource/cabin/400.css';
+import '@fontsource/cabin/600.css';
+import '@fontsource/cabin/700.css';
 import './ui/styles.css';
 import { bootstrap } from './ui/boot';
 

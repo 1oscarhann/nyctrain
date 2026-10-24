@@ -1,7 +1,9 @@
 # Headway
 
-A metro builder set in real cities where nobody ever built one. Pick **New York** (the five
-boroughs) or **London** (all 33 boroughs) on the title screen. You get the actual streets,
+A metro builder set in real cities where nobody ever built one. Pick a mode on the title screen:
+**Metro** (**New York**, the five boroughs, or **London**, all 33 boroughs) or **Intertown**
+(**South East**: London and the whole ONS South East region, a railway builder at regional
+scale; see [Intertown](#intertown-the-south-east)). You get the actual streets,
 shoreline and buildings, real commuting data and a few billion dollars or pounds. You design
 track, stations and routes. Then about 2.9 million simulated commuters decide each morning
 whether your network beats walking or driving.
@@ -74,6 +76,60 @@ earnings bands (30/40/30 across London) with an ordered logit on the home MSOA's
 income (ONS small-area income estimates 2011/12). Contains National Statistics data © Crown
 copyright and database right 2011/2013; contains OS data © Crown copyright and database right;
 Open Government Licence v3.0.
+
+## Intertown: the South East
+
+A third map and a second mode. London's 33 boroughs plus the 67 districts of the South East
+(Brighton, Portsmouth, Southampton, Reading, Oxford, Milton Keynes, Canterbury, Dover…), 2,091
+MSOAs and **6.35 million** commuters (2011 census, every commute that starts and ends in the area,
+so London-bound commuters from the coast count). Every game starts with one free, built terminal:
+**Victoria**, an elevated 14-car platform on a stub of main line pointing south over the river.
+£15B to start.
+
+* **Data**: `npm run data:southeast` (`scripts/build-data-southeast.ts`, the London pipeline widened;
+  writes `public/data/southeast/`). Regions and chart areas are `src/cities/southeastRegions.ts`.
+  The land mask uses 60 m cells (`MAP.landCell`), so the narrow upper Thames is land at this scale.
+* **Distance fares**: a journey costs the fare × (1 + (km − 3) ÷ 20), straight line home to work
+  (`ECONOMY.fareDistanceKm`, `fareFreeKm`; Infinity in the metro cities, which are unchanged).
+* **Driving**: road beyond 12 km runs at 70 km/h (`COMMUTERS.driveLongAfter`, `driveSpeedLong`), so
+  Brighton–Westminster is about two hours by car, not six at street speed. Off in the metro cities.
+* **Naming**: stations take the nearest town or village label, else the district name.
+* **Agents**: at least 1 : 20 (about 318,000 agents, New York's count at 1 : 10).
+* **Goals**: London to the sea; reach the big towns (stretch); Victoria to Brighton in under an hour.
+
+## Train types and high-speed line
+
+Routes pick a train type (route panel → Trains); every type has its own capacity, acceleration,
+top speed and price (`TRAINS` in `balance.ts`):
+
+| Type | Car | Cars | Comfortable / crush per car | Top speed | Per car |
+|---|---|---|---|---|---|
+| Metro (`heavy`) | 18 m | 2–10 | 110 / 200 | 90 km/h | 2.5M |
+| Light metro (`light`) | 20 m | 2–4 | 90 / 160 | 100 km/h | 2.0M |
+| Commuter EMU | 20 m | 4–12 | 80 / 140 | 160 km/h | 2.2M |
+| Intercity | 24 m | 4–11 | 70 / 95 | 200 km/h | 3.0M |
+| High-speed | 26 m | 4–16 | 60 / 75 | 300 km/h | 4.5M |
+
+Track has a **line speed** per class (`TRACK.lineSpeed`: heavy 200, light 100, high-speed
+320 km/h); curves can lower it. Metro trains are slower than heavy track allows, so metro play is
+unchanged. **High-speed line** is a third track class: 1.8× the cost, curves of 1.5 km or wider
+(canted: lateral 1.4 m/s²), 3 km fillet tangents. It is heavy-rail track built for speed, so it
+joins ordinary heavy track at junctions and high-speed trains can run into an ordinary terminal
+(at 200 km/h there). Light track still can't join either.
+
+Platforms are counted in platform cars (18 m on heavy track, 20 m light, 26 m high-speed), and a
+route's train length is what fits its shortest platform for its train type (a 14-car heavy
+platform takes 12 commuter or 10 intercity cars). Changing a route's train type puts its old cars
+in the spare pool (sell them in Finances → Fleet) and buys the new fleet. Old saves load with
+their routes on metro trains, exactly as before.
+
+## London style
+
+London and the South East use a London-transport look (`theme: 'tfl'`, `html[data-theme]`): navy
+panels, a blue primary action, the Cabin typeface (a humanist sans in the Johnston/Gill tradition,
+SIL OFL), line bars instead of round bullets, a London line palette, and map stations as **ticks**
+in the line colour (one-line stations) and white **rings** (interchanges). Deliberately no roundel
+and no Johnston: both belong to TfL. New York keeps the subway look (letter discs, small dots).
 
 ## Controls
 

@@ -67,9 +67,9 @@ describe('track network geometry', () => {
     expect(ids.length).toBe(2);
     const mid = [...net.nodes.values()].find((n) => n.x === 1000 && n.y === 0)!;
     // Tangent is capped, so r = cap / tan(45°).
-    expect(mid.r).toBeCloseTo(TRACK.filletMaxTangent, 3);
+    expect(mid.r).toBeCloseTo(TRACK.filletMaxTangent.heavy, 3);
     const total = ids.reduce((s, id) => s + net.geom(id).length, 0);
-    const t = TRACK.filletMaxTangent;
+    const t = TRACK.filletMaxTangent.heavy;
     const expected = 2 * (1000 - t) + (Math.PI / 2) * mid.r;
     expect(Math.abs(total - expected)).toBeLessThan(1.0);
     // Edges meet with matching headings (smooth).

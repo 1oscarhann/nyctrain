@@ -2,7 +2,7 @@
  * What makes a city a city: names, regions, copy and goals. Numbers (origin, map view, driving,
  * parking, money) live in src/balance.ts CITY_BALANCE.
  */
-import type { CityId } from '../balance';
+import type { CityId, StockId } from '../balance';
 import type { UnitSystem } from '../core/units';
 import type { TimeZone } from '../cinematic/solar';
 
@@ -71,4 +71,16 @@ export interface CityConfig {
    * day/night palette) follows this zone and the city's CITY_BALANCE origin.
    */
   timeZone: TimeZone;
+  /**
+   * Look and feel (main thread only): 'mta' is the New York subway style (round letter bullets,
+   * white station dots); 'tfl' is London style (line bars, station ticks and interchange rings, a
+   * humanist sans, navy panels). Applied as <html data-theme> by applyCity().
+   */
+  theme: CityTheme;
+  /** Intertown map (the South East): main-line wording, commuter trains by default, distance fares. */
+  intertown?: boolean;
+  /** Trains a new route on heavy track gets ('heavy' metro in the cities, 'commuter' intertown). */
+  defaultHeavyStock?: StockId;
 }
+
+export type CityTheme = 'mta' | 'tfl';

@@ -10,7 +10,8 @@
  */
 import { PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
-import { STATION, type TrackClass } from '../balance';
+import { gaugeOf, STATION, TRAINS, type StockId, type TrackClass } from '../balance';
+import { city } from '../cities';
 import { toLonLat } from '../core/geo';
 import { slicePolyline } from '../map/polyline';
 import { hexRgb } from '../map/networkLayers';
@@ -18,7 +19,7 @@ import type { AppContext } from '../ui/context';
 import type { Pointer, Tool } from '../ui/toolTypes';
 import { findRoutePath } from './pathfind';
 import { choosePlatform, insertStop, partnerOf, pathErrorHint, quadRole, stationsAlongPath, switchPlatform, type AlongStation } from './express';
-import { defaultHeadways } from './routeSet';
+import { carsFitting, defaultHeadways, validStock } from './routeSet';
 import type { PeriodId, Route, RoutePath } from './types';
 import { purchaseFleet, fleetPlan } from './fleet';
 import { fmtMoney } from '../core/units';
@@ -29,6 +30,8 @@ export interface RouteDraft {
   bullet: string;
   color: string;
   cls: TrackClass | null;
+  /** Train type; follows the track family once the first stop is picked. */
+  stock: StockId;
   stops: number[];
   cars: number;
   headways: Record<PeriodId, number>;
@@ -68,6 +71,7 @@ export class RouteTool implements Tool {
       bullet: routes.nextBullet(),
       color: routes.nextColor(),
       cls: null,
+      stock: city().defaultHeavyStock ?? 'heavy',
       stops: [],
       cars: STATION.cars.heavy.default,
       headways: defaultHeadways(),
@@ -84,6 +88,7 @@ export class RouteTool implements Tool {
       bullet: r.bullet,
       color: r.color,
       cls: r.cls,
+      stock: r.stock,
       stops: [...r.stops],
       cars: r.cars,
       headways: { ...r.headways },
@@ -115,6 +120,7 @@ export class RouteTool implements Tool {
       bullet: d.bullet,
       color: d.color,
       cls: d.cls,
+      stock: validStock(d.stock, d.cls),
       stops: d.stops,
       cars: d.cars,
       headways: d.headways,
@@ -135,8 +141,9 @@ export class RouteTool implements Tool {
     const net = this.ctx.game.network;
     for (const sid of d.stops) {
       const s = net.stations.get(sid);
-      if (s && s.cars < d.cars) {
-        out.push(`${s.name}'s platform is only ${s.cars} cars — shorten the trains`);
+      const fit = s && d.cls ? carsFitting(net, s, validStock(d.stock, d.cls)) : Infinity;
+      if (s && fit < d.cars) {
+        out.push(`${s.name}'s platform takes ${fit}-car ${TRAINS[validStock(d.stock, d.cls ?? "heavy")].name} trains — shorten the trains or lengthen it`);
         break;
       }
     }
@@ -149,15 +156,22 @@ export class RouteTool implements Tool {
     const d = this.draft;
     if (!d || this.problems().length || !d.cls) return false;
     const game = this.ctx.game;
-    const data = { name: d.name.trim(), bullet: d.bullet.trim().slice(0, 2).toUpperCase(), color: d.color, cls: d.cls, stops: [...d.stops], cars: d.cars, headways: { ...d.headways }, express: d.express };
+    const data = { name: d.name.trim(), bullet: d.bullet.trim().slice(0, 2).toUpperCase(), color: d.color, cls: d.cls, stock: validStock(d.stock, d.cls), stops: [...d.stops], cars: d.cars, headways: { ...d.headways }, express: d.express };
     let route: Route;
     let created = false;
     if (d.editing !== null && game.routes.get(d.editing)) {
       route = game.routes.get(d.editing)!;
       const before = { ...route, stops: [...route.stops], headways: { ...route.headways }, control: { ...route.control, timepoints: [...route.control.timepoints] } };
+      // A new train type: the old trains go to the spare pool (sellable there) and the route buys its new fleet.
+      const swapped = route.stock !== data.stock ? { stock: route.stock, cars: route.ownedCars } : null;
+      if (swapped) {
+        game.routes.spareCars[swapped.stock] += swapped.cars;
+        route.ownedCars = 0;
+      }
       game.routes.update(route.id, data);
       const res = purchaseFleet(game, route);
       if (!res.ok) {
+        if (swapped) game.routes.spareCars[swapped.stock] -= swapped.cars;
         game.routes.update(route.id, before);
         this.ctx.toast("Can't afford the extra trains", `${fmtMoney(res.cost)} needed`, 'red');
         return false;
@@ -225,7 +239,7 @@ export class RouteTool implements Tool {
       this.ctx.tip(d?.stops.length ? null : `<div class="hw-muted">Click stations in order to make a route${d?.express ? ' · express' : ''} · <span class="kbd">E</span> local or express</div>`, p.px);
     } else {
       const s = net.stations.get(sid)!;
-      const cls = net.edges.get(s.edge)!.cls;
+      const cls = gaugeOf(net.edges.get(s.edge)!.cls);
       const partner = partnerOf(net, sid);
       const role = quadRole(net, sid);
       const plat = partner !== null && (role === 'local' || role === 'express') ? ` (${role} platform)` : '';
@@ -238,7 +252,7 @@ export class RouteTool implements Tool {
       // A served pair: Alt-click moves the stop to the pair's other platform (each time).
       const other = at >= 0 && d ? partnerOf(net, d.stops[at]) : null;
       const otherRole = other !== null ? quadRole(net, other) : null;
-      if (d?.cls && d.cls !== cls) msg = `<div class="reason hw-red">${s.name} is on ${cls} metro track</div>`;
+      if (d?.cls && d.cls !== cls) msg = `<div class="reason hw-red">${s.name} is on ${cls} track</div>`;
       else if (at >= 0 && p.alt && other !== null) msg = `<div class="hw-green">Click to use the ${otherRole ?? 'other'} platform at ${s.name}</div>`;
       else if (at >= 0) msg = `<div class="hw-amber">Click to remove ${s.name}</div>${other !== null ? `<div class="hw-muted">Alt-click: use the ${otherRole ?? 'other'} platform</div>` : ''}`;
       else if (!p.shift && this.runsPast(sid)) msg = `<div class="hw-green">Click to stop at ${s.name}${plat} (inserted in order)</div>${altHint ? `<div>${altHint.slice(3)}</div>` : ''}`;
@@ -257,14 +271,15 @@ export class RouteTool implements Tool {
     // A cross-platform station: the express platform for an express, the local one for a local (Alt: the other).
     const sid = choosePlatform(net, raw, d.express, p.alt);
     const s = net.stations.get(sid)!;
-    const cls = net.edges.get(s.edge)!.cls;
+    const cls = gaugeOf(net.edges.get(s.edge)!.cls);
     if (d.cls && d.cls !== cls) {
-      this.ctx.toast("Can't mix track classes", `${s.name} is on ${cls} metro track`, 'red');
+      this.ctx.toast("Can't mix light and heavy track", `${s.name} is on ${cls} track`, 'red');
       return;
     }
     if (!d.cls) {
       d.cls = cls;
-      d.cars = Math.min(s.cars, STATION.cars[cls].default);
+      d.stock = validStock(d.stock, cls);
+      d.cars = Math.max(TRAINS[d.stock].minCars, Math.min(carsFitting(net, s, d.stock), TRAINS[d.stock].maxCars, STATION.cars[cls].default));
     }
     const i = this.stopIndexOf(sid);
     const past = i < 0 && !p.shift && this.path?.ok ? this.runsPast(sid) : null;
@@ -282,6 +297,13 @@ export class RouteTool implements Tool {
     } else if (p.shift) d.stops.unshift(sid);
     else d.stops.push(sid);
     if (d.stops.length === 0) d.cls = d.editing !== null ? d.cls : null;
+    // A new route's trains shrink to the shortest platform on it (a new stop with a shorter
+    // platform no longer blocks saving; lengthen trains again in the panel).
+    if (d.editing === null && d.cls) {
+      const stock = validStock(d.stock, d.cls);
+      const fit = Math.min(...d.stops.map((id) => { const st = net.stations.get(id); return st ? carsFitting(net, st, stock) : Infinity; }));
+      if (isFinite(fit)) d.cars = Math.max(TRAINS[stock].minCars, Math.min(d.cars, fit));
+    }
     // Default name from the terminals.
     if (!d.name && d.stops.length >= 2) d.name = `${net.stations.get(d.stops[0])!.name.split(' & ')[0]} – ${net.stations.get(d.stops[d.stops.length - 1])!.name.split(' & ')[0]}`;
     this.recompute();

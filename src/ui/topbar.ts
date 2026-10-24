@@ -4,6 +4,7 @@
  * no-subway baseline.
  */
 import { TIME } from '../balance';
+import { city } from '../cities';
 import { dayIndex, fmtDate, timeOfDay } from '../core/calendar';
 import { weatherLabel } from '../core/cityCalendar';
 import { fmtClock, fmtCount, fmtMoney, fmtPct } from '../core/units';
@@ -25,6 +26,7 @@ export class TopBar {
   private share = h('span', { class: 'value num' });
   private commute = h('span', { class: 'value num' });
   private commuteSub = h('span', { class: 'sub num' });
+  private shareSub = h('span', { class: 'sub num' });
   private speedBtns: HTMLButtonElement[] = [];
   private pauseBtn: HTMLButtonElement;
   private rate = h('span', { class: 'sub num hw-amber', style: 'display:none' });
@@ -37,8 +39,11 @@ export class TopBar {
   readonly ticker: NewsTicker;
 
   constructor(private app: App) {
-    const stat = (label: string, value: HTMLElement, sub?: HTMLElement, onclick?: () => void) =>
-      h('div', { class: 'tb-stat', style: onclick ? 'cursor:pointer' : '', onclick }, h('span', { class: 'label' }, label), value, sub ?? null);
+    const stat = (label: string, value: HTMLElement, sub?: HTMLElement, onclick?: () => void, explain?: string) => {
+      const el = h('div', { class: 'tb-stat', style: onclick ? 'cursor:pointer' : '', onclick }, h('span', { class: 'label' }, label), value, sub ?? null);
+      if (explain) attachTip(el, app.tooltip, label, undefined, explain);
+      return el;
+    };
     this.pauseBtn = h('button', { class: 'hw-btn ghost speed-btn', onclick: () => app.togglePause() }) as HTMLButtonElement;
     attachTip(this.pauseBtn, app.tooltip, 'Pause / resume', 'Space');
     TIME.speeds.forEach((s, i) => {
@@ -80,11 +85,11 @@ export class TopBar {
       this.weather,
       h('div', { class: 'tb-ticker-slot' }, this.ticker.el),
       h('div', { class: 'tb-sep' }),
-      stat('Daily riders', this.riders, this.ridersSub),
+      stat('Riders yesterday', this.riders, this.ridersSub, undefined, 'Trips taken on your network yesterday (each journey counts once, however many changes). The line below counts today live.'),
       h('div', { class: 'tb-sep' }),
-      stat('Transit share', this.share),
+      stat(`Go by ${city().transitWord === 'railway' ? 'rail' : city().transitWord}`, this.share, this.shareSub, undefined, `Share of all commutes that use your ${city().transitWord}. The rest walk or drive. Higher is better.`),
       h('div', { class: 'tb-sep' }),
-      stat('Avg commute', this.commute, this.commuteSub),
+      stat('Average commute', this.commute, this.commuteSub, undefined, 'Average door-to-door commute across the whole map, by any mode, compared with no trains at all. Lower is better.'),
       h('div', { class: 'tb-sep' }),
       menu,
     );
@@ -114,16 +119,17 @@ export class TopBar {
     const r = app.report;
     const live = app.sim.latest?.live;
     this.riders.textContent = r ? fmtCount(r.riders) : '—';
-    this.ridersSub.textContent = live ? `${fmtCount(live.ridersToday)} so far today` : '';
+    this.ridersSub.textContent = live ? `${fmtCount(live.ridersToday)} so far today` : 'first count after a day of service';
     this.share.textContent = r ? fmtPct(r.transitShare) : '—';
+    this.shareSub.textContent = r ? `of ${fmtCount(r.commuters)} commuters` : 'of all commutes';
     if (r) {
       const d = r.avgCommute - r.baselineCommute;
       this.commute.textContent = `${r.avgCommute.toFixed(1)} min`;
-      this.commuteSub.textContent = `${d <= 0 ? '−' : '+'}${Math.abs(d).toFixed(1)} vs no transit`;
+      this.commuteSub.textContent = Math.abs(d) < 0.05 ? 'same as with no trains' : `${Math.abs(d).toFixed(1)} min ${d < 0 ? 'faster' : 'slower'} than no trains`;
       this.commuteSub.className = 'sub num ' + (d < -0.05 ? 'hw-green' : d > 0.05 ? 'hw-red' : '');
     } else {
       this.commute.textContent = app.baseline ? `${app.baseline.toFixed(1)} min` : '—';
-      this.commuteSub.textContent = 'no-transit baseline';
+      this.commuteSub.textContent = 'with no trains yet';
       this.commuteSub.className = 'sub num';
     }
     this.updateChaos(t);

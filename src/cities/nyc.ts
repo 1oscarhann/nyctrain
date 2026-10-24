@@ -5,6 +5,7 @@ const BOROUGHS = ['Manhattan', 'Brooklyn', 'Queens', 'Bronx', 'Staten Island'];
 const CODES: Record<string, number> = { Manhattan: 1, Bronx: 2, Brooklyn: 3, Queens: 4, 'Staten Island': 5 };
 
 export const NYC: CityConfig = {
+  theme: 'mta',
   id: 'nyc',
   name: 'New York',
   dataPath: 'data/',

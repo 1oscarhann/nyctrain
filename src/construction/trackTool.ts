@@ -8,6 +8,7 @@
  * fans off through turnouts where the stroke attaches to other track, gets scissors crossovers
  * near free ends, and continues an existing four-track free end. X places scissors crossovers.
  */
+import { trackClassName } from '../core/trackNames';
 import { PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
 import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
@@ -205,7 +206,7 @@ export class TrackTool implements Tool {
     const last = reports[reports.length - 1];
     const firstErr = reports.find((r) => !r.ok)?.errors[0];
     const lines = [
-      `<div class="title">${cap(LEVEL_NAMES[this.level])} · ${cap(this.cls)} metro</div>`,
+      `<div class="title">${cap(LEVEL_NAMES[this.level])} · ${trackClassName(this.cls)}</div>`,
       last ? `<div class="row"><span class="hw-muted">This segment</span><span class="num">${fmtDistance(last.length)} · ${fmtMoney(last.cost)}</span></div>` : '',
       last && isFinite(last.minRadius) ? `<div class="row"><span class="hw-muted">Tightest curve</span><span class="num">${fmtDistance(last.minRadius, true)} · ${fmtSpeed(last.speedLimit)}</span></div>` : '',
       `<div class="row"><span class="hw-muted">Line so far</span><span class="num">${fmtDistance(len)} · ${fmtMoney(total)}</span></div>`,
@@ -595,14 +596,14 @@ export class TrackTool implements Tool {
         h('span', { class: 'level-swatch', style: LEVEL_SWATCH[l] }),
         cap(LEVEL_NAMES[l]),
       );
-    const clsBtn = (c: TrackClass) => h('button', { class: this.cls === c ? 'on' : '', onclick: () => this.setClass(c) }, c === 'heavy' ? 'Heavy metro' : 'Light metro');
+    const clsBtn = (c: TrackClass) => h('button', { class: this.cls === c ? 'on' : '', onclick: () => this.setClass(c), title: classHint(c) }, trackClassName(c));
     const tracksBtn = (n: 2 | 4) => h('button', { class: this.tracks === n ? 'on' : '', onclick: () => this.setTracks(n), title: 'Q — two or four tracks' }, `${n} tracks`);
     const sideBtn = (sd: 1 | -1) => h('button', { class: this.side === sd ? 'on' : '', onclick: () => this.setSide(sd), title: 'F — flip which side the express pair runs on' }, sd < 0 ? '◀ Left' : 'Right ▶');
     const quad = this.tracks === 4;
     return h(
       'div',
       null,
-      h('div', { class: 'opt-row' }, h('span', { class: 'opt-label' }, 'Class'), h('div', { class: 'seg' }, clsBtn('heavy'), clsBtn('light'))),
+      h('div', { class: 'opt-row' }, h('span', { class: 'opt-label' }, 'Class'), h('div', { class: 'seg' }, clsBtn('heavy'), clsBtn('light'), clsBtn('highspeed'))),
       h('div', { class: 'opt-row', style: 'margin-top:8px' }, h('span', { class: 'opt-label' }, 'Tracks'), h('div', { class: 'seg', title: 'Q — two or four tracks' }, tracksBtn(2), tracksBtn(4))),
       quad ? h('div', { class: 'opt-row', style: 'margin-top:8px' }, h('span', { class: 'opt-label' }, 'Express'), h('div', { class: 'seg' }, sideBtn(-1), sideBtn(1))) : null,
       h('div', { class: 'opt-row', style: 'margin-top:8px' }, h('span', { class: 'opt-label' }, 'Level'), h('div', { class: 'seg' }, ...LEVELS.map(levelBtn))),
@@ -656,4 +657,11 @@ function levelHint(l: TrackLevel): string {
         ? `goes anywhere (×${TRACK.underwaterTunnelMultiplier} under water), ignores density`
         : `can't cross water`;
   return `${h > 0 ? '+' : ''}${h} m · ${cost} · ${rule}`;
+}
+
+function classHint(c: TrackClass): string {
+  const v = fmtSpeed(TRACK.lineSpeed[c]);
+  if (c === 'highspeed') return `Up to ${v} for high-speed trains; curves of ${fmtDistance(TRACK.minRadius.highspeed, true)} or wider; ${TRACK.highSpeedCostMultiplier}× the cost. Joins ordinary heavy track.`;
+  if (c === 'light') return `Up to ${v}; tighter curves and steeper grades; ${TRACK.lightCostMultiplier}× the cost. Light trains only.`;
+  return `Up to ${v} (metro trains top out at 90 km/h); metro, commuter, intercity and high-speed trains.`;
 }

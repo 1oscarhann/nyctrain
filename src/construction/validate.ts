@@ -1,7 +1,8 @@
 /**
  * Validation, cost and construction-time calculation for track and stations.
  */
-import { QUAD, STATION, TRACK, TRAINS, type TrackClass, type TrackLevel } from '../balance';
+import { QUAD, STATION, TRACK, type TrackClass, type TrackLevel } from '../balance';
+import { trackClassName } from '../core/trackNames';
 import { fmtDistance } from '../core/units';
 import { curveSpeed, minRadiusOver, otherEnd, projectOnPolyline, sampleAt } from './geometry';
 import { platformLength, type Network } from './network';
@@ -41,7 +42,7 @@ export interface EdgeReport {
 }
 
 export function classMult(cls: TrackClass): number {
-  return cls === 'light' ? TRACK.lightCostMultiplier : 1;
+  return cls === 'light' ? TRACK.lightCostMultiplier : cls === 'highspeed' ? TRACK.highSpeedCostMultiplier : 1;
 }
 
 /**
@@ -122,7 +123,7 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
   for (const p of g.pieces) minRadius = Math.min(minRadius, p.r);
   if (isFinite(minRadius) && minRadius < minR - 0.5) {
     errors.push(
-      `Curve too tight: ${fmtDistance(minRadius, true)} radius (${e.cls} metro needs ${fmtDistance(minR, true)})`,
+      `Curve too tight: ${fmtDistance(minRadius, true)} radius (${trackClassName(e.cls).toLowerCase()} needs ${fmtDistance(minR, true)})`,
     );
   }
   if (L < 10) errors.push('Segment too short');
@@ -205,7 +206,7 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
     days,
     length: L,
     waterLength,
-    speedLimit: Math.min(curveSpeed(minRadius), TRAINS[e.cls].topSpeed),
+    speedLimit: Math.min(curveSpeed(minRadius, e.cls), TRACK.lineSpeed[e.cls]),
     minRadius,
     densityMult: multSum / steps,
   };
@@ -252,7 +253,7 @@ export function stationReport(
   const errors: string[] = [];
   const lim = STATION.cars[e.cls];
   if (cars < lim.min || cars > lim.max)
-    errors.push(`${cap(e.cls)} metro platforms are ${lim.min}–${lim.max} cars long`);
+    errors.push(`${trackClassName(e.cls)} platforms are ${lim.min}–${lim.max} cars long`);
   const P = platformLength(cars, e.cls);
   const level = net.levelAt(edgeId, u);
   if (net.isRamp(edgeId)) errors.push('Stations need level track — this section is a ramp');

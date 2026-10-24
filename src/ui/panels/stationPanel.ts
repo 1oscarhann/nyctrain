@@ -4,6 +4,7 @@
  * station (v2) shows as one: both platforms' figures together, its cross-platform transfers, and
  * Rename renames both.
  */
+import { trackClassName } from '../../core/trackNames';
 import { city } from '../../cities';
 import { cap } from '../../construction/describe';
 import { LEVEL_NAMES } from '../../construction/validate';
@@ -114,7 +115,7 @@ export function stationPanel(app: App, id: number): Panel {
   const cost = plats.reduce((t, x) => t + (x.cost || 0), 0);
   body.append(statusLine ?? '', closedBanner, routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, section('Station'), kv([
     ['Level', cap(LEVEL_NAMES[level])],
-    ['Class', `${cap(cls)} metro`],
+    ['Class', trackClassName(cls)],
     [partner ? 'Platforms' : 'Platform', platformsText],
     [least.status === 'blueprint' ? 'Estimated cost' : 'Cost', fmtMoney(cost)],
     ['Value capture nearby', vcCell],
@@ -148,10 +149,10 @@ export function stationPanel(app: App, id: number): Panel {
     const waiting = ids.reduce((t, x) => t + app.waitingAt(x), 0);
     const crowd = Math.max(...ids.map((x) => app.stationCrowding(x)));
     const cards = [
-      statCard('Boardings yesterday', boardY !== undefined ? fmtCount(boardY) : '—'),
-      statCard('Waiting now', fmtCount(waiting), crowd > 1 ? 'red' : crowd > 0.6 ? 'amber' : undefined),
-      statCard('Left behind', fmtCount(left), left > 0 ? 'amber' : undefined),
-      statCard('Today so far', detail ? fmtCount(detail.hourlyToday.reduce((a, b) => a + b, 0)) : '—'),
+      statCard('Got on yesterday', boardY !== undefined ? fmtCount(boardY) : '—', undefined, 'people boarding here'),
+      statCard('Waiting now', fmtCount(waiting), crowd > 1 ? 'red' : crowd > 0.6 ? 'amber' : undefined, crowd > 1 ? "more than one train can take" : 'on the platform'),
+      statCard('Left behind', fmtCount(left), left > 0 ? 'amber' : undefined, left > 0 ? 'trains were too full: add trains or cars' : 'nobody missed a full train'),
+      statCard('Got on today', detail ? fmtCount(detail.hourlyToday.reduce((a, b) => a + b, 0)) : '—', undefined, 'so far, live'),
     ];
     if (partner) {
       const xt = app.report?.crossTransfers?.[pairKey];

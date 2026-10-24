@@ -9,7 +9,7 @@ import type { Network } from '../construction/network';
 import { otherEnd } from '../construction/geometry';
 import type { Station } from '../construction/types';
 import type { PathLeg, RoutePath } from './types';
-import { QUAD, type TrackClass } from '../balance';
+import { gaugeOf, QUAD, type TrackClass } from '../balance';
 
 const ALIGN = Math.cos((25 * Math.PI) / 180);
 
@@ -104,7 +104,7 @@ function successors(net: Network, edgeId: number, dir: 0 | 1, usable: Usable): {
   for (const fid of net.incident(node)) {
     if (fid === edgeId) continue;
     const f = net.edges.get(fid)!;
-    if (f.cls !== e.cls || !usable(fid)) continue;
+    if (gaugeOf(f.cls) !== gaugeOf(e.cls) || !usable(fid)) continue;
     const [dx, dy] = net.departHeading(fid, node);
     if (arrX * dx + arrY * dy < ALIGN) continue;
     out.push({ edge: fid, dir: f.a === node ? 0 : 1 });
@@ -247,7 +247,7 @@ export function findRoutePath(net: Network, cls: TrackClass, stops: number[], us
     if (!s) return fail('A station on this route no longer exists');
     const e = net.edges.get(s.edge);
     if (!e) return fail('A station on this route has no track');
-    if (e.cls !== cls) return fail(`${s.name} is on ${e.cls} metro track`);
+    if (gaugeOf(e.cls) !== gaugeOf(cls)) return fail(`${s.name} is on ${gaugeOf(e.cls)} track`);
     pos.push({ edge: s.edge, u: s.u });
   }
   const cm = costModel(net, stops, costs);

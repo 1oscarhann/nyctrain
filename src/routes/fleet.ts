@@ -4,7 +4,7 @@
  * new or growing routes draw on first. Idle cars (beyond a route's plan) and spare cars can be sold
  * for FLEET.resaleFraction of their new price (v2); they leave the maintenance base.
  */
-import { FLEET, TRAINS, type TrackClass } from '../balance';
+import { FLEET, TRAINS, type StockId } from '../balance';
 import type { Game } from '../core/game';
 import { recoveryPerTerminal, roundTripTime, routeTimetable, trainsNeeded } from './compile';
 import type { Route } from './types';
@@ -30,14 +30,14 @@ export function fleetPlan(game: Game, r: Route): FleetPlan {
   if (!tt) return { trainsNeeded: 0, carsNeeded: 0, fromSpare: 0, carsToBuy: 0, cost: 0, runTimes: null, roundTrip: 0, recovery: 0, idleCars: 0 };
   const n = trainsNeeded(r, tt.runTimes);
   const carsNeeded = n * r.cars;
-  const fromSpare = Math.min(game.routes.spareCars[r.cls], Math.max(0, carsNeeded - r.ownedCars));
+  const fromSpare = Math.min(game.routes.spareCars[r.stock], Math.max(0, carsNeeded - r.ownedCars));
   const carsToBuy = Math.max(0, carsNeeded - r.ownedCars - fromSpare);
   return {
     trainsNeeded: n,
     carsNeeded,
     fromSpare,
     carsToBuy,
-    cost: carsToBuy * TRAINS[r.cls].costPerCar,
+    cost: carsToBuy * TRAINS[r.stock].costPerCar,
     runTimes: tt.runTimes,
     roundTrip: roundTripTime(r, tt.runTimes),
     recovery: recoveryPerTerminal(r, tt.runTimes),
@@ -50,7 +50,7 @@ export function purchaseFleet(game: Game, r: Route): { ok: boolean; cost: number
   const plan = fleetPlan(game, r);
   if (plan.carsToBuy + plan.fromSpare === 0) return { ok: true, cost: 0 };
   if (plan.carsToBuy > 0 && !game.finance.spend(plan.cost, 'trains')) return { ok: false, cost: plan.cost, reason: 'Not enough money for the trains' };
-  game.routes.spareCars[r.cls] -= plan.fromSpare;
+  game.routes.spareCars[r.stock] -= plan.fromSpare;
   r.ownedCars += plan.fromSpare + plan.carsToBuy;
   game.routes.invalidate();
   game.events.emit('money', undefined);
@@ -60,7 +60,7 @@ export function purchaseFleet(game: Game, r: Route): { ok: boolean; cost: number
 // ---------------------------------------------------------------------------- car sales (v2)
 
 /** What `cars` used cars of a class sell for. */
-export const carSaleValue = (cls: TrackClass, cars: number): number => cars * TRAINS[cls].costPerCar * FLEET.resaleFraction;
+export const carSaleValue = (stock: StockId, cars: number): number => cars * TRAINS[stock].costPerCar * FLEET.resaleFraction;
 
 /** Cars a route owns beyond what its plan needs (0 for a route without a path). */
 export function idleCars(game: Game, r: Route): number {
@@ -82,7 +82,7 @@ export interface CarSale {
 export function sellIdleCars(game: Game, r: Route): CarSale {
   const n = idleCars(game, r);
   if (!n) return { ok: false, cars: 0, proceeds: 0, reason: 'No idle cars' };
-  const proceeds = game.finance.refund(n * TRAINS[r.cls].costPerCar, FLEET.resaleFraction);
+  const proceeds = game.finance.refund(n * TRAINS[r.stock].costPerCar, FLEET.resaleFraction);
   r.ownedCars -= n;
   game.routes.invalidate();
   game.events.emit('routes', undefined);
@@ -91,7 +91,7 @@ export function sellIdleCars(game: Game, r: Route): CarSale {
 }
 
 /** Sell cars from the spare pool (all of them by default). */
-export function sellSpareCars(game: Game, cls: TrackClass, n = game.routes.spareCars[cls]): CarSale {
+export function sellSpareCars(game: Game, cls: StockId, n = game.routes.spareCars[cls]): CarSale {
   const k = Math.max(0, Math.min(Math.floor(n), game.routes.spareCars[cls]));
   if (!k) return { ok: false, cars: 0, proceeds: 0, reason: 'No spare cars' };
   const proceeds = game.finance.refund(k * TRAINS[cls].costPerCar, FLEET.resaleFraction);

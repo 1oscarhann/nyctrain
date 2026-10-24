@@ -2,7 +2,7 @@
  * Messages between the main thread and the simulation worker, and the compiled network format.
  * Everything here is plain data (structured-clone friendly).
  */
-import type { ChaosLevel, CityId, GrowthPace, IncidentKind, TrackClass, WeatherKind } from '../balance';
+import type { ChaosLevel, CityId, GrowthPace, IncidentKind, StockId, TrackClass, WeatherKind } from '../balance';
 import type { DayWeather } from '../core/cityCalendar';
 import type { FarePolicy } from '../economy/fares';
 import type { Exposure } from './incidents';
@@ -68,6 +68,8 @@ export interface CRoute {
   name: string;
   bullet: string;
   color: string;
+  /** Train type (UI only; the sim uses the numbers below). */
+  stock?: StockId;
   cls: TrackClass;
   cars: number;
   trainLength: number;

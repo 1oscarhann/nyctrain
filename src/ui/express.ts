@@ -4,6 +4,7 @@
  * tools' cross-platform texts, and the route panel's Service section and Line list. Pure, no DOM:
  * distances follow the units setting and money the city's currency, in both cities.
  */
+import { trackClassName } from '../core/trackNames';
 import { MAP, QUAD, type TrackClass, type TrackLevel } from '../balance';
 import { cap } from '../construction/describe';
 import type { Network } from '../construction/network';
@@ -122,7 +123,7 @@ function sum(reports: Map<number, EdgeReport>, ids: readonly number[]): Sum {
  * the reason in red.
  */
 export function quadStrokeTip(net: Network, res: QuadResult, reports: Map<number, EdgeReport>, level: TrackLevel, cls: TrackClass): string {
-  const title = `<div class="title">Four-track · ${cap(LEVEL_NAMES[level])} · ${cap(cls)} metro</div>`;
+  const title = `<div class="title">Four-track · ${cap(LEVEL_NAMES[level])} · ${trackClassName(cls)}</div>`;
   const keys = `<div class="hw-muted" style="margin-top:3px">Double-click or <span class="kbd">Enter</span> to finish · <span class="kbd">F</span> flips the express side · <span class="kbd">Q</span> back to two tracks</div>`;
   if (!res.ok) return title + `<div class="reason hw-red">${esc(res.fatal ?? 'Can’t build four tracks here')}</div>` + `<div class="hw-muted" style="margin-top:3px"><span class="kbd">Q</span> back to two tracks</div>`;
   const row = (label: string, value: string, note = '') => `<div class="row"><span class="hw-muted">${label}</span><span class="num">${value}${note ? ` <span class="hw-muted">${note}</span>` : ''}</span></div>`;
