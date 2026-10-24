@@ -1,6 +1,6 @@
 import type { Layer } from '@deck.gl/core';
 
-export type ToolId = 'select' | 'track' | 'station' | 'route' | 'bulldoze';
+export type ToolId = 'select' | 'line' | 'track' | 'station' | 'route' | 'bulldoze';
 
 export interface Pointer {
   /** Local metres. */

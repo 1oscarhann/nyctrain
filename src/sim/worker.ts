@@ -142,6 +142,8 @@ function answer(q: Extract<ToWorker, { type: 'query' }>['q']): unknown {
       return c.tractDetail(q.tract);
     case 'unserved':
       return c.unserved.slice();
+    case 'modes':
+      return c.modesByTract();
     case 'flows':
       return c.flows(q.limit);
     case 'segmentLoads':

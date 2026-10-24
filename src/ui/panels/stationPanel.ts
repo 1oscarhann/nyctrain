@@ -10,9 +10,11 @@ import { cap } from '../../construction/describe';
 import { LEVEL_NAMES } from '../../construction/validate';
 import { progress } from '../../construction/blueprint';
 import { fmtClock, fmtCount, fmtDistance, fmtMoney } from '../../core/units';
-import { PARK_RIDE, STATION } from '../../balance';
+import { PARK_RIDE, SPECIAL, STATION } from '../../balance';
 import { SCHOOL_KIND_COLOR } from '../../data/schools';
 import { schoolKindLabel } from '../../map/schoolLayers';
+import { AIRPORTS, CAMPUSES } from '../../cities/destinations';
+import { toLocal } from '../../core/geo';
 import type { App } from '../app';
 import { barChart } from '../charts';
 import { bullet, h } from '../dom';
@@ -82,7 +84,7 @@ export function stationPanel(app: App, id: number): Panel {
     ...(routes.length
       ? routes.map((r) => {
           const pl = platformOf(r);
-          return h('span', { style: 'display:inline-flex;align-items:center;gap:6px;cursor:pointer', onclick: () => game.select({ kind: 'route', id: r.id }) }, bullet(r.color, r.bullet, 20, r.express), r.name, pl ? h('span', { class: 'hw-muted', style: 'font-size:11px' }, pl) : null);
+          return h('span', { style: 'display:inline-flex;align-items:center;gap:6px;cursor:pointer', onclick: () => game.select({ kind: 'route', id: r.id }) }, bullet(r.color, r.bullet, 20, r.express, r.shape), r.name, pl ? h('span', { class: 'hw-muted', style: 'font-size:11px' }, pl) : null);
         })
       : [h('span', { class: 'hw-muted' }, 'No routes serve this station yet')]),
   );
@@ -116,7 +118,7 @@ export function stationPanel(app: App, id: number): Panel {
   const roles = plats.map((x) => quadRole(net, x.id)).filter((r): r is 'local' | 'express' => r === 'local' || r === 'express');
   const platformsText = partner ? (roles.length === 2 ? [...roles].sort((a, b) => (a === 'local' ? -1 : b === 'local' ? 1 : 0)).join(' + ') : 'two') + ` · ${Math.max(s.cars, partner.cars)} cars` : roles.length ? `${s.cars} cars · ${roles[0]} pair only` : `${s.cars} cars`;
   const cost = plats.reduce((t, x) => t + (x.cost || 0), 0);
-  body.append(statusLine ?? '', closedBanner, routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, least.status === 'built' ? parkAndRide(app, s) : '', schoolsNear(app, s), section('Station'), kv([
+  body.append(statusLine ?? '', closedBanner, routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, least.status === 'built' ? parkAndRide(app, s) : '', destinationsNear(app, s), schoolsNear(app, s), section('Station'), kv([
     ['Level', cap(LEVEL_NAMES[level])],
     ['Class', trackClassName(cls)],
     [partner ? 'Platforms' : 'Platform', platformsText],
@@ -292,5 +294,26 @@ function parkAndRide(app: App, s: Station): HTMLElement {
     );
   }
   wrap.append(btns);
+  return wrap;
+}
+
+/** Airports and campuses within a walk of the station: what they draw and who came by train yesterday. */
+function destinationsNear(app: App, s: Station): HTMLElement {
+  const wrap = h('div');
+  const p = app.game.network.stationPos(s);
+  const id = city().id;
+  const rows: HTMLElement[] = [];
+  const near = <T extends { lon: number; lat: number; name: string }>(list: T[]) =>
+    list.map((d, i) => ({ d, i, dist: Math.hypot(toLocal(d.lon, d.lat)[0] - p.x, toLocal(d.lon, d.lat)[1] - p.y) })).filter((x) => x.dist <= SPECIAL.access);
+  for (const { d, i, dist } of near(AIRPORTS[id] ?? [])) {
+    const rode = app.report?.airports?.perSchool[i];
+    rows.push(statCard(d.name, rode !== undefined ? fmtCount(rode) : '—', undefined, `air passengers by train yesterday · ${fmtCount(d.perDay)} a day use the airport · ${fmtDistance(dist, true)} away`));
+  }
+  for (const { d, i, dist } of near(CAMPUSES[id] ?? [])) {
+    const rode = app.report?.campuses?.perSchool[i];
+    rows.push(statCard(d.name, rode !== undefined ? fmtCount(rode) : '—', undefined, `students by train yesterday · ${fmtCount(d.students)} enrolled · ${fmtDistance(dist, true)} away`));
+  }
+  if (!rows.length) return wrap;
+  wrap.append(section('Airports & universities nearby'), h('div', { class: 'stat-grid', style: 'grid-template-columns:1fr' }, ...rows));
   return wrap;
 }

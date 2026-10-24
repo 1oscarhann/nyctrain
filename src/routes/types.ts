@@ -1,5 +1,10 @@
 import type { StockId, TrackClass } from '../balance';
 
+/** Bullet shapes the player can pick for a route. */
+export type BulletShape = 'circle' | 'square' | 'diamond' | 'bar';
+export const BULLET_SHAPES: BulletShape[] = ['circle', 'square', 'diamond', 'bar'];
+export const isBulletShape = (v: unknown): v is BulletShape => BULLET_SHAPES.includes(v as BulletShape);
+
 export type PeriodId = 'night' | 'am' | 'midday' | 'pm' | 'evening';
 export const PERIOD_IDS: PeriodId[] = ['night', 'am', 'midday', 'pm', 'evening'];
 
@@ -27,6 +32,8 @@ export interface Route {
   /** Letter or number shown in the bullet. */
   bullet: string;
   color: string;
+  /** Bullet shape (absent = the theme's default: a disc, or London's line bar). */
+  shape?: BulletShape;
   /** Track family the route runs on: 'heavy' (heavy and high-speed track) or 'light'. */
   cls: TrackClass;
   /** Train type (balance.ts TRAINS). Routes from before train types load as their track's metro trains. */
@@ -79,6 +86,10 @@ export const ROUTE_COLORS_TFL = [
   '#95CDBA', // pale aqua
   '#1C3F94', // navy
   '#84B817', // lime
+  '#000000', // black
+  '#7156A5', // plum
+  '#E21836', // bright red
+  '#0019A8', // deep blue
 ];
 
 /** The palette for a theme ('tfl' London style; anything else New York style). */
@@ -99,4 +110,10 @@ export const ROUTE_COLORS = [
   '#8C6E4E',
   '#9BA4AE',
   '#A3D14B',
+  '#0039A6',
+  '#00933C',
+  '#FCCC0A',
+  '#B933AD',
+  '#808183',
+  '#1A1A1A',
 ];

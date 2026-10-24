@@ -83,7 +83,7 @@ export class Cinematic {
 
   /** Night factor for the glow layers (0 by day and in Always day). */
   get glow(): number {
-    return this.daylight.mode === 'day' ? 0 : this.night;
+    return this.daylight.mode !== 'cycle' ? 0 : this.night;
   }
 
   /** Photo mode or the timelapse hides the chrome. */
@@ -185,7 +185,7 @@ export class Cinematic {
           nextClosed: nextSt ? closed.has(nextSt.id) : false,
           now: app.sim.time(),
         });
-        title = h('span', { style: 'display:inline-flex;align-items:center;gap:6px' }, bullet(r.color, r.bullet, 18, !!r.express), r.name);
+        title = h('span', { style: 'display:inline-flex;align-items:center;gap:6px' }, bullet(r.color, r.bullet, 18, !!r.express, r.shape), r.name);
         text = s.text;
         tone = s.tone;
       } else text = 'Turning round at the terminal: the camera waits for its next departure';
@@ -322,6 +322,6 @@ export class Cinematic {
 export function titleLight(map: MLMap): void {
   const prefs = loadPrefs();
   const d = Daylight.for(map, { mode: prefs.dayNight, windows: prefs.windows });
-  if (prefs.dayNight === 'day') d.tick(0, null);
+  if (prefs.dayNight !== 'cycle') d.tick(0, null);
   else d.applyAt({ altitude: CINEMATIC.titleSunAltitude, azimuth: CINEMATIC.titleSunAzimuth, morning: false }, null);
 }

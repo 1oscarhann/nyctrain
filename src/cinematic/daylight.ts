@@ -9,10 +9,10 @@ import { CINEMATIC } from '../balance';
 import { dayIndex, timeOfDay } from '../core/calendar';
 import { BUILDING_LAYER, DAY_LIGHT, skyOf, styleBindings, type PaintBinding } from '../map/style';
 import { angleDelta } from './chase';
-import { DAY, lightPosition, nightFactor, paletteAt, paletteChanges, windowsOn, type ColourKey, type Palette, type SunState, type WeatherTint } from './palette';
+import { DAY, LIGHT, lightPosition, nightFactor, paletteAt, paletteChanges, windowsOn, type ColourKey, type Palette, type SunState, type WeatherTint } from './palette';
 import { gameSun, type SunPosition } from './solar';
 
-export type DayNightMode = 'cycle' | 'day';
+export type DayNightMode = 'cycle' | 'day' | 'light';
 
 /** The lit-windows pattern image's id (fill-extrusion-pattern). */
 export const WINDOWS_IMAGE = 'hw-windows';
@@ -115,11 +115,12 @@ export class Daylight {
 
   /** Re-evaluate the palette for game time t (seconds) and today's weather. */
   tick(t: number, weather: WeatherTint | null): void {
-    if (this.opts.mode === 'day') {
+    if (this.opts.mode === 'day' || this.opts.mode === 'light') {
       if (this.dayApplied) return;
       this.dayApplied = true;
       this.sun = null;
-      this.apply(DAY, { position: DAY_LIGHT.position, color: DAY.colours.light, intensity: DAY.lightIntensity }, false, 0);
+      const pal = this.opts.mode === 'light' ? LIGHT : DAY;
+      this.apply(pal, { position: DAY_LIGHT.position, color: pal.colours.light, intensity: pal.lightIntensity }, false, 0);
       return;
     }
     const sun = gameSun(dayIndex(t), timeOfDay(t));

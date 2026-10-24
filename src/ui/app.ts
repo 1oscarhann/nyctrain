@@ -9,7 +9,7 @@ import type { Layer } from '@deck.gl/core';
 import { BONDS, CHAOS, CINEMATIC, COMMUTERS, ECONOMY, MAP, TIME, TRAINS, type ChaosLevel, type GrowthPace, type StockId, type TrackLevel } from '../balance';
 import { city, cityBalance } from '../cities';
 import { Game, newChaosSeed, type Selection } from '../core/game';
-import { toLonLat } from '../core/geo';
+import { toLocal, toLonLat } from '../core/geo';
 import { dayIndex, isNewMonth, monthKey, SECONDS_PER_DAY, timeOfDay, yearOf } from '../core/calendar';
 import { fmtCount, fmtDensity, fmtMoney, setUnits } from '../core/units';
 import { defaultFares, fareSummary, type FarePolicy } from '../economy/fares';
@@ -18,7 +18,10 @@ import { yearsWithData } from '../economy/yearReview';
 import { carSaleValue, fleetPlan, sellIdleCars, sellSpareCars } from '../routes/fleet';
 import { checkGoals, emptyGoals, goalTitle, type GoalState } from '../core/goals';
 import { placeHubs } from '../core/hubs';
+import { LineTool } from '../construction/lineTool';
 import { SchoolLayers } from '../map/schoolLayers';
+import { DestinationLayers } from '../map/destinationLayers';
+import { StationAudio } from './stationAudio';
 import { LandMask } from '../data/landMask';
 import { TractIndex, type LandCollection, type World } from '../data/world';
 import { WorldTerrain } from '../construction/terrain';
@@ -60,7 +63,7 @@ import type { Panel } from './panels/common';
 import { stationPanel } from './panels/stationPanel';
 import { routeEditor, routePanel, routesList } from './panels/routePanel';
 import { edgePanel, tractPanel, trainPanel } from './panels/inspectPanels';
-import { financePanel, type FinanceTab } from './panels/financePanel';
+import { financePanel, type FinanceTab, type PnlRange } from './panels/financePanel';
 import { goalsPanel } from './panels/goalsPanel';
 import { alertsPanel } from './panels/alertsPanel';
 import { AlertFeed, describeAlert, eventWhen, fmtK, isIncident, LEVEL_HINT, LEVEL_LABEL, outcomeText, plainDetail, wrapUpToasts, type RouteRef } from './alertFeed';
@@ -103,6 +106,10 @@ export class App implements AppContext {
   readonly stations: StationLayers;
   /** Real schools (Overlays menu → Schools): loaded in the background, shown when switched on. */
   readonly schools = new SchoolLayers();
+  /** Airports and universities on the map. */
+  readonly destinations = new DestinationLayers();
+  /** Station sounds (crowd murmur and arrival chimes). */
+  readonly audio = new StationAudio();
   readonly trains = new TrainLayer();
   readonly elevated: Elevated3D;
   readonly overlays: Overlays;
@@ -167,6 +174,8 @@ export class App implements AppContext {
   private panelKey = '';
   /** Finances tab open this session (not saved). */
   financeTab: FinanceTab = 'overview';
+  /** Finances → Profit & loss range (session only). */
+  pnlRange: PnlRange = 'fortnight';
   /** Fares tab: "Same fare all day" unticked while the fares are still equal (session only). */
   fareSplit = false;
 
@@ -233,6 +242,7 @@ export class App implements AppContext {
     this.stationTool = new StationTool(this);
     this.routeTool = new RouteTool(this);
     this.tools.register(new SelectTool(this));
+    this.tools.register(new LineTool(this));
     this.tools.register(this.trackTool);
     this.tools.register(this.stationTool);
     this.tools.register(this.routeTool);
@@ -258,6 +268,7 @@ export class App implements AppContext {
     view.addLayers('flows', () => this.flowLayers());
     view.addLayers('trains', () => this.trainLayers());
     view.addLayers('schools', () => this.schools.layers(view.map.getZoom()));
+    view.addLayers('destinations', () => this.destinations.layers(view.map.getZoom(), this.cinematic.prefs.dayNight === 'light'));
     view.addLayers('stations', () => this.stations.layers(view.map.getZoom(), performance.now(), this.cinematic.glow));
     view.addLayers('route-pattern', () => this.routePatternLayers());
     view.addLayers('venue-labels', () => this.chaosLayers.venueLabelLayers(view.map.getZoom()));
@@ -502,7 +513,31 @@ export class App implements AppContext {
     if (day !== this.feed.day) this.onNewDay(day, s.time);
     this.applyStationStats();
     this.stations.refreshStats();
+    this.updateAudio(s);
     if (this.speedIndex < 0) this.view.invalidate();
+  }
+
+  /** Listen to the selected station, else the one under the map centre when zoomed right in. */
+  private updateAudio(s: Snapshot): void {
+    const c = this.compiledForSnapshot();
+    let focus = -1;
+    if (c) {
+      const sel = this.game.selection;
+      let id = sel?.kind === 'station' ? sel.id : -1;
+      if (id < 0 && this.view.map.getZoom() >= 15) {
+        const ctr = this.view.map.getCenter();
+        const [x, y] = toLocal(ctr.lng, ctr.lat);
+        let best = 350;
+        for (const st of this.game.network.stations.values()) {
+          const p = this.game.network.stationPos(st);
+          const d = Math.hypot(p.x - x, p.y - y);
+          if (d < best) ((best = d), (id = st.id));
+        }
+      }
+      if (id >= 0) focus = c.net.stations.findIndex((st) => st.id === id);
+    }
+    this.audio.setFocus(focus);
+    this.audio.update(s, c?.net ?? null, this.speedIndex < 0);
   }
 
   private applyStationStats(): void {
@@ -784,6 +819,12 @@ export class App implements AppContext {
         this.legend.set(this.overlays.legend());
         this.view.invalidate();
       });
+    } else if (mode === 'demand' || mode === 'demandWork') {
+      this.sim.query<Float32Array>({ kind: 'modes' }).then((m) => {
+        this.overlays.setData({ modes: m });
+        this.legend.set(this.overlays.legend());
+        this.view.invalidate();
+      });
     } else if (mode === 'unserved') {
       this.sim.query<Float32Array>({ kind: 'unserved' }).then((u) => {
         this.overlays.setData({ unserved: u });
@@ -1057,9 +1098,9 @@ export class App implements AppContext {
   /** Route bullet, colour and name by id (game routes, else the compiled ones). */
   routeRef = (id: number): RouteRef | undefined => {
     const r = this.game.routes.get(id);
-    if (r) return { id, bullet: r.bullet, color: r.color, name: r.name, ...(r.express ? { express: true } : {}) };
+    if (r) return { id, bullet: r.bullet, color: r.color, shape: r.shape, name: r.name, ...(r.express ? { express: true } : {}) };
     const c = this.compiled?.net.routes.find((x) => x.id === id);
-    return c ? { id, bullet: c.bullet, color: c.color, name: c.name, ...(c.express ? { express: true } : {}) } : undefined;
+    return c ? { id, bullet: c.bullet, color: c.color, shape: c.shape, name: c.name, ...(c.express ? { express: true } : {}) } : undefined;
   };
 
   private onAlert(a: Alert): void {
@@ -1353,6 +1394,10 @@ export class App implements AppContext {
       case 'v':
       case 'V':
         this.view.toggleView3D();
+        break;
+      case 'l':
+      case 'L':
+        this.setTool('line');
         break;
       case 't':
       case 'T':

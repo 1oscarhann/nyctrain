@@ -7,7 +7,7 @@ import type { Station } from '../construction/types';
 import { defaultControl, legacyControl, normalizeControl } from './control';
 import { findRoutePath, pathEdges } from './pathfind';
 import { city } from '../cities';
-import { PERIOD_IDS, routePalette, type PeriodId, type Route, type RouteControl, type RoutePath } from './types';
+import { isBulletShape, PERIOD_IDS, routePalette, type PeriodId, type Route, type RouteControl, type RoutePath } from './types';
 
 export class RouteSet {
   routes = new Map<number, Route>();
@@ -146,7 +146,7 @@ export class RouteSet {
     // Routes saved before operations control have none: legacy settings (holding off, no recovery).
     // Express service (v2): routes saved before it are locals.
     // Train types: routes saved before them run the metro trains of their track ('heavy' / 'light').
-    for (const r of d.routes) this.routes.set(r.id, { ...r, stock: validStock(r.stock, r.cls), headways: { ...r.headways }, stops: [...r.stops], control: normalizeControl(r.control, legacyControl()), express: r.express === true });
+    for (const r of d.routes) this.routes.set(r.id, { ...r, stock: validStock(r.stock, r.cls), headways: { ...r.headways }, stops: [...r.stops], control: normalizeControl(r.control, legacyControl()), express: r.express === true, shape: isBulletShape(r.shape) ? r.shape : undefined });
     this.nextId = d.nextId;
     this.spareCars = emptySpares();
     for (const s of STOCK_IDS) this.spareCars[s] = Math.max(0, Math.floor(Number(d.spareCars?.[s] ?? 0)) || 0);

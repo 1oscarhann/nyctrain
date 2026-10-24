@@ -70,6 +70,7 @@ export interface CRoute {
   name: string;
   bullet: string;
   color: string;
+  shape?: import('../routes/types').BulletShape;
   /** Train type (UI only; the sim uses the numbers below). */
   stock?: StockId;
   cls: TrackClass;
@@ -214,6 +215,7 @@ export type Query =
   | { kind: 'route'; route: number }
   | { kind: 'tract'; tract: number }
   | { kind: 'unserved' }
+  | { kind: 'modes' }
   | { kind: 'flows'; limit: number }
   | { kind: 'segmentLoads' }
   /** Reply: ChaosState (resync after a load or when a panel opens). */
@@ -294,6 +296,10 @@ export interface DayReport {
   parking?: Record<number, { used: number; full: number }>;
   /** The school run (school days only): pupils by mode, and by train per school (index into the city's schools.json). */
   schools?: { pupils: number; byWalk: number; byLift: number; byTransit: number; perSchool: Record<number, number> };
+  /** Airport passengers (round trips; perSchool is per airport index in src/cities/destinations.ts), every weekday. */
+  airports?: { pupils: number; byWalk: number; byLift: number; byTransit: number; perSchool: Record<number, number> };
+  /** University students (perSchool is per campus index), every weekday. */
+  campuses?: { pupils: number; byWalk: number; byLift: number; byTransit: number; perSchool: Record<number, number> };
 }
 
 export interface FareBreakdown {

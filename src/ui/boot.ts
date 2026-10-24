@@ -247,8 +247,8 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
       units.replaceChildren(...(['imperial', 'metric'] as const).map((u) => h('button', { class: s.units === u ? 'on' : '', onclick: () => { s.units = u; setUnits(u); storeUnits(u); render(); } }, u === 'imperial' ? 'Miles, mph' : 'Kilometres, km/h')));
       scale.replaceChildren(...COMMUTERS.agentScaleChoices.map((n) => h('button', { class: s.agentScale === n ? 'on' : '', onclick: () => { s.agentScale = n; storeSettings(s); render(); } }, `1 : ${n}`)));
       const cp = loadPrefs();
-      dayNight.replaceChildren(...(['cycle', 'day'] as const).map((m) => h('button', { class: cp.dayNight === m ? 'on' : '', title: DAY_NIGHT_HINT[m], onclick: () => { storePrefs({ dayNight: m }); titleLight(view.map); render(); } }, DAY_NIGHT_LABEL[m])));
-      windows.replaceChildren(...([true, false] as const).map((on) => h('button', { class: cp.windows === on ? 'on' : '', disabled: cp.dayNight === 'day', onclick: () => { storePrefs({ windows: on }); render(); } }, on ? 'Lit windows' : 'Dark')));
+      dayNight.replaceChildren(...(['cycle', 'day', 'light'] as const).map((m) => h('button', { class: cp.dayNight === m ? 'on' : '', title: DAY_NIGHT_HINT[m], onclick: () => { storePrefs({ dayNight: m }); titleLight(view.map); render(); } }, DAY_NIGHT_LABEL[m])));
+      windows.replaceChildren(...([true, false] as const).map((on) => h('button', { class: cp.windows === on ? 'on' : '', disabled: cp.dayNight !== 'cycle', onclick: () => { storePrefs({ windows: on }); render(); } }, on ? 'Lit windows' : 'Dark')));
       dnHint.textContent = `${DAY_NIGHT_HINT[cp.dayNight]}.`;
     };
     render();

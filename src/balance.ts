@@ -533,6 +533,34 @@ export const SCHOOLS = {
 };
 
 // ---------------------------------------------------------------------------
+// Airport passengers and university students (src/cities/destinations.ts): daily trips beyond the commute.
+export const SPECIAL = {
+  /** Share of an airport's passengers who start or end their journey on the map by land (not changing planes). */
+  airportLocal: 0.6,
+  /** Travellers come from the whole map, weighted to where people live and work. */
+  airportDecay: 25_000,
+  /** At the airport between these times (s of day); the trip back (arrivals) 2–9 hours later. */
+  airportFrom: 5 * HOUR,
+  airportTo: 19 * HOUR,
+  airportStay: [2 * HOUR, 9 * HOUR] as [number, number],
+  /** Airport parking or a taxi, with luggage: generalised minutes added to driving. */
+  airportParking: 35,
+  /** Students on campus on a given weekday. */
+  studentAttendance: 0.5,
+  studentDecay: 6000,
+  studentArrive: [9 * HOUR, 11 * HOUR + 30 * MIN] as [number, number],
+  studentLeave: [13 * HOUR, 18 * HOUR + 30 * MIN] as [number, number],
+  /** Students pay this share of the adult fare (London: the 18+ student discount). */
+  studentFare: 0.7,
+  /** Campus parking is scarce: generalised minutes added to driving. */
+  studentParking: 15,
+  /** Stations within this walk of an airport terminal or a campus serve it. */
+  access: 1500,
+  /** At most this many airport and student riders a day (real people; the agent pool). */
+  maxRidersPerDay: 300_000,
+};
+
+// ---------------------------------------------------------------------------
 // Economy
 export const ECONOMY = {
   startingCash: 6e9,

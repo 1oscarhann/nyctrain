@@ -11,7 +11,7 @@
  */
 import { BONDS, ECONOMY, STOCK_IDS, TRAINS, type StockId } from '../../balance';
 import { city } from '../../cities';
-import { monthKey, monthLabel, yearOf } from '../../core/calendar';
+import { dateOfDay, monthKey, monthLabel, yearOf } from '../../core/calendar';
 import { fmtFare, fmtMoney } from '../../core/units';
 import { fareSummary } from '../../economy/fares';
 import { annuityMonthly } from '../../economy/finance';
@@ -44,6 +44,7 @@ import { attachTip } from '../widgets';
 import { valueCaptureHeading, valueCaptureSection } from '../livingCity';
 import { kv, section, shareBar, shell, statCard, type Panel } from './common';
 
+export type PnlRange = 'day' | 'fortnight' | 'all';
 export type FinanceTab = 'overview' | 'fares' | 'borrowing' | 'fleet';
 const TABS: { id: FinanceTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -91,6 +92,8 @@ export function financePanel(app: App): Panel {
       h('div', { class: 'stat-grid' }, statCard('Cash', game.sandbox ? '∞' : fmtMoney(f.cash), f.cash < 0 ? 'red' : undefined), statCard('Debt', fmtMoney(debt)), statCard('Bond room', fmtMoney(f.bondRoom())), statCard('Assets', fmtMoney(f.assetValue)), ratingCard, rateCard),
       muted(`Fares ${fareSummary(game.fares)} · ${f.bonds.length} bond${f.bonds.length === 1 ? '' : 's'}${f.bonds.length ? ` at an average ${fmtRate(f.weightedCoupon())}` : ''}`, 'font-size:11.5px;margin-top:6px'),
     );
+    // Profit & loss over a chosen range: yesterday, the last two weeks (daily), or all time (monthly).
+    content.append(profitSection());
     // Yesterday
     const y = f.history[f.history.length - 1];
     if (y) {
@@ -173,6 +176,62 @@ export function financePanel(app: App): Panel {
       } else row.append(h('span', { class: 'hw-muted', style: 'font-size:12px' }, pick === thisYear ? `${pick} so far` : String(pick)));
       content.append(row);
     }
+  };
+
+  const profitSection = (): HTMLElement => {
+    const box = h('div');
+    const RANGES: { id: PnlRange; label: string }[] = [
+      { id: 'day', label: 'Yesterday' },
+      { id: 'fortnight', label: '2 weeks' },
+      { id: 'all', label: 'All time' },
+    ];
+    const seg = h('div', { class: 'seg', style: 'margin:4px 0 8px' });
+    const body = h('div');
+    const draw = () => {
+      for (const c of pnlCharts) c.destroy();
+      pnlCharts = [];
+      seg.replaceChildren(...RANGES.map((r) => h('button', { class: r.id === app.pnlRange ? 'on' : '', onclick: () => ((app.pnlRange = r.id), draw()) }, r.label)));
+      body.replaceChildren();
+      const opOf = (d: (typeof f.history)[number]) => d.operating + d.staffing + d.maintenance;
+      const revOf = (d: (typeof f.history)[number]) => d.revenue + (d.valueCapture ?? 0);
+      let rev = 0, cost = 0, labels: string[] = [], revs: number[] = [], costs: number[] = [], span = '';
+      if (app.pnlRange === 'all') {
+        const key = monthKey(game.day);
+        const cur = f.history.filter((d) => monthKey(d.day) === key);
+        const months = [...f.months.map((m) => ({ label: m.label, r: m.revenue + (m.valueCapture ?? 0), c: m.operatingCosts })), ...(cur.length ? [{ label: monthLabel(game.day) + '*', r: cur.reduce((a, d) => a + revOf(d), 0), c: cur.reduce((a, d) => a + opOf(d), 0) }] : [])];
+        for (const m of months) ((rev += m.r), (cost += m.c));
+        labels = months.map((m) => m.label);
+        revs = months.map((m) => m.r);
+        costs = months.map((m) => m.c);
+        span = `${game.day} day${game.day === 1 ? '' : 's'} running`;
+      } else {
+        const days = f.history.slice(app.pnlRange === 'day' ? -1 : -14);
+        for (const d of days) ((rev += revOf(d)), (cost += opOf(d)));
+        labels = days.map((d) => dateOfDay(d.day).toLocaleDateString(city().id === 'nyc' ? 'en-US' : 'en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }));
+        revs = days.map(revOf);
+        costs = days.map(opOf);
+        span = days.length ? `${days.length} day${days.length === 1 ? '' : 's'}` : '';
+      }
+      if (!labels.length) {
+        body.append(h('div', { class: 'hw-muted' }, 'Finances settle at midnight: the first day’s figures appear then.'));
+        return;
+      }
+      const profit = rev - cost;
+      body.append(
+        h('div', { class: 'stat-grid' }, statCard('Revenue', fmtMoney(rev), undefined, 'fares + value capture'), statCard('Operating costs', fmtMoney(cost), undefined, 'trains, staff, upkeep'), statCard('Operating profit', fmtMoney(profit, { sign: profit !== 0 }), profit < 0 ? 'red' : 'green', rev > 0 ? `${Math.round((profit / rev) * 100)}% margin` : span)),
+      );
+      if (labels.length > 1) {
+        const wrap = h('div', { class: 'chart' });
+        body.append(wrap);
+        pnlCharts.push(financeChart(wrap, labels, revs, costs));
+      }
+      body.append(muted(`${span}${app.pnlRange === 'all' ? ' · by month, * = so far' : ''} · before bond payments and construction`));
+    };
+    let pnlCharts: { destroy(): void }[] = [];
+    charts.push({ destroy: () => pnlCharts.forEach((c) => c.destroy()) });
+    draw();
+    box.append(section('Profit & loss'), seg, body);
+    return box;
   };
 
   // ------------------------------------------------------------------ Fares
@@ -332,7 +391,7 @@ export function financePanel(app: App): Panel {
         h(
           'div',
           { class: 'list-item', style: 'cursor:default' },
-          bullet(r.color, r.bullet, 20, r.express),
+          bullet(r.color, r.bullet, 20, r.express, r.shape),
           h('span', { class: 'grow' }, r.name, h('div', { class: 'hw-muted', style: 'font-size:11.5px' }, `Idle: ${trains ? `${trains} train${trains > 1 ? 's' : ''} (${n} cars)` : `${n} cars`}`)),
           h('button', { class: 'hw-btn small', onclick: () => app.sellIdleCars(r.id) }, `Sell for ${fmtMoneyFine(carSaleValue(r.stock, n))}`),
         ),

@@ -284,6 +284,7 @@ function compileRoute(
     name: r.name,
     bullet: r.bullet,
     color: r.color,
+    ...(r.shape ? { shape: r.shape } : {}),
     cls: r.cls,
     stock: r.stock,
     cars: r.cars,

@@ -409,6 +409,8 @@ export interface EngineRunOptions {
   onStep?: (engine: Engine) => void;
   /** The school run: the city's schools (scripts/nodeData loadSchoolsFromDisk; absent: no pupils, as before). */
   schools?: { lon: number; lat: number; s: number }[] | null;
+  /** Airport and university travellers (default off in headless runs, so balance tests compare commuters only). */
+  destinations?: boolean;
 }
 
 /**
@@ -430,6 +432,7 @@ export function startEngine(game: Game, opts: EngineRunOptions & { reports?: Day
       growthPace: opts.growthPace ?? game.growthPace,
       monthEvery: opts.monthEvery,
       schools: opts.schools ?? null,
+      destinations: opts.destinations ?? false,
     },
     {
       dayEnd: (r) => {

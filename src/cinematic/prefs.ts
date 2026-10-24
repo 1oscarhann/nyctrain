@@ -23,7 +23,7 @@ export function parsePrefs(raw: unknown): CinematicPrefs {
   const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
   return {
-    dayNight: o.dayNight === 'day' || o.dayNight === 'cycle' ? o.dayNight : DEFAULT_PREFS.dayNight,
+    dayNight: o.dayNight === 'day' || o.dayNight === 'cycle' || o.dayNight === 'light' ? o.dayNight : DEFAULT_PREFS.dayNight,
     windows: bool(o.windows, DEFAULT_PREFS.windows),
     letterbox: bool(o.letterbox, DEFAULT_PREFS.letterbox),
     caption: bool(o.caption, DEFAULT_PREFS.caption),
@@ -50,8 +50,9 @@ export function storePrefs(p: Partial<CinematicPrefs>): CinematicPrefs {
 }
 
 /** Day and night labels and hints (title Settings and Menu). */
-export const DAY_NIGHT_LABEL: Record<DayNightMode, string> = { cycle: 'Day and night', day: 'Always day' };
+export const DAY_NIGHT_LABEL: Record<DayNightMode, string> = { cycle: 'Day and night', day: 'Always day', light: 'Light map' };
 export const DAY_NIGHT_HINT: Record<DayNightMode, string> = {
   cycle: 'The light follows the game clock: sunrise and sunset for the city and the date, weather on top',
   day: 'The map as it always was: no night, no glow',
+  light: 'A pale paper map, like a planning sheet: no night, no glow',
 };

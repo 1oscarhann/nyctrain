@@ -230,7 +230,7 @@ describe('Living City month close (headless)', () => {
     expect(st.mode.key).toBe(c.key);
     const reload = () => {
       const reports: DayReport[] = [];
-      const x = new Engine(world, { agentScale: 10, seed: 1885, time: e.time, fares: game.fares, modeState: st.mode, growth: st.growth, chaos: game.chaosInit() }, { dayEnd: (r) => reports.push(r) });
+      const x = new Engine(world, { agentScale: 10, seed: 1885, time: e.time, fares: game.fares, modeState: st.mode, growth: st.growth, chaos: game.chaosInit(), destinations: false }, { dayEnd: (r) => reports.push(r) });
       x.setNetwork(compileNetwork(game).net);
       return { x, reports };
     };

@@ -20,7 +20,7 @@ import type { Pointer, Tool } from '../ui/toolTypes';
 import { findRoutePath } from './pathfind';
 import { choosePlatform, insertStop, partnerOf, pathErrorHint, quadRole, stationsAlongPath, switchPlatform, type AlongStation } from './express';
 import { carsFitting, defaultHeadways, validStock } from './routeSet';
-import type { PeriodId, Route, RoutePath } from './types';
+import type { BulletShape, PeriodId, Route, RoutePath } from './types';
 import { purchaseFleet, fleetPlan } from './fleet';
 import { fmtMoney } from '../core/units';
 
@@ -29,6 +29,7 @@ export interface RouteDraft {
   name: string;
   bullet: string;
   color: string;
+  shape?: BulletShape;
   cls: TrackClass | null;
   /** Train type; follows the track family once the first stop is picked. */
   stock: StockId;
@@ -87,6 +88,7 @@ export class RouteTool implements Tool {
       name: r.name,
       bullet: r.bullet,
       color: r.color,
+      shape: r.shape,
       cls: r.cls,
       stock: r.stock,
       stops: [...r.stops],
@@ -119,6 +121,7 @@ export class RouteTool implements Tool {
       name: d.name,
       bullet: d.bullet,
       color: d.color,
+      shape: d.shape,
       cls: d.cls,
       stock: validStock(d.stock, d.cls),
       stops: d.stops,
@@ -156,7 +159,7 @@ export class RouteTool implements Tool {
     const d = this.draft;
     if (!d || this.problems().length || !d.cls) return false;
     const game = this.ctx.game;
-    const data = { name: d.name.trim(), bullet: d.bullet.trim().slice(0, 2).toUpperCase(), color: d.color, cls: d.cls, stock: validStock(d.stock, d.cls), stops: [...d.stops], cars: d.cars, headways: { ...d.headways }, express: d.express };
+    const data = { name: d.name.trim(), bullet: d.bullet.trim().slice(0, 2).toUpperCase(), color: d.color, shape: d.shape, cls: d.cls, stock: validStock(d.stock, d.cls), stops: [...d.stops], cars: d.cars, headways: { ...d.headways }, express: d.express };
     let route: Route;
     let created = false;
     if (d.editing !== null && game.routes.get(d.editing)) {

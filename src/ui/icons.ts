@@ -1,5 +1,6 @@
 /** Original line icons for the toolbar (24×24, stroke = currentColor). */
 export const ICONS = {
+  line: '<path d="M4 18 L10 8 L15 14 L20 5"/><circle cx="4" cy="18" r="2" fill="currentColor"/><circle cx="10" cy="8" r="2" fill="currentColor"/><circle cx="15" cy="14" r="2" fill="currentColor"/><circle cx="20" cy="5" r="2" fill="currentColor"/>',
   logo: '<path d="M4 18 L10 7 L14 14 L20 5" stroke="#4CD08A" stroke-width="2.6"/><circle cx="10" cy="7" r="2.2" fill="#E7EBEF" stroke="none"/><circle cx="14" cy="14" r="2.2" fill="#E7EBEF" stroke="none"/>',
   select: '<path d="M6 4 L18 12 L12.5 13.2 L15.5 19.5 L13 20.6 L10.1 14.3 L6 18 Z"/>',
   track: '<path d="M4 19 C 9 19, 9 5, 20 5"/><path d="M6.5 15.5 l2.6 1.3 M9.5 11 l2.8 0.6 M13 7.6 l2.4 -0.4 M17 5.4 l1.4 -1.8" stroke-width="1.5"/>',
@@ -13,6 +14,8 @@ export const ICONS = {
   menu: '<path d="M4 7 H20 M4 12 H20 M4 17 H20"/>',
   pause: '<path d="M8 5 V19 M16 5 V19" stroke-width="2.6"/>',
   play: '<path d="M7 5 L19 12 L7 19 Z" fill="currentColor"/>',
+  sound: '<path d="M4 9 H8 L13 5 V19 L8 15 H4 Z" fill="currentColor" stroke="none"/><path d="M16 9 Q18.5 12 16 15"/><path d="M18.5 6.5 Q23 12 18.5 17.5"/>',
+  soundOff: '<path d="M4 9 H8 L13 5 V19 L8 15 H4 Z" fill="currentColor" stroke="none"/><path d="M16 9 L22 15 M22 9 L16 15"/>',
   skip: '<path d="M5 6 L12 12 L5 18 Z M12 6 L19 12 L12 18 Z" fill="currentColor" stroke="none"/>',
   close: '<path d="M6 6 L18 18 M18 6 L6 18"/>',
   undo: '<path d="M9 7 L4 12 L9 17"/><path d="M4 12 H14 A6 6 0 0 1 14 24"/>',

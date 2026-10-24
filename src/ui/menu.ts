@@ -86,8 +86,8 @@ export async function openMenu(app: App): Promise<void> {
   const renderLight = () => {
     const c = app.cinematic;
     light.replaceChildren(
-      h('div', { class: 'seg', id: 'menu-daynight' }, ...(['cycle', 'day'] as const).map((m) => h('button', { class: c.prefs.dayNight === m ? 'on' : '', title: DAY_NIGHT_HINT[m], onclick: () => { c.setDayNight(m); renderLight(); } }, DAY_NIGHT_LABEL[m]))),
-      h('div', { class: 'seg' }, ...([true, false] as const).map((on) => h('button', { class: c.prefs.windows === on ? 'on' : '', disabled: c.prefs.dayNight === 'day', onclick: () => { c.setWindows(on); renderLight(); } }, on ? 'Lit windows' : 'Dark'))),
+      h('div', { class: 'seg', id: 'menu-daynight' }, ...(['cycle', 'day', 'light'] as const).map((m) => h('button', { class: c.prefs.dayNight === m ? 'on' : '', title: DAY_NIGHT_HINT[m], onclick: () => { c.setDayNight(m); renderLight(); } }, DAY_NIGHT_LABEL[m]))),
+      h('div', { class: 'seg' }, ...([true, false] as const).map((on) => h('button', { class: c.prefs.windows === on ? 'on' : '', disabled: c.prefs.dayNight !== 'cycle', onclick: () => { c.setWindows(on); renderLight(); } }, on ? 'Lit windows' : 'Dark'))),
     );
     lightHint.textContent = `${DAY_NIGHT_HINT[c.prefs.dayNight]}. P: photo mode; the film button replays your network.`;
   };

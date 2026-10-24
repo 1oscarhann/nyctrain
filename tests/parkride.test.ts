@@ -115,3 +115,25 @@ describe('the school run', () => {
     expect(without.at(-1)!.schools).toBeUndefined();
   }, 180_000);
 });
+
+describe('airports and universities', () => {
+  it('air passengers ride to Heathrow and students to campus when the line reaches them', () => {
+    applyCity('london');
+    const game = createHeadlessGame(loadWorldFromDisk(), loadLandFromDisk(), { sandbox: true });
+    // Central London (UCL, King's) out to Heathrow.
+    const pts = [L(51.5246, -0.134), L(51.515, -0.16), L(51.5, -0.25), L(51.49, -0.35), L(51.4715, -0.452)];
+    drawLine(game, pts, 'deep');
+    const stops = [L(51.5246, -0.134), L(51.5155, -0.159), L(51.5, -0.25), L(51.49, -0.35), L(51.4712, -0.4515)].map((p, i) => stationNear(game, p, `H${i}`, 8));
+    expect(game.build(true).ok).toBe(true);
+    makeRoute(game, 'Airport', 'AX', '#9B0056', stops, 8, { am: 4, pm: 4, midday: 6, evening: 8, night: 0 });
+    const r = runDays(game, 3, { agentScale: 20, destinations: true }).reports.at(-1)!;
+    expect(r.airports).toBeDefined();
+    expect(r.campuses).toBeDefined();
+    // Heathrow is airport 0 in London: thousands of passengers by train.
+    expect(r.airports!.perSchool[0]).toBeGreaterThan(1000);
+    expect(r.airports!.pupils).toBeGreaterThan(50_000);
+    // UCL (campus 0) is on the line: students ride.
+    expect(r.campuses!.perSchool[0] ?? 0).toBeGreaterThan(100);
+    if (process.env.PRINT) console.log('AIR', JSON.stringify({ air: { ...r.airports, perSchool: r.airports!.perSchool }, uni: { ...r.campuses, perSchool: Object.keys(r.campuses!.perSchool).length }, riders: r.riders }));
+  }, 180_000);
+});

@@ -55,6 +55,11 @@ export class TopBar {
     attachTip(skip, app.tooltip, 'Skip to 6am', undefined, 'Fast-forward through the night');
     const menu = h('button', { class: 'hw-btn ghost', id: 'btn-menu', style: 'width:38px;padding:0', onclick: () => app.openMenu() }, svgIcon(ICONS.menu));
     attachTip(menu, app.tooltip, 'Menu', undefined, 'Save, load, settings');
+    const sound = h('button', { class: 'hw-btn ghost', id: 'btn-sound', style: 'width:38px;padding:0', onclick: () => app.audio.toggle() }) as HTMLButtonElement;
+    const paintSound = () => sound.replaceChildren(svgIcon(app.audio.on ? ICONS.sound : ICONS.soundOff));
+    paintSound();
+    app.audio.onChange = paintSound;
+    attachTip(sound, app.tooltip, 'Station sounds', undefined, 'Select a station (or zoom right in on one) to hear its platform: the crowd grows with the people waiting, and a chime plays as each train pulls in.');
     // City chaos: weather chip (click for Service alerts) and the news ticker.
     this.weather = h(
       'div',
@@ -91,6 +96,7 @@ export class TopBar {
       h('div', { class: 'tb-sep' }),
       stat('Average commute', this.commute, this.commuteSub, undefined, 'Average door-to-door commute across the whole map, by any mode, compared with no trains at all. Lower is better.'),
       h('div', { class: 'tb-sep' }),
+      sound,
       menu,
     );
   }

@@ -169,6 +169,27 @@ drivers want a station's spaces than it has, the overflow drives the whole way, 
 "full: N more wanted a space". Old saves load with no car parks; without car parks the simulation is
 exactly as before.
 
+## Line tool, demand dots and the rest
+
+- **Line tool (L).** Click where each station goes; the track follows with curves between them,
+  with a straight platform section at every stop. Start on an existing station or track end to
+  extend it. Enter or double-click plans the track and stations, names the stations and (with
+  "Make a route along it" ticked) opens a route along them with the city's default trains.
+- **Demand dots (Overlays → Demand: by home / by work).** About 12,000 dots, each a fixed number of
+  commuters, coloured by how they travel: green walk, red drive, blue transit. Updated each morning.
+- **Airports and universities.** Heathrow, Gatwick, London City, Southampton, JFK and LaGuardia
+  send air passengers through the day (from published annual totals), and the main university
+  campuses draw students late morning to evening at student fares. Both are on the map with names;
+  a station within walking distance shows yesterday's air passengers and students by train.
+- **Station sounds** (speaker button, top right). Select a station, or zoom right in on one, to hear
+  its platform: a crowd murmur that grows with the people waiting and a two-tone chime as each train
+  pulls in. Synthesised with WebAudio; muted or not is remembered per viewer.
+- **Profit & loss** (Finances → Overview): revenue, operating costs and operating profit for
+  yesterday, the last two weeks (by day) or all time (by month).
+- **Light map** (Menu → Light map, or title Settings): a pale paper basemap.
+- **Line colours and shapes.** 18–20 colours per city plus a free colour picker, and four bullet
+  shapes (disc, square, diamond, line bar).
+
 ## Controls
 
 | Key | Action |

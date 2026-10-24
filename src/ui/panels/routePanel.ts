@@ -17,7 +17,7 @@ import type { RouteTool } from '../../routes/routeTool';
 import { allStopsPattern, expressPattern, serveStops, skipStops, stationsAlongRoute, type AlongStation } from '../../routes/express';
 import { lineRows, OVERTAKES_TIP, overtakesValue, pairWord, routeOnQuad, sameStopList, SERVICE_TIP, serviceEditNoop, skipsText, type LineRow } from '../express';
 import { carsFitting, maxCarsFor, validStock } from '../../routes/routeSet';
-import { PERIOD_IDS, routePalette, type PeriodId, type Route, type RouteControl } from '../../routes/types';
+import { BULLET_SHAPES, PERIOD_IDS, routePalette, type BulletShape, type PeriodId, type Route, type RouteControl } from '../../routes/types';
 import { city } from '../../cities';
 import type { RouteRegularityDetail } from '../../sim/protocol';
 import type { App } from '../app';
@@ -118,7 +118,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
   const net = game.network;
   const path = game.routes.path(net, r);
   const op = game.routes.operational(net, r);
-  const sh = shell(`Route · ${r.express ? 'Express · ' : ''}${TRAINS[r.stock].name} · ${r.cars} cars`, r.name, () => game.select(null), bullet(r.color, r.bullet, 34, r.express));
+  const sh = shell(`Route · ${r.express ? 'Express · ' : ''}${TRAINS[r.stock].name} · ${r.cars} cars`, r.name, () => game.select(null), bullet(r.color, r.bullet, 34, r.express, r.shape));
   const body = sh.body;
   const tip = (el: HTMLElement, title: string, text?: string, key?: string) => attachTip(el, app.tooltip, title, key, text);
   if (!op.ok) body.append(h('div', { class: path.ok ? 'warn' : 'err' }, op.reason ?? 'Not running'));
@@ -207,7 +207,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
           h('span', { class: 'line-mark' }),
           h('span', { class: 'hw-muted num', style: 'width:18px' }, row.served ? String(row.stopNo) : ''),
           h('span', { class: 'grow' }, row.name, row.tag ? h('span', { class: 'line-tag' }, ` ${row.tag}`) : null),
-          ...row.others.map((o) => bullet(o.color, o.bullet, 16, o.express)),
+          ...row.others.map((o) => bullet(o.color, o.bullet, 16, o.express, o.shape)),
           row.served ? timepointToggle(sid, row.name, i) : null,
           action,
         ),
@@ -544,7 +544,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
 export function routeEditor(app: App, tool: RouteTool): Panel {
   const d = tool.draft;
   const game = app.game;
-  const sh = shell(d?.editing !== null && d ? 'Edit route' : 'New route', d?.name || 'Click stations in order', () => tool.cancel(), d ? bullet(d.color, d.bullet || '?', 34, d.express) : null);
+  const sh = shell(d?.editing !== null && d ? 'Edit route' : 'New route', d?.name || 'Click stations in order', () => tool.cancel(), d ? bullet(d.color, d.bullet || '?', 34, d.express, d.shape) : null);
   const body = sh.body;
   if (!d) return { el: sh.el };
   const net = game.network;
@@ -622,8 +622,19 @@ export function routeEditor(app: App, tool: RouteTool): Panel {
   });
   bul.addEventListener('keydown', (e) => e.stopPropagation());
   const colors = h('div', { class: 'color-grid' });
-  for (const c of routePalette(city().theme)) colors.append(h('button', { class: c === d.color ? 'on' : '', style: { background: c }, title: c, onclick: () => { d.color = c; tool.recompute(); } }));
-  body.append(section('Name and bullet'), h('div', { style: 'display:flex;gap:6px' }, name, bul), section('Colour'), colors);
+  for (const c of routePalette(city().theme)) colors.append(h('button', { class: c.toLowerCase() === d.color.toLowerCase() ? 'on' : '', style: { background: c }, title: c, onclick: () => { d.color = c; tool.recompute(); } }));
+  // Any colour at all: the native picker.
+  const custom = h('input', { type: 'color', class: 'color-custom', value: /^#[0-9a-f]{6}$/i.test(d.color) ? d.color : '#888888', title: 'Pick any colour' }) as HTMLInputElement;
+  custom.addEventListener('change', () => {
+    d.color = custom.value.toUpperCase();
+    tool.recompute();
+  });
+  colors.append(custom);
+  const shapes = h('div', { class: 'shape-row' }, h('span', { class: 'hw-muted', style: 'font-size:12px;margin-right:4px' }, 'Shape'));
+  const SHAPE_NAME: Record<BulletShape, string> = { circle: 'Disc', square: 'Square', diamond: 'Diamond', bar: 'Line bar' };
+  for (const sh of BULLET_SHAPES)
+    shapes.append(h('button', { class: (d.shape ?? (city().theme === 'tfl' ? 'bar' : 'circle')) === sh ? 'on' : '', title: SHAPE_NAME[sh], onclick: () => { d.shape = sh; tool.recompute(); } }, bullet(d.color, d.bullet || '?', 22, false, sh)));
+  body.append(section('Name and bullet'), h('div', { style: 'display:flex;gap:6px' }, name, bul), section('Colour and shape'), colors, shapes);
   // Train length and frequency
   if (d.cls) {
     const cls = d.cls;
@@ -675,7 +686,7 @@ export function routesList(app: App): Panel {
       h(
         'div',
         { class: 'list-item', onclick: () => game.select({ kind: 'route', id: r.id }) },
-        bullet(r.color, r.bullet, 24, r.express),
+        bullet(r.color, r.bullet, 24, r.express, r.shape),
         h('span', { class: 'grow' }, r.name, h('div', { class: op.ok ? 'hw-muted' : 'hw-amber', style: 'font-size:11.5px' }, op.ok ? `${r.express ? 'Express · ' : ''}${r.stops.length} stops` : op.reason ?? '', op.ok && tag ? h('span', { class: `hw-${tag.tone}` }, ` · ${tag.text}`) : null)),
         h('span', { class: 'num' }, fmtCount(app.report?.routeRiders[r.id] ?? 0)),
       ),

@@ -58,6 +58,32 @@ export const DAY: Palette = {
 };
 
 /**
+ * Light map: a pale paper basemap (planning-map look), static like Always day. Labels go dark on
+ * white halos; water is a soft blue, parks a light green.
+ */
+export const LIGHT: Palette = {
+  colours: {
+    land: '#eceae4',
+    park: '#d3e3c8',
+    water: '#b5d0e3',
+    street: '#ffffff',
+    avenue: '#fbf6ea',
+    block: '#e1ded6',
+    blockLine: '#d4d0c6',
+    roof: '#dcd8cf',
+    label: '#4a4f57',
+    labelHalo: '#f6f5f1',
+    waterLabel: '#4f7894',
+    waterLabelHalo: '#c4dbea',
+    light: '#ffffff',
+    sky: '#bcd2e6',
+    horizon: '#e7edf2',
+    fog: '#eceae4',
+  },
+  lightIntensity: 0.35,
+};
+
+/**
  * Low sun (a few degrees up): the day's colours, warmed, with a long golden light. (Every light
  * colour stays near white: MapLibre's fill-extrusion shading floors each channel at
  * 0.3 · (1 − light), so a saturated light would tint the dark walls with its complement; the roof

@@ -5,6 +5,8 @@
 import { CHAOS, ECONOMY, GROWTH, TIME, type ChaosLevel, type GrowthPace } from '../balance';
 import { dayIndex, isNewMonth, SECONDS_PER_DAY, timeOfDay } from '../core/calendar';
 import { isSchoolDay } from '../core/schoolTerm';
+import { city } from '../cities';
+import { AIRPORTS, CAMPUSES } from '../cities/destinations';
 import type { World } from '../data/world';
 import { ChaosController } from './chaos';
 import { Commuters, type RegenStats } from './commuters';
@@ -49,6 +51,8 @@ export interface EngineOptions {
   monthEvery?: number;
   /** The school run: the city's schools (schools.json; null or absent: no pupils). */
   schools?: { lon: number; lat: number; s: number }[] | null;
+  /** Airport and university travellers (default on; false: commuters only, as before). */
+  destinations?: boolean;
 }
 
 /** Living City: starting-city agents given their per-agent placement per sim step ahead of the first growth (≈ 1 ms). */
@@ -99,6 +103,8 @@ export class Engine {
     );
     this.commuters?.setTrains(() => this.trains.trains);
     this.commuters?.setSchools(opts.schools ?? null);
+    // Airports and universities: every map has them (no extra data files).
+    if (opts.destinations !== false) this.commuters?.setDestinations(AIRPORTS[city().id] ?? [], CAMPUSES[city().id] ?? []);
     this.schoolSeed = opts.seed;
     this.stories = this.commuters ? new StoryTracer(this.commuters, this.trains) : null;
     this.chaos = new ChaosController(opts.chaos ?? { level: 'off', seed: CHAOS.defaultSeed }, this.trains, this.commuters, {

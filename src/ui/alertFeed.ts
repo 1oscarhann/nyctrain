@@ -39,6 +39,7 @@ export interface RouteRef {
   id: number;
   bullet: string;
   color: string;
+  shape?: import('../routes/types').BulletShape;
   name: string;
   /** Express service (v2): drawn with the lozenge bullet. */
   express?: boolean;

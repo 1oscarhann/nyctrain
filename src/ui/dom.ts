@@ -50,11 +50,20 @@ export function svgIcon(path: string, viewBox = '0 0 24 24'): SVGSVGElement {
  * as it is tall with pointed ends and a white keyline (an outer white hexagon holding the coloured
  * one), deliberately not a diamond.
  */
-export function bullet(color: string, text: string, size = 22, express = false): HTMLElement {
+import type { BulletShape } from '../routes/types';
+
+export function bullet(color: string, text: string, size = 22, express = false, shape?: BulletShape): HTMLElement {
   const fontSize = Math.round(size * (text.length > 1 ? 0.48 : 0.6)) + 'px';
+  if (!express && (shape === 'square' || shape === 'diamond')) {
+    const ink = barInk(color);
+    if (shape === 'square')
+      return h('span', { class: 'bullet square', style: { background: color, width: size + 'px', height: size + 'px', fontSize, color: ink } }, text);
+    const inner = Math.round(size * 0.74) + 'px';
+    return h('span', { class: 'bullet diamond', style: { width: size + 'px', height: size + 'px', fontSize, color: ink } }, h('span', { class: 'diamond-bg', style: { background: color, width: inner, height: inner } }), h('span', { class: 'diamond-text' }, text));
+  }
   // London style: a line bar (a rounded rectangle in the line colour) instead of a disc; express
   // services keep the lozenge so they still read as different at a glance.
-  if (!express && document.documentElement.dataset.theme === 'tfl') {
+  if (!express && shape !== 'circle' && (shape === 'bar' || document.documentElement.dataset.theme === 'tfl')) {
     return h(
       'span',
       { class: 'bullet bar', style: { background: color, width: Math.round(size * 1.55) + 'px', height: Math.round(size * 0.78) + 'px', fontSize: Math.round(size * 0.5) + 'px', color: barInk(color) } },

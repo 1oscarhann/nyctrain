@@ -1871,3 +1871,70 @@ table.fleet td {
   gap: 4px;
   margin-top: 2px;
 }
+
+/* Colour-key legends (demand dots). */
+.legend-items {
+  display: flex;
+  gap: 12px;
+  margin: 6px 0 2px;
+  flex-wrap: wrap;
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+.legend-item .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+/* Bullet shapes the player picks per route (route panel → Colour and shape). */
+.bullet.square {
+  border-radius: 3px;
+  text-shadow: none;
+}
+.bullet.diamond {
+  position: relative;
+  border-radius: 0;
+  text-shadow: none;
+}
+.bullet.diamond .diamond-bg {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(45deg);
+  border-radius: 2px;
+}
+.bullet.diamond .diamond-text {
+  position: relative;
+}
+.shape-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  align-items: center;
+}
+.shape-row button {
+  background: transparent;
+  border: 1px solid var(--line, #3a424b);
+  border-radius: 6px;
+  padding: 4px;
+  cursor: pointer;
+  display: inline-flex;
+}
+.shape-row button.on {
+  border-color: var(--accent, #00a3b0);
+  box-shadow: 0 0 0 1px var(--accent, #00a3b0);
+}
+.color-custom {
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line, #3a424b);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}

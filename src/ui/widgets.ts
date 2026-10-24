@@ -127,11 +127,12 @@ export class Legend {
     this.el.className = 'hw-panel' + (l ? ' open' : '');
     this.el.replaceChildren();
     if (!l) return;
-    this.el.append(
-      h('div', { style: 'font-weight:700' }, l.title),
-      h('div', { class: 'bar', style: { background: rampCss(l.ramp) } }),
-      h('div', { class: 'ends' }, h('span', null, l.lo), h('span', null, l.hi)),
-    );
+    this.el.append(h('div', { style: 'font-weight:700' }, l.title));
+    if (l.items)
+      this.el.append(
+        h('div', { class: 'legend-items' }, ...l.items.map((it) => h('span', { class: 'legend-item' }, h('span', { class: 'dot', style: `background:rgba(${it.color[0]},${it.color[1]},${it.color[2]},1)` }), it.label))),
+      );
+    else this.el.append(h('div', { class: 'bar', style: { background: rampCss(l.ramp) } }), h('div', { class: 'ends' }, h('span', null, l.lo), h('span', null, l.hi)));
     if (l.note) this.el.append(h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:4px' }, l.note));
   }
 }

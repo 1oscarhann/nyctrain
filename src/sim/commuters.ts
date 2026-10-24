@@ -3,7 +3,7 @@
  * pathfinding, and an event-driven simulation of every transit trip (walk → platform queue →
  * train with capacity → transfers → walk) whose observed times feed the next day's choice.
  */
-import { CHAOS, COMMUTERS, EVENTS, FARES, GOALS, OPERATIONS, PARK_RIDE, QUAD, SCHOOLS, TIME } from '../balance';
+import { CHAOS, COMMUTERS, EVENTS, FARES, GOALS, OPERATIONS, PARK_RIDE, QUAD, SCHOOLS, SPECIAL, TIME } from '../balance';
 import { distanceFareMult, expectedFare, fareAt, isPeakTime, isPeakTod, tripFare, variesByTime, type FarePolicy } from '../economy/fares';
 import { emptyStats } from './regularity';
 import { SECONDS_PER_DAY, dayIndex } from '../core/calendar';
@@ -546,7 +546,7 @@ export class Commuters implements PassengerHooks {
     this.cb = cb;
     this.rng = new Rng(opts.seed);
     // The pool holds today's event-goers and, on school days, pupils going to school by train.
-    this.poolCap = Math.ceil((EVENTS.maxPeoplePerDay + SCHOOLS.maxRidersPerDay) / this.scale);
+    this.poolCap = Math.ceil((EVENTS.maxPeoplePerDay + SCHOOLS.maxRidersPerDay + SPECIAL.maxRidersPerDay) / this.scale);
     const factors = opts.factors ?? null;
     // ---- groups (stochastic rounding of counts to agents, seeded), geometry, no-subway shares
     const tbl = buildGroups(world.od, world.tracts.length, this.scale, opts.seed, factors);
@@ -949,6 +949,7 @@ export class Commuters implements PassengerHooks {
   /** Living City: event-goers' origin weights per tract (current residents); null for tracts.json's. */
   setOriginWeights(w: ArrayLike<number> | null): void {
     this.originWeights = w;
+    this.mixWeights = null;
   }
 
   /**
@@ -2042,6 +2043,8 @@ export class Commuters implements PassengerHooks {
       regularity: emptyStats(),
       ...(parking ? { parking } : {}),
       ...(this.schoolReport() ? { schools: this.schoolReport() } : {}),
+      ...(this.specialReport(-2) ? { airports: this.specialReport(-2) } : {}),
+      ...(this.specialReport(-3) ? { campuses: this.specialReport(-3) } : {}),
     };
     // Keep yesterday's detail for panels, then reset.
     this.last = {
@@ -2188,6 +2191,25 @@ export class Commuters implements PassengerHooks {
       /** Minutes per commute the network saves residents (agent-weighted, as Living City measures it). */
       benefit: n ? benefitSum / n : 0,
     };
+  }
+
+  /**
+   * Demand dots: commuters by tract and mode as drawn today (agents × scale), homes then
+   * workplaces: [home walk, home drive, home transit, work walk, work drive, work transit] per tract.
+   */
+  modesByTract(): Float32Array {
+    const T = this.world.tracts.length;
+    const out = new Float32Array(T * 6);
+    for (let g = 0; g < this.G; g++) {
+      const n = this.gCount[g] * this.scale;
+      const h = this.gHome[g] * 6, w = this.gWork[g] * 6 + 3;
+      for (let m = 0; m < 3; m++) {
+        const v = n * this.shares[g * 3 + m];
+        out[h + m] += v;
+        out[w + m] += v;
+      }
+    }
+    return out;
   }
 
   flows(limit: number) {
@@ -2560,12 +2582,18 @@ export class Commuters implements PassengerHooks {
     }
   }
 
-  // ------------------------------------------------------------------ the school run
+  // ------------------------------------------------------------------ special trips
+  // Beyond the commute, three daily pools share the event-goers' agents (ev < 0): pupils on the
+  // school run (−1), airport passengers (−2) and university students (−3). Each place draws its
+  // travellers from nearby neighbourhoods and they choose walking, the car (a lift, a taxi, airport
+  // parking) or the trains, at their own fares and times.
   private schools: { x: number; y: number; s: number }[] = [];
-  private schoolCdf = new Map<number, Float64Array>();
-  private schoolAcc: { version: number; acc: Access[][] } | null = null;
-  /** Today's pupils (real people): by mode as planned, and boardings by train per school (agents). */
-  private schoolDay: { pupils: number; walk: number; lift: number; transit: number; rode: Map<number, number> } | null = null;
+  private airports: { x: number; y: number; perDay: number }[] = [];
+  private campuses: { x: number; y: number; students: number }[] = [];
+  private specialCdf = new Map<string, Float64Array>();
+  private specialAcc = new Map<string, { version: number; acc: Access[][] }>();
+  /** Today's special trips (real people): by mode as planned, and by train per place (agents). */
+  private specialDay = new Map<number, { people: number; walk: number; lift: number; transit: number; rode: Map<number, number> }>();
 
   /** The city's schools (index = position in schools.json); only secondary-age pupils travel by train. */
   setSchools(list: { lon: number; lat: number; s: number }[] | null): void {
@@ -2573,68 +2601,144 @@ export class Commuters implements PassengerHooks {
       const [x, y] = toLocal(sc.lon, sc.lat);
       return { x, y, s: sc.s };
     });
-    this.schoolCdf.clear();
-    this.schoolAcc = null;
+    this.specialCdf.clear();
+    this.specialAcc.clear();
+  }
+
+  /** The city's airports and university campuses (src/cities/destinations.ts). */
+  setDestinations(airports: { lon: number; lat: number; perDay: number }[], campuses: { lon: number; lat: number; students: number }[]): void {
+    this.airports = airports.map((a) => {
+      const [x, y] = toLocal(a.lon, a.lat);
+      return { x, y, perDay: a.perDay };
+    });
+    this.campuses = campuses.map((c) => {
+      const [x, y] = toLocal(c.lon, c.lat);
+      return { x, y, students: c.students };
+    });
+    this.specialCdf.clear();
+    this.specialAcc.clear();
   }
 
   private isPupil(a: number): boolean {
-    return a >= this.A && this.evGroups[this.aGroup[a]]?.ev === -1;
+    return a >= this.A && (this.evGroups[this.aGroup[a]]?.ev ?? 0) < 0;
   }
 
-  /** Fare multiplier for an agent: distance fares for commuters, child fares for pupils. */
+  /** Fare multiplier for an agent: distance fares for commuters, child or student fares for pupils and students. */
   private fareMultOf(a: number): number {
     if (a < this.A) return this.gFareMult[this.aGroup[a]];
-    return this.evGroups[this.aGroup[a]]?.ev === -1 ? SCHOOLS.childFare : 1;
+    const ev = this.evGroups[this.aGroup[a]]?.ev ?? 0;
+    return ev === -1 ? SCHOOLS.childFare : ev === -3 ? SPECIAL.studentFare : 1;
   }
 
-  /**
-   * School days, after the events: each school's secondary-age pupils come from nearby
-   * neighbourhoods (residents · exp(−d / originDecay)) and choose walking, a lift (or the school
-   * bus) or the train; those on the train join today's pool, arriving for the start of school and
-   * leaving at the end of the day. Deterministic per school and day.
-   */
+  /** School days (pupils) and every weekday (airports, universities), after the events. */
   injectSchools(day: number, dayStart: number, now: number, seed: number, schoolDay: boolean): void {
-    this.schoolDay = null;
-    if (!schoolDay || !this.schools.length) return;
+    this.specialDay.clear();
+    const tri = (lo: number, hi: number) => (r: Rng) => triangular(r, lo, hi);
+    if (schoolDay && this.schools.length)
+      this.injectSpecial(-1, day, dayStart, now, seed, {
+        places: this.schools.map((s) => ({ x: s.x, y: s.y, n: s.s * SCHOOLS.attendance })),
+        decay: SCHOOLS.originDecay,
+        jobsToo: false,
+        band: SCHOOLS.band,
+        fare: SCHOOLS.childFare,
+        driveExtra: SCHOOLS.liftConstant,
+        access: SCHOOLS.access,
+        arrive: tri(SCHOOLS.arrive[0], SCHOOLS.arrive[1]),
+        leave: (r) => triangular(r, SCHOOLS.leave[0], SCHOOLS.leave[1]),
+        period: 2,
+      });
+    if (this.airports.length)
+      this.injectSpecial(-2, day, dayStart, now, seed, {
+        // Round trips: a traveller to the airport, and (as the trip back) one arriving later in the day.
+        places: this.airports.map((a) => ({ x: a.x, y: a.y, n: (a.perDay * SPECIAL.airportLocal) / 2 })),
+        decay: SPECIAL.airportDecay,
+        jobsToo: true,
+        band: 1,
+        fare: 1,
+        driveExtra: SPECIAL.airportParking,
+        access: SPECIAL.access,
+        arrive: (r) => SPECIAL.airportFrom + r.next() * (SPECIAL.airportTo - SPECIAL.airportFrom),
+        leave: (r, arrive) => Math.min(23 * 3600, arrive + SPECIAL.airportStay[0] + r.next() * (SPECIAL.airportStay[1] - SPECIAL.airportStay[0])),
+        period: 2,
+      });
+    if (this.campuses.length)
+      this.injectSpecial(-3, day, dayStart, now, seed, {
+        places: this.campuses.map((c) => ({ x: c.x, y: c.y, n: c.students * SPECIAL.studentAttendance })),
+        decay: SPECIAL.studentDecay,
+        jobsToo: false,
+        band: 0,
+        fare: SPECIAL.studentFare,
+        driveExtra: SPECIAL.studentParking,
+        access: SPECIAL.access,
+        arrive: tri(SPECIAL.studentArrive[0], SPECIAL.studentArrive[1]),
+        leave: (r) => triangular(r, SPECIAL.studentLeave[0], SPECIAL.studentLeave[1]),
+        period: 2,
+      });
+  }
+
+  private injectSpecial(
+    ev: number,
+    day: number,
+    dayStart: number,
+    now: number,
+    seed: number,
+    o: {
+      places: { x: number; y: number; n: number }[];
+      decay: number;
+      jobsToo: boolean;
+      band: number;
+      fare: number;
+      driveExtra: number;
+      access: number;
+      arrive: (r: Rng) => number;
+      leave: (r: Rng, arrive: number) => number;
+      period: number;
+    },
+  ): void {
     const tracts = this.world.tracts;
     const graph = this.graph, net = this.net;
     const scale = this.scale;
     const wx = this.wx;
-    const zones = cityBalance();
-    const core = new Set(zones.coreRegions);
-    const sd = (this.schoolDay = { pupils: 0, walk: 0, lift: 0, transit: 0, rode: new Map<number, number>() });
-    // Stations within a walk of each school (kept while the network is the same).
-    if (net && (!this.schoolAcc || this.schoolAcc.version !== net.version)) {
-      this.schoolAcc = {
+    const core = new Set(cityBalance().coreRegions);
+    const sd = { people: 0, walk: 0, lift: 0, transit: 0, rode: new Map<number, number>() };
+    this.specialDay.set(ev, sd);
+    // Stations within a walk of each place (kept while the network is the same).
+    const key = String(ev);
+    let accs = this.specialAcc.get(key);
+    if (net && (!accs || accs.version !== net.version)) {
+      accs = {
         version: net.version,
-        acc: this.schools.map((sc) => {
+        acc: o.places.map((pl) => {
           const out: Access[] = [];
           net.stations.forEach((st, i) => {
-            const d = Math.hypot(st.x - sc.x, st.y - sc.y);
-            if (d <= SCHOOLS.access) out.push({ station: i, walk: (d * COMMUTERS.walkDetour) / COMMUTERS.walkSpeed });
+            const d = Math.hypot(st.x - pl.x, st.y - pl.y);
+            if (d <= o.access) out.push({ station: i, walk: (d * COMMUTERS.walkDetour) / COMMUTERS.walkSpeed });
           });
           return out;
         }),
       };
+      this.specialAcc.set(key, accs);
     }
-    const fareBase = tripFare(this.fares, SCHOOLS.band, 1) * SCHOOLS.childFare;
+    const weights = o.jobsToo ? (this.mixWeights ??= Float64Array.from(tracts, (t, i) => (this.originWeights?.[i] ?? t.residents) + t.jobs)) : this.originWeights;
+    const fareBase = tripFare(this.fares, o.band, 1) * o.fare;
     let periodSet = false;
-    this.schools.forEach((sc, si) => {
-      if (sc.s <= 0) return;
-      const n = stochasticRound(new Rng(hashSeed(seed, day, si, 0x5c01)), (sc.s * SCHOOLS.attendance) / scale);
+    o.places.forEach((pl, pi) => {
+      if (pl.n <= 0) return;
+      const n = stochasticRound(new Rng(hashSeed(seed, day, pi, 0x5c01 + ev)), pl.n / scale);
       if (n <= 0) return;
-      sd.pupils += n * scale;
-      const rng = new Rng(hashSeed(seed, day, si, 0x5c02));
-      let cdf = this.schoolCdf.get(si);
+      sd.people += n * scale;
+      const rng = new Rng(hashSeed(seed, day, pi, 0x5c02 + ev));
+      const ck = `${ev}:${pi}`;
+      let cdf = this.specialCdf.get(ck);
       if (!cdf) {
-        cdf = originCdf(tracts, sc.x, sc.y, SCHOOLS.originDecay, this.originWeights);
-        this.schoolCdf.set(si, cdf);
+        cdf = originCdf(tracts, pl.x, pl.y, o.decay, weights);
+        this.specialCdf.set(ck, cdf);
       }
-      const acc = this.schoolAcc?.acc[si] ?? [];
+      const acc = accs?.acc[pi] ?? [];
       const canRide = graph !== null && acc.length > 0;
       if (canRide) {
-        // One search from the school to everywhere: the trip home (the morning trip is its reverse).
-        graph.setPeriod(2);
+        // One search from the place to everywhere: the trip home (the trip there is its reverse).
+        graph.setPeriod(o.period);
         periodSet = true;
         graph.run(acc);
       }
@@ -2650,9 +2754,9 @@ export class Commuters implements PassengerHooks {
         }
         let p = shareCache.get(tract);
         if (!p) {
-          const geom = venueGeometry(tracts[tract], sc.x, sc.y, core.has(tracts[tract].borough), false);
-          const c = generalisedCosts(geom, SCHOOLS.band, path ? { time: path.time, transfers: path.transfers, crowdMinutes: 2, fare: fareBase } : null, wx);
-          c[1] += SCHOOLS.liftConstant;
+          const geom = venueGeometry(tracts[tract], pl.x, pl.y, core.has(tracts[tract].borough), false);
+          const c = generalisedCosts(geom, o.band, path ? { time: path.time, transfers: path.transfers, crowdMinutes: 2, fare: fareBase } : null, wx);
+          c[1] += o.driveExtra;
           p = logitShares(c);
           shareCache.set(tract, p);
         }
@@ -2668,10 +2772,10 @@ export class Commuters implements PassengerHooks {
         if (gi === undefined) {
           gi = this.evGroups.length;
           groupOf.set(tract, gi);
-          this.evGroups.push({ ev: -1, school: si, tract, from: path, to: reverseLegs(path), drive: driveTripTime(venueGeometry(tracts[tract], sc.x, sc.y, core.has(tracts[tract].borough), false), wx) });
+          this.evGroups.push({ ev, school: pi, tract, from: path, to: reverseLegs(path), drive: driveTripTime(venueGeometry(tracts[tract], pl.x, pl.y, core.has(tracts[tract].borough), false), wx) });
         }
         this.aGroup[a] = gi;
-        this.aBand[a] = SCHOOLS.band;
+        this.aBand[a] = o.band;
         this.aMode[a] = MODE_TRANSIT;
         this.aPM[a] = 0;
         this.aBoarded[a] = 0;
@@ -2683,18 +2787,18 @@ export class Commuters implements PassengerHooks {
         const [hx, hy] = pointInDisc(rng, home.x, home.y, home.radius);
         this.aHx[a] = hx;
         this.aHy[a] = hy;
-        this.aWx[a] = sc.x;
-        this.aWy[a] = sc.y;
-        const arrive = dayStart + triangular(rng, SCHOOLS.arrive[0], SCHOOLS.arrive[1]);
+        this.aWx[a] = pl.x;
+        this.aWy[a] = pl.y;
+        const arriveTod = o.arrive(rng);
+        const arrive = dayStart + arriveTod;
         const depart = arrive - path.time * 1.15;
-        this.aReturn[a] = triangular(rng, SCHOOLS.leave[0], SCHOOLS.leave[1]);
+        this.aReturn[a] = o.leave(rng, arriveTod);
         this.aDepart[a] = depart - dayStart;
         sd.transit += scale;
         if (depart >= now) {
           this.aState[a] = S_HOME;
           this.push(depart, a, E_DEPART);
         } else if (dayStart + this.aReturn[a] >= now) {
-          // Loaded during the school day: they're at school.
           this.aState[a] = S_WORK;
           this.push(dayStart + this.aReturn[a], a, E_RETURN);
         } else this.aState[a] = S_DONE;
@@ -2702,12 +2806,14 @@ export class Commuters implements PassengerHooks {
     });
     if (periodSet) graph!.setPeriod(1);
   }
+  private mixWeights: Float64Array | null = null;
 
-  /** A pupil's trip ends: to school (then home at the end of the day), or home. */
+  /** A special trip ends: there (then home later), or home. */
   private recordSchoolTrip(a: number, tEnd: number, eg: EventGroup): void {
     if (this.aBoarded[a]) {
       this.day.transitTrips++;
-      if (!this.aPM[a] && this.schoolDay && eg.school !== undefined) this.schoolDay.rode.set(eg.school, (this.schoolDay.rode.get(eg.school) ?? 0) + 1);
+      const sd = this.specialDay.get(eg.ev);
+      if (!this.aPM[a] && sd && eg.school !== undefined) sd.rode.set(eg.school, (sd.rode.get(eg.school) ?? 0) + 1);
     }
     if (!this.aPM[a]) {
       this.aState[a] = S_WORK;
@@ -2715,13 +2821,17 @@ export class Commuters implements PassengerHooks {
     } else this.aState[a] = S_DONE;
   }
 
-  /** Today's school run for the day report (null on days without school). */
+  /** Today's special trips for the day report. */
+  private specialReport(ev: number): { pupils: number; byWalk: number; byLift: number; byTransit: number; perSchool: Record<number, number> } | undefined {
+    const sd = this.specialDay.get(ev);
+    if (!sd || !sd.people) return undefined;
+    const per: Record<number, number> = {};
+    for (const [i, n] of sd.rode) per[i] = n * this.scale;
+    return { pupils: sd.people, byWalk: sd.walk, byLift: sd.lift, byTransit: sd.transit, perSchool: per };
+  }
+
   private schoolReport(): DayReport['schools'] | undefined {
-    const sd = this.schoolDay;
-    if (!sd || !sd.pupils) return undefined;
-    const perSchool: Record<number, number> = {};
-    for (const [si, n] of sd.rode) perSchool[si] = n * this.scale;
-    return { pupils: sd.pupils, byWalk: sd.walk, byLift: sd.lift, byTransit: sd.transit, perSchool };
+    return this.specialReport(-1);
   }
 
   /** Today's events so far (real people). */

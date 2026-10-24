@@ -15,10 +15,12 @@ import { RAMP_COOL, RAMP_DIVERGE, RAMP_VIOLET, RAMP_WARM, logT, type RGBA } from
 import { columnHeight, columnRadiusClass, GROWTH_MIN_DRAWN, GROWTH_RAMP_SPAN, growthLegendEnds, growthSpan, growthT, tractGrowthSince, tractPeopleAdded } from './growthMath';
 import { Emitter } from '../core/emitter';
 
-export type OverlayMode = 'none' | 'residents' | 'jobs' | 'growth' | 'unserved' | 'crowding' | 'flows';
+export type OverlayMode = 'none' | 'demand' | 'demandWork' | 'residents' | 'jobs' | 'growth' | 'unserved' | 'crowding' | 'flows';
 
 export const OVERLAY_LABELS: Record<OverlayMode, string> = {
   none: 'No overlay',
+  demand: 'Demand: where people live',
+  demandWork: 'Demand: where people work',
   residents: 'Residents density',
   jobs: 'Jobs density',
   // The start year comes from TIME.startDate (read when the menu is built, after applyCity).
@@ -38,6 +40,20 @@ export interface OverlayLegend {
   lo: string;
   hi: string;
   note?: string;
+  /** A colour key instead of a ramp (demand dots). */
+  items?: { label: string; color: RGBA }[];
+}
+
+/** Demand dots: how people travel today. */
+export const DEMAND_COLORS: { label: string; color: RGBA }[] = [
+  { label: 'Walk', color: [110, 205, 140, 230] },
+  { label: 'Drive', color: [240, 86, 86, 230] },
+  { label: 'Transit', color: [72, 156, 255, 240] },
+];
+
+interface Dot {
+  pos: [number, number];
+  m: number;
 }
 
 export interface FlowLine {
@@ -56,6 +72,8 @@ export interface OverlayData {
   growth?: GrowthView | null;
   /** Served stations' positions (lon, lat): the value-capture district is within districtRadius of them. */
   served?: [number, number][];
+  /** Demand dots: per tract [home walk, drive, transit, work walk, drive, transit] (Commuters.modesByTract). */
+  modes?: Float32Array;
 }
 
 interface Disc {
@@ -85,6 +103,9 @@ export class Overlays {
   mode: OverlayMode = 'none';
   readonly events = new Emitter<{ change: OverlayMode }>();
   private discs: Disc[] = [];
+  private dots: Dot[] = [];
+  /** People per demand dot (shown in the legend). */
+  private perDot = 0;
   private columns: ColumnGroup[] = [];
   /** The growth ramp's current end (±span), from the biggest change drawn. */
   private span = GROWTH_RAMP_SPAN;
@@ -115,6 +136,16 @@ export class Overlays {
 
   legend(): OverlayLegend | null {
     switch (this.mode) {
+      case 'demand':
+      case 'demandWork':
+        return {
+          title: this.mode === 'demand' ? 'Commuters by home: how they travel' : 'Commuters by workplace: how they travel',
+          ramp: RAMP_COOL,
+          lo: '',
+          hi: '',
+          items: DEMAND_COLORS,
+          note: this.data.modes ? `Each dot is about ${this.perDot.toLocaleString()} people. Updated each morning.` : 'Loading…',
+        };
       case 'residents':
         return { title: 'Residents (commuters living here)', ramp: RAMP_COOL, lo: this.densityScale(1000), hi: this.densityScale(60000) };
       case 'jobs':
@@ -174,6 +205,43 @@ export class Overlays {
   private rebuild(): void {
     this.version++;
     const tracts = this.tracts;
+    this.dots = [];
+    if ((this.mode === 'demand' || this.mode === 'demandWork') && this.data.modes) {
+      // About 12,000 dots across the map, each a fixed number of people, scattered over the tract
+      // (the same places every time) and coloured in proportion to how its people travel.
+      const m = this.data.modes;
+      const off = this.mode === 'demandWork' ? 3 : 0;
+      let total = 0;
+      for (let i = 0; i < tracts.length; i++) total += m[i * 6 + off] + m[i * 6 + off + 1] + m[i * 6 + off + 2];
+      const per = (this.perDot = Math.max(100, Math.round(total / 12000 / 50) * 50 || 100));
+      const hash = (a: number, b: number) => {
+        let h = Math.imul(a + 0x9e37, 0x85ebca6b) ^ Math.imul(b + 0x51ed, 0xc2b2ae35);
+        h ^= h >>> 15;
+        h = Math.imul(h, 0x2c1b3c6d);
+        h ^= h >>> 12;
+        return (h >>> 0) / 4294967296;
+      };
+      tracts.forEach((t, i) => {
+        const w = m[i * 6 + off], d = m[i * 6 + off + 1], tr = m[i * 6 + off + 2];
+        const sum = w + d + tr;
+        const n = Math.round(sum / per);
+        if (n <= 0) return;
+        // Largest remainder: dots per mode match the shares exactly in total.
+        const want = [w, d, tr].map((v) => (v / sum) * n);
+        const k = want.map(Math.floor);
+        let left = n - k[0] - k[1] - k[2];
+        const order = [0, 1, 2].sort((a, b) => want[b] - k[b] - (want[a] - k[a]));
+        for (const j of order) if (left-- > 0) k[j]++;
+        let idx = 0;
+        const kmLat = 1 / 111_000, kmLon = 1 / (111_000 * Math.cos((t.lat * Math.PI) / 180));
+        for (let mode = 0; mode < 3; mode++)
+          for (let q = 0; q < k[mode]; q++, idx++) {
+            const r = t.radius * 0.9 * Math.sqrt(hash(i, idx * 2));
+            const a = hash(i, idx * 2 + 1) * Math.PI * 2;
+            this.dots.push({ pos: [t.lon + Math.cos(a) * r * kmLon, t.lat + Math.sin(a) * r * kmLat], m: mode });
+          }
+      });
+    }
     const discs: Disc[] = [];
     const gv = this.data.growth ?? null;
     if (this.mode === 'residents' || this.mode === 'jobs') {
@@ -285,6 +353,23 @@ export class Overlays {
         }
       }
       return out;
+    }
+    if ((this.mode === 'demand' || this.mode === 'demandWork') && this.dots.length) {
+      out.push(
+        new ScatterplotLayer<Dot>({
+          id: 'overlay-demand',
+          data: this.dots,
+          getPosition: (d) => d.pos,
+          getRadius: 2.3,
+          radiusUnits: 'pixels',
+          radiusMinPixels: 1.6,
+          getFillColor: (d) => DEMAND_COLORS[d.m].color,
+          stroked: false,
+          pickable: false,
+          parameters: { depthCompare: 'always', depthWriteEnabled: false },
+          updateTriggers: { getFillColor: this.version },
+        }),
+      );
     }
     if (this.mode === 'residents' || this.mode === 'jobs' || this.mode === 'unserved') {
       const ramp = this.mode === 'residents' ? RAMP_COOL : this.mode === 'jobs' ? RAMP_WARM : RAMP_VIOLET;
