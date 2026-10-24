@@ -9,7 +9,10 @@ import { city } from '../../cities';
 import { cap } from '../../construction/describe';
 import { LEVEL_NAMES } from '../../construction/validate';
 import { progress } from '../../construction/blueprint';
-import { fmtClock, fmtCount, fmtMoney } from '../../core/units';
+import { fmtClock, fmtCount, fmtDistance, fmtMoney } from '../../core/units';
+import { STATION } from '../../balance';
+import { SCHOOL_KIND_COLOR } from '../../data/schools';
+import { schoolKindLabel } from '../../map/schoolLayers';
 import type { App } from '../app';
 import { barChart } from '../charts';
 import { bullet, h } from '../dom';
@@ -113,7 +116,7 @@ export function stationPanel(app: App, id: number): Panel {
   const roles = plats.map((x) => quadRole(net, x.id)).filter((r): r is 'local' | 'express' => r === 'local' || r === 'express');
   const platformsText = partner ? (roles.length === 2 ? [...roles].sort((a, b) => (a === 'local' ? -1 : b === 'local' ? 1 : 0)).join(' + ') : 'two') + ` · ${Math.max(s.cars, partner.cars)} cars` : roles.length ? `${s.cars} cars · ${roles[0]} pair only` : `${s.cars} cars`;
   const cost = plats.reduce((t, x) => t + (x.cost || 0), 0);
-  body.append(statusLine ?? '', closedBanner, routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, section('Station'), kv([
+  body.append(statusLine ?? '', closedBanner, routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, schoolsNear(app, s), section('Station'), kv([
     ['Level', cap(LEVEL_NAMES[level])],
     ['Class', trackClassName(cls)],
     [partner ? 'Platforms' : 'Platform', platformsText],
@@ -217,4 +220,38 @@ export function stationPanel(app: App, id: number): Panel {
       app.setStationFlows(null, [], []);
     },
   };
+}
+
+/** Schools within the walking catchment of a station (all kinds, whatever the map filter shows). */
+function schoolsNear(app: App, s: { edge: number; u: number }): HTMLElement {
+  const wrap = h('div');
+  if (!app.schools.index) return wrap;
+  const p = app.game.network.stationPos(s as never);
+  const hits = app.schools.near(p.x, p.y, STATION.catchment, true);
+  wrap.append(section(`Schools within ${fmtDistance(STATION.catchment, true)} walk`));
+  if (!hits.length) {
+    wrap.append(h('div', { class: 'hw-muted', style: 'font-size:12.5px' }, 'None nearby.'));
+    return wrap;
+  }
+  const pupils = hits.reduce((t, x) => t + x.school.p, 0);
+  const sec = hits.reduce((t, x) => t + x.school.s, 0);
+  wrap.append(
+    h('div', { class: 'stat-grid' },
+      statCard('Schools', String(hits.length), undefined, 'within an easy walk'),
+      statCard('Pupils', fmtCount(pupils), undefined, sec ? `${fmtCount(sec)} of secondary age` : 'on the rolls'),
+    ),
+  );
+  const list = h('div', { class: 'list', style: 'margin-top:6px' });
+  for (const { school, d } of hits.slice(0, 6)) {
+    const [r, g, b] = SCHOOL_KIND_COLOR[school.k];
+    list.append(
+      h('div', { class: 'list-item', style: 'cursor:default' },
+        h('span', { style: `width:9px;height:9px;border-radius:50%;background:rgb(${r},${g},${b});flex:none` }),
+        h('span', { class: 'grow' }, school.n, h('div', { class: 'hw-muted', style: 'font-size:11.5px' }, `${schoolKindLabel(school.k)}${school.p ? ` · ${fmtCount(school.p)} pupils` : ''} · ${fmtDistance(d, true)}`)),
+      ),
+    );
+  }
+  if (hits.length > 6) list.append(h('div', { class: 'hw-muted', style: 'font-size:11.5px;padding:4px 2px' }, `and ${hits.length - 6} more`));
+  wrap.append(list);
+  return wrap;
 }

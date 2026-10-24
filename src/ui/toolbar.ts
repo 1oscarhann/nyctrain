@@ -3,6 +3,8 @@
  * shortcuts. Also hosts the tool options panel next to it.
  */
 import { OVERLAY_LABELS, type OverlayMode } from '../map/overlays';
+import { schoolKindLabel } from '../map/schoolLayers';
+import { SCHOOL_KIND_COLOR, SCHOOL_KINDS } from '../data/schools';
 import type { App } from './app';
 import { h, svgIcon } from './dom';
 import { ICONS } from './icons';
@@ -26,6 +28,7 @@ export class Toolbar {
   private viewBtn: HTMLElement;
   private overlayBtn: HTMLElement;
   private overlayMenu: HTMLElement;
+  private schoolsBox!: HTMLElement;
   private alertsBtn: HTMLElement;
   private finBtn: HTMLElement;
   private badge = h('span', { class: 'badge num', style: 'display:none' });
@@ -68,6 +71,8 @@ export class Toolbar {
         ),
       );
     }
+    this.schoolsBox = h('div', { class: 'schools-box' });
+    this.overlayMenu.append(this.schoolsBox);
     this.el = h('div', { id: 'toolbar', class: 'hw-panel' }, ...btns, h('div', { class: 'tool-sep' }), this.viewBtn, this.overlayBtn, timelapse, photo, h('div', { class: 'tool-sep' }), routes, fin, goals, this.alertsBtn, help);
     this.options = h('div', { id: 'tool-options', class: 'hw-panel' });
     app.root.append(this.overlayMenu);
@@ -86,7 +91,11 @@ export class Toolbar {
     this.overlayMenu.style.display = open ? 'flex' : 'none';
     if (open) {
       const r = this.overlayBtn.getBoundingClientRect();
-      this.overlayMenu.style.top = `${r.top}px`;
+      // Open upwards if needed and scroll inside, so the Schools filters never run off the screen.
+      const top = Math.max(8, Math.min(r.top, window.innerHeight - 560));
+      this.overlayMenu.style.top = `${top}px`;
+      this.overlayMenu.style.maxHeight = `${window.innerHeight - top - 12}px`;
+      this.overlayMenu.style.overflowY = 'auto';
     }
     this.update();
   }
@@ -97,6 +106,7 @@ export class Toolbar {
     this.viewBtn.classList.toggle('active', this.app.view.is3D);
     this.overlayBtn.classList.toggle('active', this.app.overlays.mode !== 'none');
     for (const b of this.overlayMenu.querySelectorAll<HTMLElement>('[data-overlay]')) b.classList.toggle('active', b.dataset.overlay === this.app.overlays.mode);
+    this.renderSchools();
     this.updateAlerts();
     const content = this.app.tools.active?.options?.() ?? null;
     this.options.replaceChildren();
@@ -111,5 +121,52 @@ export class Toolbar {
     this.badge.style.display = n > 0 ? '' : 'none';
     this.alertsBtn.classList.toggle('active', this.app.alertsShowing());
     this.finBtn.classList.toggle('active', this.app.game.selection?.kind === 'finance' && this.app.tools.active?.id !== 'route');
+  }
+
+  /** Overlays menu → Schools: on/off and a filter chip per kind (with counts), on top of any overlay. */
+  private renderSchools(): void {
+    const sch = this.app.schools;
+    const counts = sch.counts();
+    this.schoolsBox.replaceChildren();
+    if (!counts.size) return;
+    const total = [...counts.values()].reduce((a, b) => a + b, 0);
+    const kinds = SCHOOL_KINDS.filter((k) => counts.has(k));
+    const redraw = () => {
+      this.app.view.invalidate();
+      this.app.refreshPanel();
+      this.renderSchools();
+    };
+    this.schoolsBox.append(
+      h('div', { class: 'tool-sep', style: 'margin:6px 0' }),
+      h(
+        'label',
+        { class: 'schools-toggle' },
+        h('input', { type: 'checkbox', checked: sch.on, onchange: (e: Event) => { sch.setOn((e.target as HTMLInputElement).checked); redraw(); } }),
+        h('b', null, 'Schools'),
+        h('span', { class: 'hw-muted', style: 'margin-left:auto;font-size:11.5px' }, `${total.toLocaleString()} real schools`),
+      ),
+      ...(sch.on
+        ? [h(
+            'div',
+            { class: 'school-chips' },
+            ...kinds.map((k) => {
+              const [r, g, b] = SCHOOL_KIND_COLOR[k];
+              return h(
+                'button',
+                { class: 'school-chip' + (sch.kinds.has(k) ? ' on' : ''), title: `Show or hide ${schoolKindLabel(k).toLowerCase()} schools`, onclick: () => { sch.toggleKind(k); redraw(); } },
+                h('span', { class: 'dot', style: `background:rgb(${r},${g},${b})` }),
+                schoolKindLabel(k),
+                h('span', { class: 'n' }, (counts.get(k) ?? 0).toLocaleString()),
+              );
+            }),
+            h('div', { class: 'school-chip-actions' },
+              h('button', { class: 'hw-btn ghost small', onclick: () => { sch.setKinds(kinds); redraw(); } }, 'All'),
+              h('button', { class: 'hw-btn ghost small', onclick: () => { sch.setKinds(kinds.filter((k) => k === 'secondary' || k === 'allthrough')); redraw(); } }, 'Secondary only'),
+              h('button', { class: 'hw-btn ghost small', onclick: () => { sch.setKinds(kinds.filter((k) => k === 'primary')); redraw(); } }, 'Primary only'),
+            ),
+            h('div', { class: 'hw-muted', style: 'font-size:11px;line-height:1.35;margin-top:4px;max-width:260px' }, `Dots sized by pupils; names from street level. ${sch.source}.`),
+          )]
+        : []),
+    );
   }
 }

@@ -131,6 +131,26 @@ SIL OFL), line bars instead of round bullets, a London line palette, and map sta
 in the line colour (one-line stations) and white **rings** (interchanges). Deliberately no roundel
 and no Johnston: both belong to TfL. New York keeps the subway look (letter discs, small dots).
 
+## Schools
+
+Every real school on each map, from official data: **Overlays → Schools** turns the layer on (it
+sits on top of any overlay) and filter chips show or hide each kind (primary, secondary,
+all-through, special & alternative, independent, nursery; New York: elementary, middle & high,
+K-8 & K-12). Dots are coloured by kind and sized by pupils; names appear from street level; hover
+for the type, pupils and age range. A station's panel lists the schools within the 800 m walk and
+their pupils. The filter is remembered per browser.
+
+* **England** (London, South East): DfE school census 2025/26, school-level data (Explore Education
+  Statistics: name, type, phase, postcode, pupils by age), placed by postcode with the ONS Postcode
+  Directory. Open Government Licence v3.0.
+* **New York**: NYC DOE 2019–20 School Locations joined to the 2021–22 Demographic Snapshot for
+  enrolment (NYC Open Data).
+* Rebuild with `npm run data:schools` (`scripts/build-schools.ts`; downloads cached in
+  `scripts/.cache/schools/`, the census file is ~2.8 GB). Output: `public/data/<city>/schools.json`.
+
+Schools are on the map and in the panels; pupils' own school journeys are not simulated yet (the
+census has no home-to-school flows).
+
 ## Controls
 
 | Key | Action |

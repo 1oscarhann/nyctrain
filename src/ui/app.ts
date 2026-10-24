@@ -18,6 +18,7 @@ import { yearsWithData } from '../economy/yearReview';
 import { carSaleValue, fleetPlan, sellIdleCars, sellSpareCars } from '../routes/fleet';
 import { checkGoals, emptyGoals, goalTitle, type GoalState } from '../core/goals';
 import { placeHubs } from '../core/hubs';
+import { SchoolLayers } from '../map/schoolLayers';
 import { LandMask } from '../data/landMask';
 import { TractIndex, type LandCollection, type World } from '../data/world';
 import { WorldTerrain } from '../construction/terrain';
@@ -100,6 +101,8 @@ export class App implements AppContext {
   readonly tractIndex: TractIndex;
   readonly network: NetworkLayers;
   readonly stations: StationLayers;
+  /** Real schools (Overlays menu → Schools): loaded in the background, shown when switched on. */
+  readonly schools = new SchoolLayers();
   readonly trains = new TrainLayer();
   readonly elevated: Elevated3D;
   readonly overlays: Overlays;
@@ -216,6 +219,8 @@ export class App implements AppContext {
     // ---- map layers
     this.network = new NetworkLayers(view.map, this.game);
     this.stations = new StationLayers(this.game);
+    this.schools.onChange = () => this.view.invalidate();
+    this.schools.load(new URL(city().dataPath, document.baseURI).href).then(() => { this.toolbar?.update(); this.refreshPanel(); });
     this.elevated = new Elevated3D(view.map);
     this.overlays = new Overlays(world.tracts, fmtDensity);
     this.overlays.districtWord = districtWord;
@@ -252,6 +257,7 @@ export class App implements AppContext {
     view.addLayers('venues', () => this.chaosLayers.venueLayers(this.cinematic.glow));
     view.addLayers('flows', () => this.flowLayers());
     view.addLayers('trains', () => this.trainLayers());
+    view.addLayers('schools', () => this.schools.layers(view.map.getZoom()));
     view.addLayers('stations', () => this.stations.layers(view.map.getZoom(), performance.now(), this.cinematic.glow));
     view.addLayers('route-pattern', () => this.routePatternLayers());
     view.addLayers('venue-labels', () => this.chaosLayers.venueLabelLayers(view.map.getZoom()));

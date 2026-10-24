@@ -10,6 +10,7 @@ import { tractGrowthSince } from '../map/growthMath';
 import type { App } from './app';
 import { capFirst, growthHoverText } from './livingCity';
 import type { Pointer, Tool } from './toolTypes';
+import { schoolTip } from '../map/schoolLayers';
 
 export class SelectTool implements Tool {
   readonly id = 'select' as const;
@@ -57,6 +58,12 @@ export class SelectTool implements Tool {
         app.tip(`<div class="title">${name}</div><div class="hw-muted">${growthHoverText(tractGrowthSince(tract, gv))}</div>`, p.px);
         return;
       }
+    }
+    // Schools layer: the school under the pointer.
+    const school = app.schools.pick(p.x, p.y, app.tol(8));
+    if (school) {
+      app.tip(schoolTip(school), p.px);
+      return;
     }
     app.tip(null);
   }
