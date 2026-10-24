@@ -62,9 +62,9 @@ export class SchoolLayers {
       .then((r) => (r.ok ? (r.json() as Promise<SchoolsFile>) : null))
       .then((f) => {
         if (!f?.schools) return;
-        const all = f.schools.map((s) => {
+        const all = f.schools.map((s, i) => {
           const [x, y] = toLocal(s.lon, s.lat);
-          return { ...s, x, y };
+          return { ...s, x, y, i };
         });
         this.index = new SchoolIndex(all);
         this.source = f.source;

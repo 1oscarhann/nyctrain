@@ -148,8 +148,26 @@ their pupils. The filter is remembered per browser.
 * Rebuild with `npm run data:schools` (`scripts/build-schools.ts`; downloads cached in
   `scripts/.cache/schools/`, the census file is ~2.8 GB). Output: `public/data/<city>/schools.json`.
 
-Schools are on the map and in the panels; pupils' own school journeys are not simulated yet (the
-census has no home-to-school flows).
+### The school run
+
+On school days (term time: England's terms and half terms, New York's school year) every real
+school's secondary-age pupils (11–18; New York grades 6–12, from the census and enrolment data)
+travel to it. The census has no home-to-school flows, so each pupil's home is drawn from nearby
+neighbourhoods (residents · exp(−d / 2.5 km); 4.5 km in the South East). Pupils choose walking, a
+lift or the school bus (one "car or bus" option, no buses are simulated) or your trains, with child
+fares (`SCHOOLS.childFare`: half in England, free in New York) and their own times (at school
+8:10–8:50, home from 15:05). They ride the same trains as commuters, adding morning-peak crowding
+near big schools. A station panel shows how many pupils came by train to the schools around it.
+
+## Park & ride
+
+Stations can have a car park (station panel → Park & ride: 250 / 500 / 1,000 spaces at
+`PARK_RIDE.costPerSpace`, up to 5,000). From home, people can then drive up to 15 km to the station
+(the drive, 4 minutes to park, a £4 / $4 daily fee, fuel and a little hassle), take the train, and
+drive home from it in the evening. Only the home end is driven. Car parks are rationed: where more
+drivers want a station's spaces than it has, the overflow drives the whole way, and the panel shows
+"full: N more wanted a space". Old saves load with no car parks; without car parks the simulation is
+exactly as before.
 
 ## Controls
 

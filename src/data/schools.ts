@@ -62,6 +62,8 @@ export interface School extends SchoolRecord {
   /** Local metres. */
   x: number;
   y: number;
+  /** Position in schools.json (the school run's DayReport.schools.perSchool key). */
+  i: number;
 }
 
 /** Schools by position: a 1 km grid for catchment queries. */

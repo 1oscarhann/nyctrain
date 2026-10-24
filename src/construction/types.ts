@@ -69,6 +69,8 @@ export interface Station {
   cost: number;
   /** Cross-platform partner station id on the other pair of a four-track section (symmetric). */
   pair?: number;
+  /** Park & ride: car park spaces (absent = none). */
+  parking?: number;
 }
 
 export interface NetworkData {

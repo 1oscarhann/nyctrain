@@ -31,6 +31,11 @@ async function init(msg: Extract<ToWorker, { type: 'init' }>) {
   // Before any data is built: the city's balance values, projection origin and currency.
   applyCity(msg.city);
   const world = await fetchWorld(msg.dataBase);
+  // The school run: real schools (optional; a map without the file has no pupils).
+  const schools = await fetch(msg.dataBase + 'schools.json')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((f: { schools?: { lon: number; lat: number; s: number }[] } | null) => f?.schools ?? null)
+    .catch(() => null);
   engine = new Engine(
     world,
     {
@@ -43,6 +48,7 @@ async function init(msg: Extract<ToWorker, { type: 'init' }>) {
       service: msg.service,
       growth: msg.growth ?? null,
       growthPace: msg.growthPace,
+      schools,
     },
     {
       dayEnd: (report) => {

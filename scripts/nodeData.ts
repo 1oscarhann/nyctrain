@@ -22,3 +22,8 @@ export function loadWorldFromDisk(): World {
 export function loadLandFromDisk(): LandCollection {
   return JSON.parse(readFileSync(join(dataDir(), 'land.geojson'), 'utf8')) as LandCollection;
 }
+
+/** The current city's schools (schools.json), for the school run. */
+export function loadSchoolsFromDisk(): { lon: number; lat: number; s: number; n: string; k: string; p: number }[] {
+  return (JSON.parse(readFileSync(join(dataDir(), 'schools.json'), 'utf8')) as { schools: { lon: number; lat: number; s: number; n: string; k: string; p: number }[] }).schools;
+}

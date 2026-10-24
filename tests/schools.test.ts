@@ -53,9 +53,9 @@ describe('schools data', () => {
 describe('school index', () => {
   it('finds schools near a point, nearest first, within the radius', () => {
     applyCity('london');
-    const all = load().schools.map((s) => {
+    const all = load().schools.map((s, i) => {
       const [x, y] = toLocal(s.lon, s.lat);
-      return { ...s, x, y };
+      return { ...s, x, y, i };
     });
     const idx = new SchoolIndex(all);
     // Around Bank: several schools within 1.5 km, sorted by distance, none beyond.

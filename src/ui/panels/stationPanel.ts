@@ -10,7 +10,7 @@ import { cap } from '../../construction/describe';
 import { LEVEL_NAMES } from '../../construction/validate';
 import { progress } from '../../construction/blueprint';
 import { fmtClock, fmtCount, fmtDistance, fmtMoney } from '../../core/units';
-import { STATION } from '../../balance';
+import { PARK_RIDE, STATION } from '../../balance';
 import { SCHOOL_KIND_COLOR } from '../../data/schools';
 import { schoolKindLabel } from '../../map/schoolLayers';
 import type { App } from '../app';
@@ -116,7 +116,7 @@ export function stationPanel(app: App, id: number): Panel {
   const roles = plats.map((x) => quadRole(net, x.id)).filter((r): r is 'local' | 'express' => r === 'local' || r === 'express');
   const platformsText = partner ? (roles.length === 2 ? [...roles].sort((a, b) => (a === 'local' ? -1 : b === 'local' ? 1 : 0)).join(' + ') : 'two') + ` · ${Math.max(s.cars, partner.cars)} cars` : roles.length ? `${s.cars} cars · ${roles[0]} pair only` : `${s.cars} cars`;
   const cost = plats.reduce((t, x) => t + (x.cost || 0), 0);
-  body.append(statusLine ?? '', closedBanner, routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, schoolsNear(app, s), section('Station'), kv([
+  body.append(statusLine ?? '', closedBanner, routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, least.status === 'built' ? parkAndRide(app, s) : '', schoolsNear(app, s), section('Station'), kv([
     ['Level', cap(LEVEL_NAMES[level])],
     ['Class', trackClassName(cls)],
     [partner ? 'Platforms' : 'Platform', platformsText],
@@ -235,11 +235,15 @@ function schoolsNear(app: App, s: { edge: number; u: number }): HTMLElement {
   }
   const pupils = hits.reduce((t, x) => t + x.school.p, 0);
   const sec = hits.reduce((t, x) => t + x.school.s, 0);
+  // The school run yesterday: pupils who came by train to these schools.
+  const per = app.report?.schools?.perSchool;
+  const byTrain = per ? hits.reduce((t, x) => t + (per[x.school.i] ?? 0), 0) : undefined;
   wrap.append(
     h('div', { class: 'stat-grid' },
       statCard('Schools', String(hits.length), undefined, 'within an easy walk'),
       statCard('Pupils', fmtCount(pupils), undefined, sec ? `${fmtCount(sec)} of secondary age` : 'on the rolls'),
     ),
+    byTrain !== undefined ? h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:6px' }, `School run yesterday: ${fmtCount(byTrain)} pupils came to these schools by train.`) : '',
   );
   const list = h('div', { class: 'list', style: 'margin-top:6px' });
   for (const { school, d } of hits.slice(0, 6)) {
@@ -253,5 +257,40 @@ function schoolsNear(app: App, s: { edge: number; u: number }): HTMLElement {
   }
   if (hits.length > 6) list.append(h('div', { class: 'hw-muted', style: 'font-size:11.5px;padding:4px 2px' }, `and ${hits.length - 6} more`));
   wrap.append(list);
+  return wrap;
+}
+
+/** Park & ride: the car park (size, use yesterday, drivers turned away) and buttons to build more. */
+function parkAndRide(app: App, s: Station): HTMLElement {
+  const wrap = h('div');
+  const spaces = s.parking ?? 0;
+  const p = app.report?.parking?.[s.id];
+  wrap.append(section('Park & ride'));
+  if (!spaces) {
+    wrap.append(h('div', { class: 'hw-muted', style: 'font-size:12.5px;line-height:1.45;margin-bottom:6px' }, `No car park: people only walk here (up to about ${fmtDistance(3000, true)}). A car park lets people drive in from up to ${fmtDistance(PARK_RIDE.maxDrive, true)} away, pay ${fmtMoney(PARK_RIDE.fee)} a day and take the train.`));
+  } else {
+    const used = p?.used ?? 0;
+    const full = p?.full ?? 0;
+    const fill = used / spaces;
+    wrap.append(
+      h('div', { class: 'stat-grid' },
+        statCard('Spaces', spaces.toLocaleString(), undefined, 'in the car park'),
+        statCard('Parked yesterday', p ? fmtCount(used) : '—', full > 0 ? 'red' : fill > 0.9 ? 'amber' : undefined, !p ? 'first count after a day of service' : full > 0 ? `full: ${fmtCount(full)} more wanted a space` : `${Math.round(fill * 100)}% full`),
+      ),
+    );
+  }
+  const btns = h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:6px' });
+  for (const n of PARK_RIDE.buildChoices) {
+    if (spaces + n > PARK_RIDE.maxSpaces) continue;
+    btns.append(
+      h('button', { class: 'hw-btn small', onclick: () => {
+        const r = app.game.addParking(s.id, n);
+        if (r.ok) app.toast(`${spaces ? 'Car park extended' : 'Car park built'} at ${s.name}`, `${n.toLocaleString()} spaces · ${fmtMoney(r.cost ?? 0)}`, 'green');
+        else app.toast("Can't build the car park", r.reason, 'red');
+        app.refreshPanel();
+      } }, `${spaces ? 'Add' : 'Build'} ${n.toLocaleString()} spaces · ${fmtMoney(n * PARK_RIDE.costPerSpace)}`),
+    );
+  }
+  wrap.append(btns);
   return wrap;
 }

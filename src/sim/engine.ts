@@ -4,6 +4,7 @@
  */
 import { CHAOS, ECONOMY, GROWTH, TIME, type ChaosLevel, type GrowthPace } from '../balance';
 import { dayIndex, isNewMonth, SECONDS_PER_DAY, timeOfDay } from '../core/calendar';
+import { isSchoolDay } from '../core/schoolTerm';
 import type { World } from '../data/world';
 import { ChaosController } from './chaos';
 import { Commuters, type RegenStats } from './commuters';
@@ -46,6 +47,8 @@ export interface EngineOptions {
   growthPace?: GrowthPace;
   /** Tuning only (scripts/balance.ts months=): close a growth month every N days instead of at calendar month ends. */
   monthEvery?: number;
+  /** The school run: the city's schools (schools.json; null or absent: no pupils). */
+  schools?: { lon: number; lat: number; s: number }[] | null;
 }
 
 /** Living City: starting-city agents given their per-agent placement per sim step ahead of the first growth (≈ 1 ms). */
@@ -95,6 +98,8 @@ export class Engine {
       opts.agentScale,
     );
     this.commuters?.setTrains(() => this.trains.trains);
+    this.commuters?.setSchools(opts.schools ?? null);
+    this.schoolSeed = opts.seed;
     this.stories = this.commuters ? new StoryTracer(this.commuters, this.trains) : null;
     this.chaos = new ChaosController(opts.chaos ?? { level: 'off', seed: CHAOS.defaultSeed }, this.trains, this.commuters, {
       alert: (a) => cb.alert?.(a),
@@ -104,6 +109,7 @@ export class Engine {
   }
 
   private started = false;
+  private schoolSeed = 0;
   /**
    * Schedule today's trips. Deferred to the first step so a loaded network is in place first.
    * After 3 am the day begins now (weather, events, incidents still to come); before it, the
@@ -127,6 +133,8 @@ export class Engine {
     if (choose) c?.dailyModeChoice(now);
     else c?.startDay(now);
     const info = c ? c.injectEvents(events, day * SECONDS_PER_DAY, now, { seed: this.chaos.seed, service: this.chaos.serviceList() }) : [];
+    // The school run (after the events: injectEvents empties the pool first).
+    c?.injectSchools(day, day * SECONDS_PER_DAY, now, this.schoolSeed, isSchoolDay(day));
     this.chaos.setEventInfo(day, events, info, choose ? -Infinity : now);
   }
 

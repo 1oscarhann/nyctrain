@@ -312,7 +312,7 @@ export function compileNetwork(game: Game): CompileResult {
   const stations: CStation[] = builtStations.map((s, i) => {
     stationIndex.set(s.id, i);
     const p = net.stationPos(s);
-    return { id: s.id, x: p.x, y: p.y, name: s.name, group: ic.groupOf.get(s.id) ?? i };
+    return { id: s.id, x: p.x, y: p.y, name: s.name, group: ic.groupOf.get(s.id) ?? i, ...(s.parking ? { parking: s.parking } : {}) };
   });
   // Four-track sections (v2): cross-platform pairs whose platforms are both built. A pair is one
   // station complex for staffing (QUAD.pairStaffing stations). Nothing is added without pairs.

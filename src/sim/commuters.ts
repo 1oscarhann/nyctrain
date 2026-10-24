@@ -3,7 +3,7 @@
  * pathfinding, and an event-driven simulation of every transit trip (walk → platform queue →
  * train with capacity → transfers → walk) whose observed times feed the next day's choice.
  */
-import { CHAOS, COMMUTERS, EVENTS, FARES, GOALS, OPERATIONS, QUAD, TIME } from '../balance';
+import { CHAOS, COMMUTERS, EVENTS, FARES, GOALS, OPERATIONS, PARK_RIDE, QUAD, SCHOOLS, TIME } from '../balance';
 import { distanceFareMult, expectedFare, fareAt, isPeakTime, isPeakTod, tripFare, variesByTime, type FarePolicy } from '../economy/fares';
 import { emptyStats } from './regularity';
 import { SECONDS_PER_DAY, dayIndex } from '../core/calendar';
@@ -83,12 +83,23 @@ export interface GroupPath {
   legs: Int32Array;
   time: number;
   transfers: number;
+  /** Park & ride: the home end is driven (to the first station in the morning, from the last at night). */
+  pnr?: boolean;
+}
+
+/** A station a neighbourhood can reach: generalised seconds, and whether that's by car (park & ride). */
+interface Access {
+  station: number;
+  walk: number;
+  pnr?: boolean;
 }
 
 /** City chaos: event-goers from one origin tract to one event (agents a ≥ A point here via aGroup). */
 interface EventGroup {
-  /** Index into today's events (evEvents). */
+  /** Index into today's events (evEvents); −1 for pupils on the school run. */
   ev: number;
+  /** The school run: index into the city's schools (setSchools); absent for event-goers. */
+  school?: number;
   tract: number;
   /** Home → venue. */
   to: GroupPath;
@@ -501,7 +512,18 @@ export class Commuters implements PassengerHooks {
   private baselineStale = false;
   private closedUntil: Float64Array = new Float64Array(0);
   /** Stations within walking reach of each tract (kept from recomputePaths). */
-  private access: { station: number; walk: number }[][] = [];
+  /** Stations within a walk of each tract (the work end, event-goers, pupils). */
+  private access: Access[][] = [];
+  /** The home end: the walk list plus station car parks within a drive (park & ride). */
+  private accessHome: Access[][] = [];
+  /** Park & ride today: agents who couldn't park (they drive both ways), per-group tries and refusals, yesterday's refused share. */
+  private aParkFull = new Uint8Array(0);
+  private gPnrTry = new Float32Array(0);
+  private gPnrFull = new Float32Array(0);
+  private gParkFull = new Float32Array(0);
+  /** Cars parked today per compiled station, and drivers turned away. */
+  private parkUsed = new Float64Array(0);
+  private parkRefused = new Float64Array(0);
   private baselineCache = new Map<string, number>();
   /** The no-subway baseline under today's weather (equals baseline on a clear day). */
   baselineToday = 0;
@@ -523,7 +545,8 @@ export class Commuters implements PassengerHooks {
     this.setFares(opts.fares);
     this.cb = cb;
     this.rng = new Rng(opts.seed);
-    this.poolCap = Math.ceil(EVENTS.maxPeoplePerDay / this.scale);
+    // The pool holds today's event-goers and, on school days, pupils going to school by train.
+    this.poolCap = Math.ceil((EVENTS.maxPeoplePerDay + SCHOOLS.maxRidersPerDay) / this.scale);
     const factors = opts.factors ?? null;
     // ---- groups (stochastic rounding of counts to agents, seeded), geometry, no-subway shares
     const tbl = buildGroups(world.od, world.tracts.length, this.scale, opts.seed, factors);
@@ -540,6 +563,9 @@ export class Commuters implements PassengerHooks {
     this.todayTimeSum = new Float32Array(G);
     this.todayTimeN = new Uint16Array(G);
     this.todayCrowdSum = new Float32Array(G);
+    this.gPnrTry = new Float32Array(G);
+    this.gPnrFull = new Float32Array(G);
+    this.gParkFull = new Float32Array(G);
     if (opts.modeState && opts.modeState.key === this.key && opts.modeState.shares.length === G * 3) {
       this.shares.set(opts.modeState.shares);
       this.obsTime.set(opts.modeState.obsTime);
@@ -684,6 +710,7 @@ export class Commuters implements PassengerHooks {
       this.aLeft.fill(0);
       this.aPM.fill(0);
       this.aBoarded.fill(0);
+      this.aParkFull.fill(0);
     } else {
       const room = cap + Math.ceil(A * 0.02);
       this.aMode = new Uint8Array(room);
@@ -698,6 +725,7 @@ export class Commuters implements PassengerHooks {
       this.aLeft = new Uint8Array(room);
       this.aPM = new Uint8Array(room);
       this.aBoarded = new Uint8Array(room);
+      this.aParkFull = new Uint8Array(room);
     }
     const aBand = (this.aBand = new Uint8Array(cap));
     const aPeak = (this.aPeak = new Uint8Array(cap));
@@ -874,6 +902,9 @@ export class Commuters implements PassengerHooks {
     this.todayTimeSum = new Float32Array(G);
     this.todayTimeN = new Uint16Array(G);
     this.todayCrowdSum = new Float32Array(G);
+    this.gPnrTry = new Float32Array(G);
+    this.gPnrFull = new Float32Array(G);
+    this.gParkFull = new Float32Array(G);
     this.pathAM = new Array(G).fill(null);
     this.pathPM = new Array(G).fill(null);
     const fresh: number[] = [];
@@ -994,6 +1025,10 @@ export class Commuters implements PassengerHooks {
     }
     this.peakLoad = new Float32Array(P);
     this.peakTrains = new Int32Array(P);
+    if (this.parkUsed.length !== net.stations.length) {
+      this.parkUsed = new Float64Array(net.stations.length);
+      this.parkRefused = new Float64Array(net.stations.length);
+    }
     // Re-queue people waiting on platforms; in-flight trips on vanished routes finish by cab.
     // Two passes: collect every live waiter first (stale queue entries fail the aPlat check),
     // then re-enqueue, so nobody can be queued twice when platform indices shift.
@@ -1060,11 +1095,11 @@ export class Commuters implements PassengerHooks {
       const t0 = Date.now();
       const tracts = this.world.tracts;
       // Stations within walking distance of each tract.
-      const access: { station: number; walk: number }[][] = subset
+      const access: Access[][] = subset
         ? this.access
         : tracts.map((tr) => {
             const reach = COMMUTERS.maxAccessWalk + COMMUTERS.accessRadiusTractShare * tr.radius;
-            const out: { station: number; walk: number }[] = [];
+            const out: Access[] = [];
             net.stations.forEach((s, i) => {
               const d = Math.hypot(s.x - tr.x, s.y - tr.y);
               if (d <= reach) out.push({ station: i, walk: (d * COMMUTERS.walkDetour) / COMMUTERS.walkSpeed });
@@ -1072,24 +1107,53 @@ export class Commuters implements PassengerHooks {
             return out;
           });
       this.access = access;
+      // Park & ride: from home, station car parks within a drive (generalised seconds: the drive, parking, the
+      // fee and fuel at the middle band's value of time, and the hassle). The cheaper way to each station wins.
+      const parks = net.stations.map((s, i) => ({ s, i })).filter(({ s }) => (s.parking ?? 0) > 0);
+      const vot = COMMUTERS.valueOfTime[1] / 3600;
+      const accessHome: Access[][] =
+        subset && this.accessHome.length === tracts.length
+          ? this.accessHome
+          : !parks.length
+            ? access
+            : tracts.map((tr, ti) => {
+                const list = access[ti].slice();
+                for (const { s, i } of parks) {
+                  const d = Math.hypot(s.x - tr.x, s.y - tr.y);
+                  if (d > PARK_RIDE.maxDrive || d < PARK_RIDE.minDrive) continue;
+                  const road = d * COMMUTERS.driveDetour;
+                  const money = PARK_RIDE.fee / 2 + (road / 1000) * COMMUTERS.driveCostPerKm;
+                  const cost = road / COMMUTERS.driveSpeedOther + PARK_RIDE.parkTime + money / vot + PARK_RIDE.constant * 60;
+                  const k = list.findIndex((x) => x.station === i);
+                  if (k < 0) list.push({ station: i, walk: cost, pnr: true });
+                  else if (cost < list[k].walk) list[k] = { station: i, walk: cost, pnr: true };
+                }
+                return list;
+              });
+      this.accessHome = accessHome;
       const byHome = new Map<number, number[]>();
       const byWork = new Map<number, number[]>();
       const n = subset ? only.length : G;
       for (let i = 0; i < n; i++) {
         const g = subset ? only[i] : i;
         const h = this.gHome[g], w = this.gWork[g];
-        if (!access[h].length || !access[w].length) continue;
+        if (!accessHome[h].length || !access[w].length) continue;
         (byHome.get(h) ?? byHome.set(h, []).get(h)!).push(g);
         (byWork.get(w) ?? byWork.set(w, []).get(w)!).push(g);
       }
-      const solve = (origin: number, groups: number[], destOf: (g: number) => number, out: (GroupPath | null)[]) => {
-        graph.run(access[origin]);
+      const solve = (from: Access[], groups: number[], destOf: (g: number) => number, destList: Access[][], out: (GroupPath | null)[]) => {
+        graph.run(from);
         const cache = new Map<number, GroupPath | null>();
         for (const g of groups) {
           const dest = destOf(g);
           let gp = cache.get(dest);
           if (gp === undefined) {
-            gp = this.bestPath(graph, access[dest]);
+            gp = this.bestPath(graph, destList[dest]);
+            // Park & ride in the morning: the first station was reached by car.
+            if (gp && from !== access[this.gWork[g]]) {
+              const first = this.stationById.get(gp.legs[1]);
+              if (from.some((x) => x.station === first && x.pnr)) gp.pnr = true;
+            }
             cache.set(dest, gp);
           }
           out[g] = gp;
@@ -1097,7 +1161,7 @@ export class Commuters implements PassengerHooks {
         return cache;
       };
       graph.setPeriod(1); // AM peak
-      for (const [h, groups] of byHome) solve(h, groups, (g) => this.gWork[g], this.pathAM);
+      for (const [h, groups] of byHome) solve(accessHome[h], groups, (g) => this.gWork[g], access, this.pathAM);
       // The timed-trip goal, door to door from the goal points themselves (not tract centres:
       // London's Heathrow MSOA centre is 2.4 km from the terminals).
       const pointAccess = (p: [number, number]) => {
@@ -1118,7 +1182,7 @@ export class Commuters implements PassengerHooks {
         }
       }
       graph.setPeriod(3); // PM peak
-      for (const [w, groups] of byWork) solve(w, groups, (g) => this.gHome[g], this.pathPM);
+      for (const [w, groups] of byWork) solve(access[w], groups, (g) => this.gHome[g], accessHome, this.pathPM);
       graph.setPeriod(1);
       const ms = Date.now() - t0;
       this.lastPathMs = ms;
@@ -1144,14 +1208,14 @@ export class Commuters implements PassengerHooks {
   }
   lastPathMs = 0;
 
-  private bestPath(graph: TransitGraph, egress: { station: number; walk: number }[]): GroupPath | null {
+  private bestPath(graph: TransitGraph, egress: Access[]): GroupPath | null {
     const net = this.net!;
-    const cands: { cost: number; plat: number; station: number }[] = [];
+    const cands: { cost: number; plat: number; station: number; pnr?: boolean }[] = [];
     for (const e of egress) {
       const a = graph.bestArrival(e.station);
       if (a.plat < 0) continue;
       const c = a.cost + e.walk;
-      if (c < Infinity) cands.push({ cost: c, plat: a.plat, station: e.station });
+      if (c < Infinity) cands.push({ cost: c, plat: a.plat, station: e.station, pnr: e.pnr });
     }
     cands.sort((x, y) => x.cost - y.cost);
     for (const cand of cands) {
@@ -1172,7 +1236,7 @@ export class Commuters implements PassengerHooks {
       // Four-track sections (v2): a transfer across a cross-platform pair counts (and was charged)
       // QUAD.crossPlatformPenaltyFactor of one; without pairs this is legs.length − 1 exactly.
       const transfers = effectiveTransfers(net, legs);
-      return { legs: arr, time: cand.cost - transfers * COMMUTERS.transferPenalty, transfers };
+      return { legs: arr, time: cand.cost - transfers * COMMUTERS.transferPenalty, transfers, ...(cand.pnr ? { pnr: true } : {}) };
     }
     return null;
   }
@@ -1219,7 +1283,8 @@ export class Commuters implements PassengerHooks {
     const sched = (am.time + pm.time) / 2;
     // Observed times include waits and crowding delays; blend toward schedule if stale.
     const time = this.obsTime[g] > 0 ? this.obsTime[g] : sched;
-    const transfers = (am.transfers + pm.transfers) / 2, crowdMinutes = this.obsCrowd[g], fare = this.groupFare(g);
+    // Park & ride: a car park that was full yesterday puts drivers off (as minutes of hassle).
+    const transfers = (am.transfers + pm.transfers) / 2, crowdMinutes = this.obsCrowd[g] + (am.pnr ? this.gParkFull[g] * PARK_RIDE.fullPenalty : 0), fare = this.groupFare(g);
     if (!out) return { time, transfers, crowdMinutes, fare };
     // (Filled in place by loops over every group that only read it: no allocation per group.)
     out.time = time;
@@ -1290,11 +1355,39 @@ export class Commuters implements PassengerHooks {
     // the group's expected fare (no extra RNG draws; with one fare all day the draw is exactly v1's).
     const tilt = variesByTime(this.fares);
     const mult = [1, 1, 1];
+    // Park & ride: car parks are rationed. Where the drivers who'd park at a station outnumber its
+    // spaces, the overflow drives the whole way from the start (counted as turned away).
+    const net = this.net;
+    const pnrStation = new Int32Array(this.G).fill(-1);
+    const pnrRatio = new Float64Array(net?.stations.length ?? 0).fill(1);
+    if (net && net.stations.some((st) => (st.parking ?? 0) > 0)) {
+      const demand = new Float64Array(net.stations.length);
+      for (let g = 0; g < this.G; g++) {
+        const am = this.pathAM[g];
+        if (!am?.pnr || !this.pathPM[g]) continue;
+        const si = this.stationById.get(am.legs[1]);
+        if (si === undefined) continue;
+        pnrStation[g] = si;
+        demand[si] += this.shares[g * 3 + 2] * this.gCount[g];
+      }
+      net.stations.forEach((st, si) => {
+        const cap = (st.parking ?? 0) / this.scale;
+        if (demand[si] > cap) pnrRatio[si] = cap / demand[si];
+      });
+    }
     for (let g = 0; g < this.G; g++) {
       const o = g * 3;
       const hasTransit = this.pathAM[g] && this.pathPM[g];
-      const pw = this.shares[o], pd = this.shares[o + 1];
-      const pt = hasTransit ? this.shares[o + 2] : 0;
+      const pw = this.shares[o];
+      let pd = this.shares[o + 1];
+      let pt = hasTransit ? this.shares[o + 2] : 0;
+      const ps = pnrStation[g];
+      if (ps >= 0 && pnrRatio[ps] < 1) {
+        const lost = pt * (1 - pnrRatio[ps]);
+        pt -= lost;
+        pd += lost;
+        this.parkRefused[ps] += (lost / (pw + pd + pt || 1)) * this.gCount[g];
+      }
       const sum = pw + pd + pt || 1;
       const band = this.gBand[g];
       const tiltG = tilt && pt > 0;
@@ -1361,6 +1454,7 @@ export class Commuters implements PassengerHooks {
       if (s === S_WALK || s === S_WAIT || s === S_RIDE || s === S_EGRESS) stuck++;
       this.aState[a] = S_HOME;
       this.aPlat[a] = -1;
+      this.aParkFull[a] = 0;
     }
     for (const tr of this.trains()) {
       tr.buckets = tr.buckets.map(() => []);
@@ -1400,7 +1494,7 @@ export class Commuters implements PassengerHooks {
             if (a === this.traceA) this.tracer!.add({ k: 'giveup', t: et, station: this.platStationId(this.aPlat[a]), waited: et - this.aWaitStart[a] });
             this.leaveQueue(a);
             this.day.gaveUp++;
-            if (a >= this.A) this.evTally[this.evGroups[this.aGroup[a]].ev].gaveUp += this.scale;
+            if (a >= this.A && this.evGroups[this.aGroup[a]].ev >= 0) this.evTally[this.evGroups[this.aGroup[a]].ev].gaveUp += this.scale;
             this.finishByCab(a, et, 'giveup');
           }
           break;
@@ -1417,8 +1511,8 @@ export class Commuters implements PassengerHooks {
     this.aBoarded[a] = 0;
     this.aLeft[a] = 0;
     if (this.daily) this.daily.crossed[a] = 0;
-    if (!path) {
-      // Lost their transit option (network changed): drive today.
+    if (!path || (pm && a < this.A && this.aParkFull[a])) {
+      // Lost their transit option (network changed), or drove in this morning (car park full): drive.
       const dt = this.driveTime(g, pm);
       if (a === this.traceA) this.tracer!.add({ k: 'drive', t, t1: t + dt, pm });
       this.recordTrip(a, t + dt, false);
@@ -1436,7 +1530,30 @@ export class Commuters implements PassengerHooks {
     }
     const x = pm ? this.aWx[a] : this.aHx[a];
     const y = pm ? this.aWy[a] : this.aHy[a];
-    const walk = (Math.hypot(st.x - x, st.y - y) * COMMUTERS.walkDetour) / (COMMUTERS.walkSpeed * this.wx.walkSpeed);
+    let walk = (Math.hypot(st.x - x, st.y - y) * COMMUTERS.walkDetour) / (COMMUTERS.walkSpeed * this.wx.walkSpeed);
+    if (!pm && a < this.A && path.pnr) {
+      // Park & ride: drive to the station, if there's a space.
+      const si = this.stationById.get(st.id)!;
+      const cap = (st.parking ?? 0) / this.scale;
+      this.gPnrTry[g]++;
+      if (this.parkUsed[si] + 1 > cap + 0.5) {
+        this.parkRefused[si]++;
+        this.gPnrFull[g]++;
+        this.aParkFull[a] = 1;
+        // They drive today: count them with the drivers, not the riders.
+        this.aMode[a] = MODE_DRIVE;
+        this.day.modeCount[MODE_TRANSIT]--;
+        this.day.modeCount[MODE_DRIVE]++;
+        this.day.bandMode[this.aBand[a] * 3 + MODE_TRANSIT]--;
+        this.day.bandMode[this.aBand[a] * 3 + MODE_DRIVE]++;
+        const dt = this.driveTime(g, false);
+        if (a === this.traceA) this.tracer!.add({ k: 'drive', t, t1: t + dt, pm });
+        this.recordTrip(a, t + dt, false);
+        return;
+      }
+      this.parkUsed[si]++;
+      walk = (Math.hypot(st.x - x, st.y - y) * COMMUTERS.driveDetour) / (COMMUTERS.driveSpeedOther * this.wx.driveSpeed) + PARK_RIDE.parkTime;
+    }
     this.aState[a] = S_WALK;
     if (a === this.traceA) this.tracer!.add({ k: 'walk', t, t1: t + walk, why: 'access', from: [x, y], to: [st.x, st.y], station: st.id, pm });
     this.push(t + walk, a, E_PLATFORM);
@@ -1509,7 +1626,10 @@ export class Commuters implements PassengerHooks {
       } else {
         const x = this.aPM[a] ? this.aHx[a] : this.aWx[a];
         const y = this.aPM[a] ? this.aHy[a] : this.aWy[a];
-        const walk = (Math.hypot(station.x - x, station.y - y) * COMMUTERS.walkDetour) / (COMMUTERS.walkSpeed * this.wx.walkSpeed);
+        const byCar = this.aPM[a] === 1 && a < this.A && this.pathPM[this.aGroup[a]]?.pnr === true;
+        const walk = byCar
+          ? (Math.hypot(station.x - x, station.y - y) * COMMUTERS.driveDetour) / (COMMUTERS.driveSpeedOther * this.wx.driveSpeed) + PARK_RIDE.parkTime / 2
+          : (Math.hypot(station.x - x, station.y - y) * COMMUTERS.walkDetour) / (COMMUTERS.walkSpeed * this.wx.walkSpeed);
         this.aState[a] = S_EGRESS;
         if (a === ta) this.tracer!.add({ k: 'walk', t, t1: t + walk, why: 'egress', from: [station.x, station.y], to: [x, y], station: -1, pm: this.aPM[a] === 1 });
         this.push(t + walk, a, E_ARRIVE);
@@ -1571,7 +1691,7 @@ export class Commuters implements PassengerHooks {
       const first = !this.aBoarded[a];
       if (first) {
         const cell = this.aBand[a] * 2 + peak;
-        const f = ft[cell] * (a < this.A ? this.gFareMult[this.aGroup[a]] : 1);
+        const f = ft[cell] * this.fareMultOf(a);
         day.fareRevenue += f;
         day.fareCellTrips[cell]++;
         day.fareCellRevenue[cell] += f;
@@ -1581,7 +1701,7 @@ export class Commuters implements PassengerHooks {
       (train.buckets[k] ??= []).push(a);
       train.load++;
       boarded++;
-      if (a === ta) this.traceBoard(a, train, route, stationIdx, k, t, first ? ft[this.aBand[a] * 2 + peak] * (a < this.A ? this.gFareMult[this.aGroup[a]] : 1) : 0, false);
+      if (a === ta) this.traceBoard(a, train, route, stationIdx, k, t, first ? ft[this.aBand[a] * 2 + peak] * this.fareMultOf(a) : 0, false);
       if (daily && a < this.A && t - this.aWaitStart[a] > daily.waitBest) daily.offerWait(a, t - this.aWaitStart[a], t, net.stations[stationIdx].id, route.id, this.aLeft[a] === 1);
       // Crowding experienced on this ride (load after boarding vs comfortable capacity).
       const ride = dir.schedArrive[k] - dir.schedArrive[stopIdx];
@@ -1658,7 +1778,7 @@ export class Commuters implements PassengerHooks {
           const first = !this.aBoarded[a];
           if (first) {
             const cell = this.aBand[a] * 2 + peak;
-            const f = ft[cell] * (a < this.A ? this.gFareMult[this.aGroup[a]] : 1);
+            const f = ft[cell] * this.fareMultOf(a);
             day.fareRevenue += f;
             day.fareCellTrips[cell]++;
             day.fareCellRevenue[cell] += f;
@@ -1671,7 +1791,7 @@ export class Commuters implements PassengerHooks {
           (train.buckets[k] ??= []).push(a);
           train.load++;
           boarded++;
-          if (a === ta) this.traceBoard(a, train, route, here, k, t, first ? ft[this.aBand[a] * 2 + peak] * (a < this.A ? this.gFareMult[this.aGroup[a]] : 1) : 0, true);
+          if (a === ta) this.traceBoard(a, train, route, here, k, t, first ? ft[this.aBand[a] * 2 + peak] * this.fareMultOf(a) : 0, true);
           if (daily && a < this.A && t - this.aWaitStart[a] > daily.waitBest) daily.offerWait(a, t - this.aWaitStart[a], t, net.stations[here].id, route.id, this.aLeft[a] === 1);
           const ride = dir.schedArrive[k] - dir.schedArrive[stopIdx];
           this.aCrowd[a] += (ride / 60) * COMMUTERS.crowdingWeight * Math.max(0, (train.load * this.scale) / route.capComfort - 1) * this.wx.crowd;
@@ -1882,6 +2002,13 @@ export class Commuters implements PassengerHooks {
     }
     const routeRiders: Record<number, number> = {};
     for (const [rid, n] of d.routeBoard) routeRiders[rid] = n * this.scale;
+    let parking: Record<number, { used: number; full: number }> | undefined;
+    net?.stations.forEach((s, i) => {
+      if (!(s.parking ?? 0) && !this.parkUsed[i]) return;
+      (parking ??= {})[s.id] = { used: this.parkUsed[i] * this.scale, full: this.parkRefused[i] * this.scale };
+    });
+    this.parkUsed.fill(0);
+    this.parkRefused.fill(0);
     const transitCommuters = d.modeCount[MODE_TRANSIT];
     const report: DayReport = {
       day,
@@ -1913,6 +2040,8 @@ export class Commuters implements PassengerHooks {
       // Filled by the engine (train side).
       routeRegularity: {},
       regularity: emptyStats(),
+      ...(parking ? { parking } : {}),
+      ...(this.schoolReport() ? { schools: this.schoolReport() } : {}),
     };
     // Keep yesterday's detail for panels, then reset.
     this.last = {
@@ -1951,6 +2080,13 @@ export class Commuters implements PassengerHooks {
     this.todayTimeSum.fill(0);
     this.todayTimeN.fill(0);
     this.todayCrowdSum.fill(0);
+    // Park & ride: yesterday's share of each group's drivers who found the car park full (fading).
+    for (let g = 0; g < this.G; g++) {
+      const tries = this.gPnrTry[g];
+      this.gParkFull[g] = tries > 0 ? this.gPnrFull[g] / tries : this.gParkFull[g] * 0.5;
+    }
+    this.gPnrTry.fill(0);
+    this.gPnrFull.fill(0);
   }
 
   /** Expected transit riders per group today (agents × transit share). */
@@ -2401,6 +2537,10 @@ export class Commuters implements PassengerHooks {
   /** An event-goer's trip ends: it counts for the event (and a fare-paying trip), never for commuters' choices. */
   private recordEventTrip(a: number, tEnd: number): void {
     const eg = this.evGroups[this.aGroup[a]];
+    if (eg.ev < 0) {
+      this.recordSchoolTrip(a, tEnd, eg);
+      return;
+    }
     const tally = this.evTally[eg.ev];
     const ev = this.evEvents[eg.ev];
     if (this.aBoarded[a]) {
@@ -2418,6 +2558,170 @@ export class Commuters implements PassengerHooks {
       tally.home += this.scale;
       this.aState[a] = S_DONE;
     }
+  }
+
+  // ------------------------------------------------------------------ the school run
+  private schools: { x: number; y: number; s: number }[] = [];
+  private schoolCdf = new Map<number, Float64Array>();
+  private schoolAcc: { version: number; acc: Access[][] } | null = null;
+  /** Today's pupils (real people): by mode as planned, and boardings by train per school (agents). */
+  private schoolDay: { pupils: number; walk: number; lift: number; transit: number; rode: Map<number, number> } | null = null;
+
+  /** The city's schools (index = position in schools.json); only secondary-age pupils travel by train. */
+  setSchools(list: { lon: number; lat: number; s: number }[] | null): void {
+    this.schools = (list ?? []).map((sc) => {
+      const [x, y] = toLocal(sc.lon, sc.lat);
+      return { x, y, s: sc.s };
+    });
+    this.schoolCdf.clear();
+    this.schoolAcc = null;
+  }
+
+  private isPupil(a: number): boolean {
+    return a >= this.A && this.evGroups[this.aGroup[a]]?.ev === -1;
+  }
+
+  /** Fare multiplier for an agent: distance fares for commuters, child fares for pupils. */
+  private fareMultOf(a: number): number {
+    if (a < this.A) return this.gFareMult[this.aGroup[a]];
+    return this.evGroups[this.aGroup[a]]?.ev === -1 ? SCHOOLS.childFare : 1;
+  }
+
+  /**
+   * School days, after the events: each school's secondary-age pupils come from nearby
+   * neighbourhoods (residents · exp(−d / originDecay)) and choose walking, a lift (or the school
+   * bus) or the train; those on the train join today's pool, arriving for the start of school and
+   * leaving at the end of the day. Deterministic per school and day.
+   */
+  injectSchools(day: number, dayStart: number, now: number, seed: number, schoolDay: boolean): void {
+    this.schoolDay = null;
+    if (!schoolDay || !this.schools.length) return;
+    const tracts = this.world.tracts;
+    const graph = this.graph, net = this.net;
+    const scale = this.scale;
+    const wx = this.wx;
+    const zones = cityBalance();
+    const core = new Set(zones.coreRegions);
+    const sd = (this.schoolDay = { pupils: 0, walk: 0, lift: 0, transit: 0, rode: new Map<number, number>() });
+    // Stations within a walk of each school (kept while the network is the same).
+    if (net && (!this.schoolAcc || this.schoolAcc.version !== net.version)) {
+      this.schoolAcc = {
+        version: net.version,
+        acc: this.schools.map((sc) => {
+          const out: Access[] = [];
+          net.stations.forEach((st, i) => {
+            const d = Math.hypot(st.x - sc.x, st.y - sc.y);
+            if (d <= SCHOOLS.access) out.push({ station: i, walk: (d * COMMUTERS.walkDetour) / COMMUTERS.walkSpeed });
+          });
+          return out;
+        }),
+      };
+    }
+    const fareBase = tripFare(this.fares, SCHOOLS.band, 1) * SCHOOLS.childFare;
+    let periodSet = false;
+    this.schools.forEach((sc, si) => {
+      if (sc.s <= 0) return;
+      const n = stochasticRound(new Rng(hashSeed(seed, day, si, 0x5c01)), (sc.s * SCHOOLS.attendance) / scale);
+      if (n <= 0) return;
+      sd.pupils += n * scale;
+      const rng = new Rng(hashSeed(seed, day, si, 0x5c02));
+      let cdf = this.schoolCdf.get(si);
+      if (!cdf) {
+        cdf = originCdf(tracts, sc.x, sc.y, SCHOOLS.originDecay, this.originWeights);
+        this.schoolCdf.set(si, cdf);
+      }
+      const acc = this.schoolAcc?.acc[si] ?? [];
+      const canRide = graph !== null && acc.length > 0;
+      if (canRide) {
+        // One search from the school to everywhere: the trip home (the morning trip is its reverse).
+        graph.setPeriod(2);
+        periodSet = true;
+        graph.run(acc);
+      }
+      const pathCache = new Map<number, GroupPath | null>();
+      const shareCache = new Map<number, number[]>();
+      const groupOf = new Map<number, number>();
+      for (let k = 0; k < n; k++) {
+        const tract = sampleCdf(cdf, rng.next());
+        let path = pathCache.get(tract);
+        if (path === undefined) {
+          path = canRide && this.access[tract]?.length ? this.bestPath(graph, this.access[tract]) : null;
+          pathCache.set(tract, path);
+        }
+        let p = shareCache.get(tract);
+        if (!p) {
+          const geom = venueGeometry(tracts[tract], sc.x, sc.y, core.has(tracts[tract].borough), false);
+          const c = generalisedCosts(geom, SCHOOLS.band, path ? { time: path.time, transfers: path.transfers, crowdMinutes: 2, fare: fareBase } : null, wx);
+          c[1] += SCHOOLS.liftConstant;
+          p = logitShares(c);
+          shareCache.set(tract, p);
+        }
+        const u = rng.next();
+        const mode = u < p[0] ? MODE_WALK : u < p[0] + p[1] ? MODE_DRIVE : MODE_TRANSIT;
+        if (mode !== MODE_TRANSIT || !path || this.evUsed >= this.poolCap) {
+          if (mode === MODE_WALK) sd.walk += scale;
+          else sd.lift += scale;
+          continue;
+        }
+        const a = this.A + this.evUsed++;
+        let gi = groupOf.get(tract);
+        if (gi === undefined) {
+          gi = this.evGroups.length;
+          groupOf.set(tract, gi);
+          this.evGroups.push({ ev: -1, school: si, tract, from: path, to: reverseLegs(path), drive: driveTripTime(venueGeometry(tracts[tract], sc.x, sc.y, core.has(tracts[tract].borough), false), wx) });
+        }
+        this.aGroup[a] = gi;
+        this.aBand[a] = SCHOOLS.band;
+        this.aMode[a] = MODE_TRANSIT;
+        this.aPM[a] = 0;
+        this.aBoarded[a] = 0;
+        this.aLeft[a] = 0;
+        this.aCrowd[a] = 0;
+        this.aPlat[a] = -1;
+        this.aParkFull[a] = 0;
+        const home = tracts[tract];
+        const [hx, hy] = pointInDisc(rng, home.x, home.y, home.radius);
+        this.aHx[a] = hx;
+        this.aHy[a] = hy;
+        this.aWx[a] = sc.x;
+        this.aWy[a] = sc.y;
+        const arrive = dayStart + triangular(rng, SCHOOLS.arrive[0], SCHOOLS.arrive[1]);
+        const depart = arrive - path.time * 1.15;
+        this.aReturn[a] = triangular(rng, SCHOOLS.leave[0], SCHOOLS.leave[1]);
+        this.aDepart[a] = depart - dayStart;
+        sd.transit += scale;
+        if (depart >= now) {
+          this.aState[a] = S_HOME;
+          this.push(depart, a, E_DEPART);
+        } else if (dayStart + this.aReturn[a] >= now) {
+          // Loaded during the school day: they're at school.
+          this.aState[a] = S_WORK;
+          this.push(dayStart + this.aReturn[a], a, E_RETURN);
+        } else this.aState[a] = S_DONE;
+      }
+    });
+    if (periodSet) graph!.setPeriod(1);
+  }
+
+  /** A pupil's trip ends: to school (then home at the end of the day), or home. */
+  private recordSchoolTrip(a: number, tEnd: number, eg: EventGroup): void {
+    if (this.aBoarded[a]) {
+      this.day.transitTrips++;
+      if (!this.aPM[a] && this.schoolDay && eg.school !== undefined) this.schoolDay.rode.set(eg.school, (this.schoolDay.rode.get(eg.school) ?? 0) + 1);
+    }
+    if (!this.aPM[a]) {
+      this.aState[a] = S_WORK;
+      this.push(Math.max(tEnd + 60, this.evDayStart + this.aReturn[a]), a, E_RETURN);
+    } else this.aState[a] = S_DONE;
+  }
+
+  /** Today's school run for the day report (null on days without school). */
+  private schoolReport(): DayReport['schools'] | undefined {
+    const sd = this.schoolDay;
+    if (!sd || !sd.pupils) return undefined;
+    const perSchool: Record<number, number> = {};
+    for (const [si, n] of sd.rode) perSchool[si] = n * this.scale;
+    return { pupils: sd.pupils, byWalk: sd.walk, byLift: sd.lift, byTransit: sd.transit, perSchool };
   }
 
   /** Today's events so far (real people). */
@@ -2570,6 +2874,7 @@ export class Commuters implements PassengerHooks {
     const dur = t - this.aTripStart[a];
     const pm = this.aPM[a] === 1;
     if (a >= this.A) {
+      if (this.evGroups[this.aGroup[a]].ev < 0) return; // pupils aren't in the commuter stories
       if (!pm && dur > d.fanBest) {
         const ev = this.evEvents[this.evGroups[this.aGroup[a]].ev];
         d.offer('fan', a, dur, this.aTripStart[a], t, pm, this.legsOf(a), { late: t > this.evDayStart + ev.start });
@@ -2687,7 +2992,7 @@ export class Commuters implements PassengerHooks {
     const moving = (s: number) => s === S_WALK || s === S_WAIT || s === S_RIDE || s === S_EGRESS;
     if (pick.kind === 'random') {
       const now: number[] = [];
-      for (let a = 0; a < n; a++) if (moving(this.aState[a]) && this.aMode[a] === MODE_TRANSIT) now.push(a);
+      for (let a = 0; a < n; a++) if (moving(this.aState[a]) && this.aMode[a] === MODE_TRANSIT && !this.isPupil(a)) now.push(a);
       if (now.length) return hashPick(now);
       // Nobody is travelling: a transit commuter whose next trip is soonest (ties by the hash).
       const later: number[] = [];
@@ -2707,14 +3012,14 @@ export class Commuters implements PassengerHooks {
         const q = this.queues[p];
         for (let i = this.qHead[p]; i < q.length; i++) {
           const a = q[i];
-          if (this.aState[a] === S_WAIT && this.aPlat[a] === p) waiting.push(a);
+          if (this.aState[a] === S_WAIT && this.aPlat[a] === p && !this.isPupil(a)) waiting.push(a);
         }
       }
     }
     if (waiting.length) return hashPick(waiting);
     const coming: number[] = [];
     for (let a = 0; a < n; a++) {
-      if (this.aState[a] !== S_WALK) continue;
+      if (this.aState[a] !== S_WALK || this.isPupil(a)) continue;
       const o = (a * MAX_LEGS + this.aLeg[a]) * 3;
       if (ids.has(this.aLegs[o + 1])) coming.push(a);
     }

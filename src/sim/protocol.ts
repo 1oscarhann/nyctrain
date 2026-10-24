@@ -21,6 +21,8 @@ export interface CStation {
   pair?: number;
   /** The partner's track runs the same way along the platform as this one's. */
   pairSameDir?: boolean;
+  /** Park & ride: car park spaces (absent = none). */
+  parking?: number;
 }
 
 export interface CElement {
@@ -288,6 +290,10 @@ export interface DayReport {
   routeOvertakes?: Record<number, number>;
   /** Four-track sections (v2), per cross-platform station (key = the lower station id of the pair): people transferring across the platform. */
   crossTransfers?: Record<number, number>;
+  /** Park & ride, per station id with a car park: cars parked and drivers turned away (car park full), real people. */
+  parking?: Record<number, { used: number; full: number }>;
+  /** The school run (school days only): pupils by mode, and by train per school (index into the city's schools.json). */
+  schools?: { pupils: number; byWalk: number; byLift: number; byTransit: number; perSchool: Record<number, number> };
 }
 
 export interface FareBreakdown {

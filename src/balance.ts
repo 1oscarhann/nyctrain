@@ -488,6 +488,51 @@ export const COMMUTERS = {
 };
 
 // ---------------------------------------------------------------------------
+// Park & ride: a station's car park lets people drive from home to the train (home end only).
+export const PARK_RIDE = {
+  /** Furthest straight-line drive from a neighbourhood's centre to a station car park, m. */
+  maxDrive: 15_000,
+  /** Nobody drives to a station closer than this (they walk). */
+  minDrive: 900,
+  /** Parking and walking from the car to the platform (and back to the car), s. */
+  parkTime: 4 * MIN,
+  /** Daily charge per car (city currency), plus driving costs (COMMUTERS.driveCostPerKm). */
+  fee: 4,
+  /** Hassle of a car-plus-train journey, generalised minutes. */
+  constant: 4,
+  /** Building a car park, per space (surface and decked parking averaged). */
+  costPerSpace: 12_000,
+  /** Spaces added by one click in the station panel. */
+  buildChoices: [250, 500, 1000],
+  /** Largest car park at one station. */
+  maxSpaces: 5000,
+  /** Minutes added to mode choice when a group's drivers found the car park full yesterday. */
+  fullPenalty: 25,
+};
+
+// ---------------------------------------------------------------------------
+// The school run: secondary-age pupils (11–18) travel to their real school each school day.
+export const SCHOOLS = {
+  /** Pupils come from nearby: origin weight = residents · exp(−d / originDecay). */
+  originDecay: 2500,
+  /** Share of pupils at school on a given day. */
+  attendance: 0.94,
+  /** Arrival at school (triangular, s of day) and the end of the school day. */
+  arrive: [8 * HOUR + 10 * MIN, 8 * HOUR + 50 * MIN] as [number, number],
+  leave: [15 * HOUR + 5 * MIN, 16 * HOUR + 40 * MIN] as [number, number],
+  /** Stations within this walk of a school serve it. */
+  access: 1500,
+  /** Pupils' fare as a share of the adult fare (London: child fares; New York: free student cards). */
+  childFare: 0.5,
+  /** A lift from a parent (or the school bus) costs this hassle, generalised minutes. */
+  liftConstant: 12,
+  /** At most this many pupils by train in a day (real people; the agent pool). */
+  maxRidersPerDay: 300_000,
+  /** Time spent per minute is valued like the lowest earnings band. */
+  band: 0,
+};
+
+// ---------------------------------------------------------------------------
 // Economy
 export const ECONOMY = {
   startingCash: 6e9,
@@ -1041,6 +1086,8 @@ export interface CityBalance {
   chaos: CityChaos;
   /** Track numbers that differ from TRACK (intertown: wider main-line curves). */
   track?: Partial<Pick<typeof TRACK, 'filletMaxTangent'>>;
+  /** The school run: values that differ from SCHOOLS, and the term calendar ('uk' or 'us'). */
+  schools?: Partial<Pick<typeof SCHOOLS, 'originDecay' | 'childFare'>> & { terms?: 'uk' | 'us' };
   /**
    * Stations every new game starts with, built and free (intertown: the London terminal). Each is
    * a straight stub of track (lon/lat ends) with a platform at `at` metres from the first end.
@@ -1121,6 +1168,8 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
     credit: {},
     goals: {},
     chaos: CHAOS_BY_CITY.nyc,
+    /** Students ride free on student OMNY cards; the school year runs September to late June. */
+    schools: { childFare: 0, terms: 'us' },
     growth: {},
     valueCapture: {},
   },
@@ -1181,6 +1230,7 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
       valueCaptureMonth: 6e6,
     },
     chaos: CHAOS_BY_CITY.london,
+    schools: { childFare: 0.5, terms: 'uk' },
     growth: {
       /**
        * London's 2010s: residents +7.7% (Census 2011 → 2021, ≈ 0.75%/yr) and workforce jobs ≈ +1.6%/yr
@@ -1260,6 +1310,8 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
       valueCaptureMonth: 6e6,
     },
     chaos: CHAOS_BY_CITY.southeast,
+    /** Outside London secondary schools draw from further away (fewer, bigger catchments). */
+    schools: { childFare: 0.5, terms: 'uk', originDecay: 4500 },
     growth: { cityGrowthPerYear: 0.009 },
     valueCapture: {
       /** Homes outside London are cheaper: ≈ £480k per resident commuter across the map. */

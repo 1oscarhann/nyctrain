@@ -467,7 +467,7 @@ export class App implements AppContext {
     const c = compileNetwork(this.game);
     const prev = this.compiled;
     // opsKey: holding, timepoints and short turns reach the worker only through a recompile.
-    const sig = (x: CompileResult | null) => (x ? JSON.stringify(x.net.routes.map((r) => [r.id, r.fleet, r.cars, r.headways, r.dirs[0].length, r.dirs[0].stopS.length, r.color, r.name, r.opsKey])) + x.net.stations.length : '');
+    const sig = (x: CompileResult | null) => (x ? JSON.stringify(x.net.routes.map((r) => [r.id, r.fleet, r.cars, r.headways, r.dirs[0].length, r.dirs[0].stopS.length, r.color, r.name, r.opsKey])) + x.net.stations.length + '|' + x.net.stations.map((s) => s.parking ?? 0).join(',') : '');
     if (prev && sig(prev) === sig(c)) return;
     this.compiled = c;
     this.compiledByVersion.set(c.net.version, c);

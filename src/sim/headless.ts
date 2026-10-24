@@ -407,6 +407,8 @@ export interface EngineRunOptions {
   dayStories?: EngineCallbacks['dayStories'];
   /** After every sim step (scripts that pick stories as the day goes on). */
   onStep?: (engine: Engine) => void;
+  /** The school run: the city's schools (scripts/nodeData loadSchoolsFromDisk; absent: no pupils, as before). */
+  schools?: { lon: number; lat: number; s: number }[] | null;
 }
 
 /**
@@ -427,6 +429,7 @@ export function startEngine(game: Game, opts: EngineRunOptions & { reports?: Day
       growth: opts.growth ?? null,
       growthPace: opts.growthPace ?? game.growthPace,
       monthEvery: opts.monthEvery,
+      schools: opts.schools ?? null,
     },
     {
       dayEnd: (r) => {

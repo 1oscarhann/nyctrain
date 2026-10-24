@@ -2,7 +2,7 @@
  * Game state on the main thread: the network design, routes, money and the clock mirror.
  * The sim worker owns the moving parts (trains, commuters); this owns what the player builds.
  */
-import { CHAOS, ECONOMY, GROWTH, TIME, TRACK, type ChaosLevel, type GrowthPace } from '../balance';
+import { CHAOS, ECONOMY, GROWTH, PARK_RIDE, TIME, TRACK, type ChaosLevel, type GrowthPace } from '../balance';
 import { Network } from '../construction/network';
 import {
   advanceConstruction,
@@ -325,6 +325,23 @@ export class Game {
     this.afterNetworkChange();
     this.events.emit('money', undefined);
     return { ok: true, refund };
+  }
+
+  /** Park & ride: add car park spaces to a built station (paid now, open at once). */
+  addParking(id: number, spaces: number): { ok: boolean; reason?: string; cost?: number } {
+    const s = this.network.stations.get(id);
+    if (!s || s.status !== 'built') return { ok: false, reason: 'Open the station first' };
+    const now = s.parking ?? 0;
+    const add = Math.max(0, Math.min(spaces, PARK_RIDE.maxSpaces - now));
+    if (!add) return { ok: false, reason: `Car parks hold at most ${PARK_RIDE.maxSpaces.toLocaleString()} spaces` };
+    const cost = add * PARK_RIDE.costPerSpace;
+    if (!this.finance.spend(cost, 'construction')) return { ok: false, reason: 'Not enough money — issue a bond' };
+    s.parking = now + add;
+    s.cost += cost;
+    this.network.touch();
+    this.afterNetworkChange();
+    this.events.emit('money', undefined);
+    return { ok: true, cost };
   }
 
   // ------------------------------------------------------------------ time
