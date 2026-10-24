@@ -1,0 +1,9 @@
+// Cloudflare Workers: serve the static Vite build (dist/). No server code: Headway runs in the browser.
+// With this file, `npx wrangler deploy` uploads dist/ as static assets and doesn't try to edit vite.config.ts.
+{
+  "name": "headway",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist"
+  }
+}
