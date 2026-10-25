@@ -14,5 +14,5 @@ export function moneyIn(id: keyof typeof CITIES, v: number): string {
 
 export function saveSummary(m: SaveFile['meta']): string {
   const c = m.city ?? 'nyc';
-  return `${CITIES[c].name} · ${fmtDate(m.day)} · ${m.sandbox ? 'Sandbox' : moneyIn(c, m.cash)}`;
+  return `${m.company ? `${m.company} · ` : ''}${CITIES[c].name} · ${fmtDate(m.day)} · ${m.sandbox ? 'Sandbox' : moneyIn(c, m.cash)}`;
 }

@@ -3,6 +3,7 @@
  */
 import { QUAD, STATION, TRACK, type TrackClass, type TrackLevel } from '../balance';
 import { trackClassName } from '../core/trackNames';
+import { inTunnelZone, tunnelZone, TUNNEL_ZONE_ERROR } from '../core/zones';
 import { fmtDistance } from '../core/units';
 import { curveSpeed, minRadiusOver, otherEnd, projectOnPolyline, sampleAt } from './geometry';
 import { platformLength, type Network } from './network';
@@ -168,6 +169,7 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
   let waterLength = 0;
   let multSum = 0;
   let badWaterLevel: TrackLevel | null = null;
+  let surfaceInZone = false;
   const steps = Math.max(1, Math.ceil(L / TRACK.sampleStep));
   const ds = L / steps;
   let idx = 0;
@@ -181,6 +183,7 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
     const level = s < L / 2 ? na.level : nb.level;
     const h = ha + (hb - ha) * (s / (L || 1));
     const water = terrain.isWater(x, y);
+    if (!surfaceInZone && h > -1 && inTunnelZone(x, y)) surfaceInZone = true;
     let mult = 1;
     if (water) {
       waterLength += ds;
@@ -198,6 +201,7 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
     const what = badWaterLevel === 'elevated' || badWaterLevel === 'deep' ? 'This ramp' : `${cap(LEVEL_NAMES[badWaterLevel])} track`;
     errors.push(`${what} can't cross water — use elevated (bridge) or deep tunnel over the water`);
   }
+  if (surfaceInZone) errors.push(TUNNEL_ZONE_ERROR(tunnelZone()!.name));
   cost *= classMult(e.cls) * quadCostFactor(net, e);
   return {
     ok: errors.length === 0,
@@ -268,6 +272,7 @@ export function stationReport(
   }
   const pos = net.stationPos({ edge: edgeId, u } as never);
   if (terrain.isWater(pos.x, pos.y)) errors.push('Stations must be on land');
+  if ((level === 'elevated' || level === 'at-grade') && inTunnelZone(pos.x, pos.y)) errors.push(TUNNEL_ZONE_ERROR(tunnelZone()!.name));
   // A cross-platform partner is reachable along track through any crossover; it never counts.
   const partner = opts.partner ?? (ignoreStation !== null ? net.stations.get(ignoreStation)?.pair : undefined) ?? null;
   const paired = opts.paired ?? partner !== null;

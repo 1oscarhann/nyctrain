@@ -27,7 +27,7 @@ export function goalsPanel(app: App): Panel {
   const defs = goalDefs();
   const done = defs.filter((g) => app.goals[g.id] !== null).length;
   sh.body.append(h('div', { class: 'hw-muted', style: 'margin-bottom:8px' }, `${done} of ${defs.length} complete. There's no hard win — keep moving more people, faster.`));
-  const list = h('div', { class: 'list' });
+  const list = h('div', { class: 'list goal-grid' });
   const gp = growthProgress(app);
   // The growth view arrives once (it is cached); then the panel redraws with the progress lines.
   if (!app.growthView) app.loadGrowthView().then((v) => v && app.game.selection?.kind === 'goals' && app.refreshPanel());
@@ -56,5 +56,5 @@ export function goalsPanel(app: App): Panel {
     );
   }
   sh.body.append(list);
-  return { el: sh.el, dayEnd: () => app.refreshPanel() };
+  return { el: sh.el, full: true, dayEnd: () => app.refreshPanel() };
 }

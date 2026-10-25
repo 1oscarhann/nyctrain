@@ -10,6 +10,8 @@ export interface Panel {
   destroy?(): void;
   /** State a rebuild of the same panel starts from (the route panel's unapplied edits). */
   carry?(): unknown;
+  /** Full screen (stats and management screens); panels tied to the map stay beside it. */
+  full?: boolean;
 }
 
 export function shell(kicker: string, title: Node | string, onClose: () => void, lead?: Node | null): { el: HTMLElement; body: HTMLElement; titleEl: HTMLElement } {
@@ -57,3 +59,23 @@ export function shareBar(parts: { label: string; value: number; color: string }[
 
 /** Muted grey, teal, orange — validated against the panel surface. */
 export const SHARE_COLORS = { walk: '#8E99A5', drive: '#D8731C', transit: '#00A3B0' };
+
+/**
+ * Full-screen layout: group a column of sections into cards on a grid. Everything before the first
+ * section heading stays full width on top; each section heading starts a card holding what follows.
+ */
+export function cardify(el: HTMLElement): void {
+  const kids = [...el.children] as HTMLElement[];
+  if (!kids.some((k) => k.classList.contains('section'))) return;
+  const hero = h('div', { class: 'fs-hero' });
+  const grid = h('div', { class: 'fs-grid' });
+  let card: HTMLElement | null = null;
+  for (const k of kids) {
+    if (k.classList.contains('section')) {
+      card = h('div', { class: 'fs-card' });
+      grid.append(card);
+    }
+    (card ?? hero).append(k);
+  }
+  el.replaceChildren(...(hero.children.length ? [hero] : []), grid);
+}

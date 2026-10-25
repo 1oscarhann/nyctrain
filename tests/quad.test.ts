@@ -4,7 +4,7 @@
  * splits, deep copies, twins, cross-platform pairs) and costs; plus a quad through central London
  * and under the Thames on London's real land mask.
  */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { QUAD, STATION, type TrackLevel } from '../src/balance';
 import { applyCity } from '../src/cities';
 import { Game } from '../src/core/game';
@@ -798,9 +798,15 @@ describe('cross-platform stations', () => {
 
 // ------------------------------------------------------------------------------------------
 describe('London: a four-track trunk in central London', () => {
-  applyCity('london');
-  const world = loadWorldFromDisk();
-  const land = loadLandFromDisk();
+  // Loaded in beforeAll: a describe body runs at collection time, so applyCity here would put every
+  // test in this file (not just these) in London.
+  let world: ReturnType<typeof loadWorldFromDisk>;
+  let land: ReturnType<typeof loadLandFromDisk>;
+  beforeAll(() => {
+    applyCity('london');
+    world = loadWorldFromDisk();
+    land = loadLandFromDisk();
+  });
   afterAll(() => {
     applyCity('nyc');
     setUnits('metric');

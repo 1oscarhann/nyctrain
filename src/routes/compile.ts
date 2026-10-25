@@ -311,6 +311,9 @@ export function compileNetwork(game: Game): CompileResult {
   const builtStations = [...net.stations.values()].filter((s) => s.status === 'built');
   // Upgraded stations need more staff (in basic stations' worth).
   const tierStaff = builtStations.reduce((a, s) => a + tierInfo(tierOf(s)).staff, 0);
+  // Stations no route serves (an airport's station before a line reaches it) are mothballed: no staff.
+  const served = new Set(game.routes.list().flatMap((r) => r.stops));
+  const idle = builtStations.filter((s) => !served.has(s.id) && !(s.pair !== undefined && served.has(s.pair))).length;
   const ic = computeInterchanges(net, (id) => net.stations.get(id)!.status === 'built');
   const stationIndex = new Map<number, number>();
   const stations: CStation[] = builtStations.map((s, i) => {
@@ -354,7 +357,7 @@ export function compileNetwork(game: Game): CompileResult {
       routes,
       trackCount: trackMap.size,
       lockCount: locks.size,
-      ...(pairs || tierStaff ? { staffedStations: stations.length - pairs * (2 - QUAD.pairStaffing) + tierStaff } : {}),
+      ...(pairs || tierStaff || idle ? { staffedStations: stations.length - idle - pairs * (2 - QUAD.pairStaffing) + tierStaff } : {}),
     },
     routeIndex,
     stationIndex,

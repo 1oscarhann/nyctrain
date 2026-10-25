@@ -32,6 +32,8 @@ export class Toolbar {
   private schoolsBox!: HTMLElement;
   private alertsBtn: HTMLElement;
   private finBtn: HTMLElement;
+  private netBtn!: HTMLElement;
+  private goalsBtn!: HTMLElement;
   private badge = h('span', { class: 'badge num', style: 'display:none' });
 
   constructor(private app: App) {
@@ -51,11 +53,11 @@ export class Toolbar {
     attachTip(timelapse, app.tooltip, 'Timelapse', undefined, 'Replay your network growing, month by month, from the start to now');
     const photo = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-photo', onclick: () => app.cinematic.photo.toggle(true) }, svgIcon(ICONS.camera));
     attachTip(photo, app.tooltip, 'Photo mode', 'P', 'Hide the interface; L letterbox, C caption'); 
-    const routes = h('button', { class: 'hw-btn ghost tool-btn', onclick: () => app.game.select({ kind: 'routes' }) }, svgIcon(ICONS.routes));
-    attachTip(routes, app.tooltip, 'Routes', undefined, 'All routes and their ridership');
+    const routes = (this.netBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-network', onclick: () => app.toggleNetwork() }, svgIcon(ICONS.routes)));
+    attachTip(routes, app.tooltip, 'Routes & stations', 'N', 'Every route and station on one screen: how often trains come, train length and type, station upgrades'); 
     const fin = (this.finBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-finance', onclick: () => app.toggleFinance() }, svgIcon(ICONS.finance)));
     attachTip(fin, app.tooltip, 'Finances', 'M', 'Income, costs, bonds, fares, fleet');
-    const goals = h('button', { class: 'hw-btn ghost tool-btn', onclick: () => app.game.select({ kind: 'goals' }) }, svgIcon(ICONS.goals));
+    const goals = (this.goalsBtn = h('button', { class: 'hw-btn ghost tool-btn', onclick: () => (app.game.selection?.kind === 'goals' ? app.game.select(null) : app.game.select({ kind: 'goals' })) }, svgIcon(ICONS.goals)));
     attachTip(goals, app.tooltip, 'Goals', undefined, 'Milestones to aim for');
     this.alertsBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-alerts', onclick: () => app.toggleAlerts() }, svgIcon(ICONS.alert), this.badge);
     attachTip(this.alertsBtn, app.tooltip, 'Service alerts', 'A', 'Incidents, weather, events and event service');
@@ -122,6 +124,8 @@ export class Toolbar {
     this.badge.style.display = n > 0 ? '' : 'none';
     this.alertsBtn.classList.toggle('active', this.app.alertsShowing());
     this.finBtn.classList.toggle('active', this.app.game.selection?.kind === 'finance' && this.app.tools.active?.id !== 'route');
+    this.netBtn.classList.toggle('active', this.app.game.selection?.kind === 'routes' && this.app.tools.active?.id !== 'route');
+    this.goalsBtn.classList.toggle('active', this.app.game.selection?.kind === 'goals' && this.app.tools.active?.id !== 'route');
   }
 
   /** Overlays menu → Schools: on/off and a filter chip per kind (with counts), on top of any overlay. */

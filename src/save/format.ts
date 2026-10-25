@@ -76,7 +76,7 @@ export interface SaveFile {
   version: number;
   /** Which city this game is in. Saves from before London existed are New York. */
   city: CityId;
-  meta: { name: string; savedAt: string; day: number; time: number; sandbox: boolean; cash: number; riders: number; city?: CityId };
+  meta: { name: string; savedAt: string; day: number; time: number; sandbox: boolean; cash: number; riders: number; city?: CityId; company?: string };
   game: {
     time: number;
     sandbox: boolean;
@@ -94,6 +94,8 @@ export interface SaveFile {
     growthPace: GrowthPace;
     /** Cinematic (v7): the network at each month close (older saves start empty). */
     timelapse: SavedTimelapse;
+    /** Your company: name, logo and start-up grant (absent in older saves). */
+    company?: unknown;
   };
   settings: SaveSettings;
   modeState: SavedModeState | null;

@@ -3,11 +3,13 @@
  * start games. Switching city re-applies the city's balance, origin and currency (cities/index.ts)
  * and reloads its data (cached per city).
  */
-import { CHAOS, ECONOMY, MAP, COMMUTERS, type ChaosLevel, type CityId } from '../balance';
+import { ECONOMY, MAP, COMMUTERS, type ChaosLevel, type CityId } from '../balance';
 import { applyCity, CITIES, CITY_IDS, city, cityBalance } from '../cities';
 import { toLonLat } from '../core/geo';
 import { currency, fmtCount, setUnits } from '../core/units';
 import { fetchLand, fetchWorld, type LandCollection, type World } from '../data/world';
+import { foundCompany } from './founding';
+import type { Company } from '../core/company';
 import { MapView } from '../map/mapView';
 import type { SaveFile } from '../save/format';
 import { importFile, listSlots, readSlot, SLOTS } from '../save/store';
@@ -114,7 +116,7 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
     await showTitle(root, await useCityOr(root, id, back));
   };
 
-  const start = async (sandbox: boolean, save: SaveFile | null, tutorial: boolean, chaos?: ChaosLevel) => {
+  const start = async (sandbox: boolean, save: SaveFile | null, tutorial: boolean, chaos?: ChaosLevel, company?: Omit<Company, 'founded'>) => {
     leave();
     let v = view;
     if (save && save.city !== city().id) {
@@ -128,7 +130,7 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
       v.resetFlat();
     }
     v.map.jumpTo({ center: MAP.startCenter, zoom: MAP.startZoom, bearing: 0 });
-    startGame(root, v, { sandbox: save ? save.game.sandbox : sandbox, save, tutorial, chaos });
+    startGame(root, v, { sandbox: save ? save.game.sandbox : sandbox, save, tutorial, chaos, company });
   };
 
   const btn = (label: string, sub: string | null, onclick: () => void, primary = false) =>
@@ -176,31 +178,12 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
   const overlay = h('div', { style: 'position:absolute;inset:0;display:flex;align-items:center;justify-content:flex-start;padding-left:max(16px,6vw);z-index:90;background:linear-gradient(90deg,rgba(16,20,25,.82),rgba(16,20,25,.25) 60%,rgba(16,20,25,0))' }, card);
   root.append(overlay);
 
-  function chooseTutorial(sandbox: boolean) {
-    let close: () => void = () => {};
-    // City chaos for the new game (remembered); it can be changed in the game at any time.
-    let level = loadChaosLevel();
-    const seg = h('div', { class: 'seg' });
-    const hint = h('div', { class: 'hw-muted', style: 'font-size:12px;margin-top:4px' });
-    const renderLevel = () => {
-      seg.replaceChildren(...CHAOS.levels.map((l) => h('button', { class: l === level ? 'on' : '', onclick: () => { level = l; storeChaosLevel(l); renderLevel(); } }, LEVEL_LABEL[l])));
-      hint.textContent = `${LEVEL_HINT[level]}. Change it any time from the menu or Service alerts (A).`;
-    };
-    renderLevel();
-    close = modal(
-      root,
-      h(
-        'div',
-        null,
-        h('h2', null, sandbox ? 'New sandbox' : 'New game'),
-        h('div', { class: 'section', style: 'margin-top:0' }, 'City chaos: events, disruptions and weather'),
-        seg,
-        hint,
-        h('div', { class: 'section' }, 'Tutorial'),
-        h('div', { class: 'hw-muted', style: 'line-height:1.5' }, 'Want a short walkthrough? It takes you from the jobs map to your first morning rush in eight steps.'),
-        h('div', { class: 'actions' }, h('button', { class: 'hw-btn', onclick: () => { close(); start(sandbox, null, false, level); } }, 'Skip'), h('button', { class: 'hw-btn primary', onclick: () => { close(); start(sandbox, null, true, level); } }, 'Start with tutorial')),
-      ),
-    );
+  async function chooseTutorial(sandbox: boolean) {
+    // Found the company: name, logo, the government's start-up grant, city chaos and the tutorial.
+    const r = await foundCompany(root, { sandbox, chaos: loadChaosLevel(), levelLabels: LEVEL_LABEL, levelHints: LEVEL_HINT });
+    if (!r) return;
+    storeChaosLevel(r.chaos);
+    start(sandbox, null, r.tutorial, r.chaos, r.company);
   }
 
   async function loadDialog() {
@@ -272,7 +255,7 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
   }
 }
 
-function startGame(root: HTMLElement, view: MapView, p: { sandbox: boolean; save: SaveFile | null; tutorial: boolean; chaos?: ChaosLevel }): void {
+function startGame(root: HTMLElement, view: MapView, p: { sandbox: boolean; save: SaveFile | null; tutorial: boolean; chaos?: ChaosLevel; company?: Omit<Company, 'founded'> }): void {
   const settings = loadSettings();
   // Intertown has 6.35M commuters (twice a metro city): at least 1 : 20 keeps the agent count where New York's is at 1 : 10.
   if (city().intertown) settings.agentScale = Math.max(settings.agentScale, 20);
@@ -280,6 +263,7 @@ function startGame(root: HTMLElement, view: MapView, p: { sandbox: boolean; save
     sandbox: p.sandbox,
     save: p.save,
     chaos: p.chaos,
+    company: p.company,
     settings: { ...settings, seed: p.save?.settings.seed ?? settings.seed },
     tutorial: p.tutorial,
     exit: () => {

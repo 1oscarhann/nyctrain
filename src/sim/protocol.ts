@@ -278,6 +278,8 @@ export interface DayReport {
   stationBoardings: Record<number, number>;
   /** Peak crowding yesterday by station id (waiting ÷ comfortable capacity; stations at least a third full). */
   stationPeak?: Record<number, number>;
+  /** Busiest peak-hour segment per route: average load per train ÷ comfortable capacity (absent: no peak service). */
+  routePeakLoad?: Record<number, number>;
   /** Transit door-to-door minutes for the timed-trip goal (GOALS.tripFrom → tripTo), or null. */
   goalTrip: number | null;
   boroughsServed: number[];

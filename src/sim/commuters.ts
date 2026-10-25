@@ -2038,6 +2038,22 @@ export class Commuters implements PassengerHooks {
     }
     const routeRiders: Record<number, number> = {};
     for (const [rid, n] of d.routeBoard) routeRiders[rid] = n * this.scale;
+    // Busiest segment in the 8–9 am peak, per route: average load per train ÷ comfortable capacity.
+    const routePeakLoad: Record<number, number> = {};
+    if (net && this.graph) {
+      net.routes.forEach((r, ri) => {
+        let worst = 0;
+        for (const dd of [0, 1]) {
+          const base = this.graph!.base[ri]?.[dd];
+          if (base === undefined) continue;
+          for (let k = 0; k < r.dirs[dd].stopS.length - 1; k++) {
+            const n = this.peakTrains[base + k];
+            if (n > 0) worst = Math.max(worst, this.peakLoad[base + k] / n / r.capComfort);
+          }
+        }
+        if (worst > 0) routePeakLoad[r.id] = Math.round(worst * 100) / 100;
+      });
+    }
     let parking: Record<number, { used: number; full: number }> | undefined;
     net?.stations.forEach((s, i) => {
       if (!(s.parking ?? 0) && !this.parkUsed[i]) return;
@@ -2067,6 +2083,7 @@ export class Commuters implements PassengerHooks {
       routeLateness: {},
       stationBoardings,
       stationPeak: this.stationPeakReport(),
+      routePeakLoad,
       goalTrip: this.goalTrip,
       boroughsServed: [],
       fares: { trips: Array.from(d.fareCellTrips, (x) => x * this.scale), revenue: Array.from(d.fareCellRevenue, (x) => x * this.scale) },

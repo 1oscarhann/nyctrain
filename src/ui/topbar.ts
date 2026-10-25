@@ -3,6 +3,7 @@
  * ticker (city chaos), daily riders, transit mode share, and average commute compared with the
  * no-subway baseline.
  */
+import { brandMark } from './founding';
 import { TIME } from '../balance';
 import { city } from '../cities';
 import { dayIndex, fmtDate, timeOfDay } from '../core/calendar';
@@ -38,7 +39,17 @@ export class TopBar {
   private weatherKind = '';
   readonly ticker: NewsTicker;
 
+  /** Your company's logo and name (click to rebrand); the game's own mark before you found one. */
+  readonly brand = h('button', { class: 'brand brand-btn', id: 'brand' });
+
+  renderBrand(): void {
+    const c = this.app.game.company;
+    this.brand.replaceChildren(...(c ? [brandMark(c, 26, 14)] : [svgIcon(ICONS.logo), h('span', null, 'Headway')]));
+  }
+
   constructor(private app: App) {
+    this.brand.addEventListener('click', () => app.openCompany());
+    attachTip(this.brand, app.tooltip, 'Your company', undefined, 'Rename it or change the logo');
     const stat = (label: string, value: HTMLElement, sub?: HTMLElement, onclick?: () => void, explain?: string) => {
       const el = h('div', { class: 'tb-stat', style: onclick ? 'cursor:pointer' : '', onclick }, h('span', { class: 'label' }, label), value, sub ?? null);
       if (explain) attachTip(el, app.tooltip, label, undefined, explain);
@@ -79,7 +90,7 @@ export class TopBar {
     this.el = h(
       'div',
       { id: 'topbar', class: 'hw-panel' },
-      h('div', { class: 'brand' }, svgIcon(ICONS.logo), 'Headway'),
+      this.brand,
       h('div', { class: 'tb-sep' }),
       stat('Cash', this.cash, this.cashSub, () => app.game.select({ kind: 'finance' })),
       h('div', { class: 'tb-sep' }),
@@ -99,6 +110,7 @@ export class TopBar {
       sound,
       menu,
     );
+    this.renderBrand();
   }
 
   update(): void {

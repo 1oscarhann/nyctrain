@@ -11,7 +11,9 @@
  */
 import { BONDS, ECONOMY, STOCK_IDS, TRAINS, type StockId } from '../../balance';
 import { city } from '../../cities';
-import { dateOfDay, monthKey, monthLabel, yearOf } from '../../core/calendar';
+import { dateOfDay, fmtDate, monthKey, monthLabel, yearOf } from '../../core/calendar';
+import { GRANTS } from '../../core/company';
+import { brandMark } from '../founding';
 import { fmtFare, fmtMoney } from '../../core/units';
 import { fareSummary } from '../../economy/fares';
 import { annuityMonthly } from '../../economy/finance';
@@ -42,7 +44,7 @@ import {
 } from '../opsMoney';
 import { attachTip } from '../widgets';
 import { valueCaptureHeading, valueCaptureSection } from '../livingCity';
-import { kv, section, shareBar, shell, statCard, type Panel } from './common';
+import { cardify, kv, section, shareBar, shell, statCard, type Panel } from './common';
 
 export type PnlRange = 'day' | 'fortnight' | 'all';
 export type FinanceTab = 'overview' | 'fares' | 'borrowing' | 'fleet';
@@ -88,6 +90,8 @@ export function financePanel(app: App): Panel {
     tip(ratingCard, `Credit rating ${rating} · outlook ${out.word}`, `${scoreLine(preview, f.market)}. Reviewed at each month end. Click for the scorecard.`);
     const rateCard = statCard('New bonds', fmtRate(f.newBondRate()));
     tip(rateCard, 'Rate for a new bond', f.market.fixed ? 'Fixed rate: the bond market is off.' : 'The market’s base rate plus your rating’s spread. Each bond keeps the coupon it was issued at.');
+    const co = game.company;
+    if (co) content.append(h('div', { class: 'fin-company' }, brandMark(co, 34, 18), h('span', { class: 'hw-muted' }, `Founded ${fmtDate(co.founded)}${co.grant > 0 ? ` with a ${fmtMoney(co.grant)} government start-up grant (${GRANTS.find((g) => g.id === co.grantKind)?.name.toLowerCase() ?? 'standard'})` : ''}`)));
     content.append(
       h('div', { class: 'stat-grid' }, statCard('Cash', game.sandbox ? '∞' : fmtMoney(f.cash), f.cash < 0 ? 'red' : undefined), statCard('Debt', fmtMoney(debt)), statCard('Bond room', fmtMoney(f.bondRoom())), statCard('Assets', fmtMoney(f.assetValue)), ratingCard, rateCard),
       muted(`Fares ${fareSummary(game.fares)} · ${f.bonds.length} bond${f.bonds.length === 1 ? '' : 's'}${f.bonds.length ? ` at an average ${fmtRate(f.weightedCoupon())}` : ''}`, 'font-size:11.5px;margin-top:6px'),
@@ -420,11 +424,14 @@ export function financePanel(app: App): Panel {
     else if (app.financeTab === 'borrowing') borrowing();
     else if (app.financeTab === 'fleet') fleet();
     else overview();
+    // Full screen: the sections become cards on a grid.
+    cardify(content);
     if (focusKey) [...sh.el.querySelectorAll<HTMLElement>('[data-focus]')].find((x) => x.dataset.focus === focusKey && !(x as HTMLInputElement).disabled)?.focus({ preventScroll: true });
   };
   render();
   return {
     el: sh.el,
+    full: true,
     dayEnd: () => {
       const top = sh.body.scrollTop;
       render();

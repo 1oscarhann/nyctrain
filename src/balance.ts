@@ -1165,6 +1165,8 @@ export interface CityBalance {
    * a straight stub of track (lon/lat ends) with a platform at `at` metres from the first end.
    */
   hubs?: HubDef[];
+  /** Tunnel-only zone (lon, lat polygon): track and stations inside must be underground. */
+  tunnelZone?: { name: string; poly: LL[] };
   /** Living City (v2): growth numbers that differ from GROWTH (nested sides are replaced whole). */
   growth: Partial<typeof GROWTH>;
   /** Living City (v2): value-capture numbers that differ from VALUE_CAPTURE (money in the city's currency). */
@@ -1246,6 +1248,15 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
     valueCapture: {},
   },
   london: {
+    /** Inner London (about fare zones 1–2): too dense for new surface railway. */
+    tunnelZone: {
+      name: 'Inner London',
+      poly: [
+        [-0.2300, 51.5120], [-0.2250, 51.5300], [-0.1900, 51.5450], [-0.1450, 51.5530], [-0.1000, 51.5560],
+        [-0.0550, 51.5480], [-0.0150, 51.5300], [-0.0020, 51.5100], [-0.0050, 51.4850], [-0.0450, 51.4700],
+        [-0.1000, 51.4600], [-0.1500, 51.4600], [-0.1950, 51.4700], [-0.2250, 51.4900],
+      ],
+    },
     origin: [-0.1276, 51.5073], // Charing Cross, the traditional centre of London
     map: { startCenter: [-0.1, 51.512], startZoom: 12, bounds: [-0.62, 51.2, 0.42, 51.76] },
     titleCamera: { center: [-0.083, 51.5135], zoom: 14.6, bearing: -25 }, // the City's towers

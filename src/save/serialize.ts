@@ -7,6 +7,7 @@ import { Finance } from '../economy/finance';
 import { normalizeFares } from '../economy/fares';
 import type { DayExposure, DayReport, GrowthData, ModeState, ServiceOverride } from '../sim/protocol';
 import { decodeTimelapse } from '../cinematic/timelapse';
+import { sanitizeCompany } from '../core/company';
 import { b64ToF32, b64ToF64, b64ToU16, bytesToB64, f32ToB64, SAVE_VERSION, type SavedGrowth, type SaveFile, type SaveSettings } from './format';
 
 /** Living City state for a save (typed arrays as base64). */
@@ -95,6 +96,7 @@ export function buildSave(
       sandbox: game.sandbox,
       cash: game.finance.cash,
       riders: extra.lastReport?.riders ?? 0,
+      ...(game.company ? { company: game.company.name } : {}),
     },
     game: {
       time: game.time,
@@ -117,6 +119,7 @@ export function buildSave(
       },
       growthPace: game.growthPace,
       timelapse: game.timelapseData(),
+      ...(game.company ? { company: JSON.parse(JSON.stringify(game.company)) } : {}),
     },
     settings: { ...extra.settings },
     modeState: ms ? { key: ms.key, shares: f32ToB64(ms.shares), obsTime: f32ToB64(ms.obsTime), obsCrowd: f32ToB64(ms.obsCrowd) } : null,
@@ -137,6 +140,7 @@ export function applySave(game: Game, save: SaveFile): { goals: GoalState; lastR
   game.chaos = sanitizeChaos(g.chaos, g.time, new Set(game.routes.list().map((r) => r.id)));
   // A malformed timelapse decodes empty (the replay then starts from this load).
   game.timelapse = decodeTimelapse(g.timelapse);
+  game.company = sanitizeCompany(g.company);
   const ms = save.modeState;
   return {
     goals: { ...g.goals },

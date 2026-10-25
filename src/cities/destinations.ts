@@ -6,7 +6,7 @@
  * planes). Universities: main campuses with approximate published student enrolments (rounded; a
  * university's students are counted at its main campus).
  */
-import type { CityId } from '../balance';
+import type { CityId, TrackLevel } from '../balance';
 
 export interface Airport {
   name: string;
@@ -14,6 +14,11 @@ export interface Airport {
   lat: number;
   /** Passengers a day, both directions. */
   perDay: number;
+  /**
+   * The airport's station, built from the start (free, like the Victoria hub): a straight stub of
+   * track from a to b with the platform in the middle. Connect a line to it.
+   */
+  stub?: { a: [number, number]; b: [number, number]; level: TrackLevel; station: string };
 }
 
 export interface Campus {
@@ -23,8 +28,8 @@ export interface Campus {
   students: number;
 }
 
-const HEATHROW: Airport = { name: 'Heathrow Airport', lon: -0.4543, lat: 51.47, perDay: 230_000 };
-const CITY_AIRPORT: Airport = { name: 'London City Airport', lon: 0.0495, lat: 51.5048, perDay: 9_500 };
+const HEATHROW: Airport = { name: 'Heathrow Airport', lon: -0.4543, lat: 51.47, perDay: 230_000, stub: { a: [-0.4585, 51.4712], b: [-0.4465, 51.4714], level: 'deep', station: 'Heathrow Airport' } };
+const CITY_AIRPORT: Airport = { name: 'London City Airport', lon: 0.0495, lat: 51.5048, perDay: 9_500, stub: { a: [0.0425, 51.5034], b: [0.0545, 51.5038], level: 'elevated', station: 'London City Airport' } };
 
 const LONDON_UNIS: Campus[] = [
   { name: 'UCL', lon: -0.134, lat: 51.5246, students: 51_000 },
@@ -46,11 +51,11 @@ const LONDON_UNIS: Campus[] = [
 
 export const AIRPORTS: Record<CityId, Airport[]> = {
   nyc: [
-    { name: 'JFK Airport', lon: -73.7781, lat: 40.6413, perDay: 170_000 },
-    { name: 'LaGuardia Airport', lon: -73.874, lat: 40.7769, perDay: 90_000 },
+    { name: 'JFK Airport', lon: -73.7781, lat: 40.6413, perDay: 170_000, stub: { a: [-73.7855, 40.6455], b: [-73.7765, 40.6423], level: 'elevated', station: 'JFK Airport' } },
+    { name: 'LaGuardia Airport', lon: -73.874, lat: 40.7769, perDay: 90_000, stub: { a: [-73.8800, 40.7738], b: [-73.8700, 40.7752], level: 'elevated', station: 'LaGuardia Airport' } },
   ],
   london: [HEATHROW, CITY_AIRPORT],
-  southeast: [HEATHROW, CITY_AIRPORT, { name: 'Gatwick Airport', lon: -0.1821, lat: 51.1537, perDay: 118_000 }, { name: 'Southampton Airport', lon: -1.3568, lat: 50.9503, perDay: 2_000 }],
+  southeast: [HEATHROW, CITY_AIRPORT, { name: 'Gatwick Airport', lon: -0.1821, lat: 51.1537, perDay: 118_000, stub: { a: [-0.1606, 51.1615], b: [-0.1616, 51.1515], level: 'at-grade', station: 'Gatwick Airport' } }, { name: 'Southampton Airport', lon: -1.3568, lat: 50.9503, perDay: 2_000, stub: { a: [-1.3628, 50.9555], b: [-1.3602, 50.9457], level: 'at-grade', station: 'Southampton Airport Parkway' } }],
 };
 
 export const CAMPUSES: Record<CityId, Campus[]> = {

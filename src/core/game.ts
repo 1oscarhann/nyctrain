@@ -4,6 +4,7 @@
  */
 import { CHAOS, ECONOMY, GROWTH, PARK_RIDE, TIME, TRACK, type ChaosLevel, type GrowthPace } from '../balance';
 import { Network } from '../construction/network';
+import type { Company } from './company';
 import { nextTier, tierCost, tierInfo, tierOf } from '../construction/stationTiers';
 import {
   advanceConstruction,
@@ -66,7 +67,8 @@ export type Selection =
   | { kind: 'tract'; index: number }
   | { kind: 'finance' }
   | { kind: 'goals' }
-  | { kind: 'routes' }
+  /** Routes & stations manager (full screen). */
+  | { kind: 'routes'; tab?: 'routes' | 'stations' }
   /** Service alerts panel, optionally focused on an alert (alert id) or a city event (event id). */
   | { kind: 'alerts'; focus?: number; event?: number };
 
@@ -83,6 +85,8 @@ export class Game {
   /** Living City pace (menu → City growth; saved). The sim applies it at the next month close. */
   growthPace: GrowthPace = GROWTH.defaultPace;
   selection: Selection | null = null;
+  /** Your company (name, logo, start-up grant); null for games from before companies. */
+  company: Company | null = null;
   /** City chaos: level (default Normal for new games), seed and planned event service. */
   chaos: ChaosSettings;
   /**

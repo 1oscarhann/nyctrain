@@ -190,6 +190,33 @@ exactly as before.
 - **Line colours and shapes.** 18–20 colours per city plus a free colour picker, and four bullet
   shapes (disc, square, diamond, line bar).
 
+## Your company
+
+A new game starts by founding your company: name it (🎲 suggests one), build its logo from 12 badge
+shapes, 21 symbols (or your initials), 20 colours plus any colour, four styles and eight
+letterings, and pick the government start-up grant: **Generous** (×1.5, easy), **Standard** or
+**Lean** (×0.6, hard). The grant is your opening balance; the logo and name sit in the top bar and
+on the Finances screen, and the company is saved with the game. Click the name in the top bar to
+rebrand (an older save can found its company there, with no grant).
+
+**Airports start with a station.** Heathrow, London City, Gatwick, Southampton, JFK and LaGuardia
+each have a built, free station on a short stub of track from day one; extend a line to it. A
+station no route serves costs no staff.
+
+**Inner London is tunnels only.** On the London map, roughly fare zones 1–2 (the dashed zone,
+stronger while a building tool is out) refuses at-grade and elevated track and stations: build
+cut-and-cover or deep tunnel there. Outside it, and on the other maps, anything goes.
+
+## Routes & stations screen (N)
+
+Full screen, every route in one table: riders, how full it gets at peak, train type (a dropdown;
+the old cars go to spares), train length (− / +) and how often trains come at peak, midday,
+evening and night (− more often / + less often; night can be switched off). Changes apply at once
+and buy the trains they need; hover a button for the price first. The Stations tab lists every
+station with how full it is now and at its busiest yesterday, its level, a one-click upgrade and a
+car park, with filters (overcrowded, works) and an "Upgrade all overcrowded" button. Finances and
+Goals are full screen too; a station, route or train panel stays beside the map (with a link back).
+
 ## Station upgrades
 
 Each station's platforms hold a comfortable number of people waiting: 12 per metre of platform at
@@ -217,7 +244,8 @@ Upgraded stations cost more to staff and draw a little bigger on the map.
 | Space | Pause / resume |
 | 1 – 4 | Speed 1×, 5×, 20×, 60× (1× = one game minute per second) |
 | ⏩ button | Skip to 6 am |
-| T / S / R / B | Track / Station / Route / Bulldoze tool |
+| L / T / S / R / B | Line / Track / Station / Route / Bulldoze tool |
+| N | Routes & stations screen (toggle): every route's frequency, train length and type, every station's upgrades and car park |
 | V | Flat ⇄ tilted 3D (buildings grow while the camera tilts) |
 | Esc | Back to Select, or cancel the current draft |
 | Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) | Undo / redo (blueprints) |
@@ -228,7 +256,8 @@ Upgraded stations cost more to staff and draw a little bigger on the map.
 | Weather chip / ticker item (top bar) | Opens Service alerts at that item |
 | Incident / venue marker (map) | Tooltip; a click opens Service alerts focused on it |
 | Menu → City chaos | Off / Calm / Normal / Wild (applies from the next 3 am) |
-| M | Finances panel (toggle): Overview, Fares, Borrowing, Fleet |
+| M | Finances screen (toggle): Overview (profit & loss), Fares, Borrowing, Fleet |
+| Company name (top bar) | Rename the company or redesign its logo |
 | G | City growth overlay (toggle): growth since 2030 and the value-capture district; tilted (V), new development |
 | Menu → City growth | Off / Steady / Boom (applies from the next month end; a toast confirms) |
 | H | Holding on / off for the selected route (a toast confirms) |

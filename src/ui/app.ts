@@ -17,11 +17,16 @@ import { dayKpi } from '../economy/finance';
 import { yearsWithData } from '../economy/yearReview';
 import { carSaleValue, fleetPlan, sellIdleCars, sellSpareCars } from '../routes/fleet';
 import { checkGoals, emptyGoals, goalTitle, type GoalState } from '../core/goals';
-import { placeHubs } from '../core/hubs';
+import { placeAirportStations, placeHubs } from '../core/hubs';
+import type { Company } from '../core/company';
 import { LineTool } from '../construction/lineTool';
 import { SchoolLayers } from '../map/schoolLayers';
 import { DestinationLayers } from '../map/destinationLayers';
+import { zoneLayers } from '../map/zoneLayers';
+import { tunnelZone } from '../core/zones';
 import { StationAudio } from './stationAudio';
+import { foundCompany } from './founding';
+import { randomLogo, suggestName } from './logo';
 import { nextTier } from '../construction/stationTiers';
 import { LandMask } from '../data/landMask';
 import { TractIndex, type LandCollection, type World } from '../data/world';
@@ -62,8 +67,9 @@ import { SelectTool } from './selectTool';
 import { Busy, confirmDialog, Legend, modal, Toasts, Tooltip } from './widgets';
 import type { Panel } from './panels/common';
 import { stationPanel } from './panels/stationPanel';
-import { routeEditor, routePanel, routesList } from './panels/routePanel';
+import { routeEditor, routePanel } from './panels/routePanel';
 import { edgePanel, tractPanel, trainPanel } from './panels/inspectPanels';
+import { networkPanel } from './panels/networkPanel';
 import { financePanel, type FinanceTab, type PnlRange } from './panels/financePanel';
 import { goalsPanel } from './panels/goalsPanel';
 import { alertsPanel } from './panels/alertsPanel';
@@ -80,6 +86,8 @@ export interface AppOptions {
   save: SaveFile | null;
   /** City chaos level for a new game (default CHAOS.defaultLevel; a save keeps its own). */
   chaos?: ChaosLevel;
+  /** The company founded on the title screen (a new game). */
+  company?: Omit<Company, 'founded'>;
   settings: SaveSettings;
   tutorial: boolean;
   /** Return to the title screen. */
@@ -215,6 +223,13 @@ export class App implements AppContext {
       if (opts.chaos) this.game.chaos.level = this.game.chaos.levelToday = opts.chaos;
       // Intertown: the London terminal (Victoria) is there from day one.
       placeHubs(this.game);
+      // Airports: their stations are built from the start, waiting for a line.
+      placeAirportStations(this.game);
+      // Your company, and the government's start-up grant as the opening balance.
+      if (opts.company) {
+        this.game.company = { ...opts.company, founded: this.game.day };
+        if (!opts.sandbox && opts.company.grant > 0) this.game.finance.cash = opts.company.grant;
+      }
     }
     this.feed = new AlertFeed(this.game);
 
@@ -259,6 +274,10 @@ export class App implements AppContext {
     this.tools.onChange = (id) => {
       this.toolbar.update();
       if (id !== 'route' && this.panel && this.game.selection === null) this.showPanel(null);
+      // A building tool needs the map: a full-screen screen steps aside.
+      if (id !== 'select' && this.panel?.full) this.game.select(null);
+      // The tunnel-only zone shows stronger while building.
+      this.view.invalidate();
     };
 
     // ---- deck.gl layers, bottom to top
@@ -269,6 +288,7 @@ export class App implements AppContext {
     view.addLayers('flows', () => this.flowLayers());
     view.addLayers('trains', () => this.trainLayers());
     view.addLayers('schools', () => this.schools.layers(view.map.getZoom()));
+    view.addLayers('tunnel-zone', () => zoneLayers(['track', 'line', 'station'].includes(this.tools.active?.id ?? ''), this.cinematic.prefs.dayNight === 'light'));
     view.addLayers('destinations', () => this.destinations.layers(view.map.getZoom(), this.cinematic.prefs.dayNight === 'light'));
     view.addLayers('stations', () => this.stations.layers(view.map.getZoom(), performance.now(), this.cinematic.glow));
     view.addLayers('route-pattern', () => this.routePatternLayers());
@@ -345,6 +365,11 @@ export class App implements AppContext {
     );
     if (!this.tutorialDone) setTimeout(() => this.startTutorial(), 600);
     // A save from before city chaos: say once what's new.
+    if (!opts.save && this.game.company) {
+      const c = this.game.company;
+      const airports = [...this.game.network.stations.values()].filter((st) => /Airport/.test(st.name)).length;
+      setTimeout(() => this.toasts.show(`${c.name} is open for business`, `${c.grant > 0 ? `The government's start-up grant of ${fmtMoney(c.grant)} is in the bank. ` : ''}${airports ? `${airports} airport station${airports > 1 ? 's are' : ' is'} built and waiting for a line. ` : ''}${tunnelZone() ? `${tunnelZone()!.name} is tunnels only.` : ''}`, 'green', 11000), 1200);
+    }
     if (opts.save?.migratedFrom !== undefined && opts.save.migratedFrom < 3) {
       setTimeout(() => this.toasts.show('New: city events, disruptions and weather', 'Change the chaos level in Service alerts (A).', 'green', 9000, () => this.openAlerts()), 1500);
     }
@@ -732,9 +757,9 @@ export class App implements AppContext {
     const carry = this.nextPanelKey === this.panelKey ? this.panel?.carry?.() : undefined;
     switch (sel.kind) {
       case 'station':
-        return this.showPanel(stationPanel(this, sel.id));
+        return this.showPanel(this.withBack(stationPanel(this, sel.id), 'stations'));
       case 'route':
-        return this.showPanel(routePanel(this, sel.id, carry));
+        return this.showPanel(this.withBack(routePanel(this, sel.id, carry), 'routes'));
       case 'train':
         return this.showPanel(trainPanel(this, sel.id));
       case 'tract':
@@ -746,10 +771,17 @@ export class App implements AppContext {
       case 'goals':
         return this.showPanel(goalsPanel(this));
       case 'routes':
-        return this.showPanel(routesList(this));
+        return this.showPanel(networkPanel(this, sel.tab));
       case 'alerts':
         return this.showPanel(alertsPanel(this, sel.focus, sel.event));
     }
+  }
+
+  /** A link back to the Routes & stations screen at the top of a route or station panel. */
+  private withBack(p: Panel, tab: 'routes' | 'stations'): Panel {
+    const body = p.el.querySelector('.side-body');
+    body?.prepend(h('button', { class: 'hw-btn ghost small back-link', onclick: () => this.game.select({ kind: 'routes', tab }) }, tab === 'routes' ? '← All routes' : '← All stations'));
+    return p;
   }
 
   private nextPanelKey = '';
@@ -778,6 +810,8 @@ export class App implements AppContext {
       if (body) body.scrollTop = keep;
     }
     this.side.classList.toggle('open', !!p);
+    this.side.classList.toggle('full', !!p?.full);
+    document.body.classList.toggle('fs-open', !!p?.full);
     this.view.invalidate();
   }
 
@@ -1091,6 +1125,22 @@ export class App implements AppContext {
   /** Service alerts is on screen (the route tool takes the side panel while it is active). */
   alertsShowing(): boolean {
     return this.game.selection?.kind === 'alerts' && this.tools.active?.id !== 'route';
+  }
+
+  /** Rebrand the company (or found one, for a game from before companies). */
+  async openCompany(): Promise<void> {
+    const cur = this.game.company;
+    const r = await foundCompany(this.root, { sandbox: this.game.sandbox, edit: cur ?? { name: suggestName(city().name), logo: randomLogo(), grantKind: 'standard', grant: 0, founded: this.game.day } });
+    if (!r) return;
+    this.game.company = { ...r.company, grantKind: cur?.grantKind ?? 'standard', grant: cur?.grant ?? 0, founded: cur?.founded ?? this.game.day };
+    this.topbar.renderBrand();
+    this.toast(cur ? 'Rebranded' : 'Company founded', this.game.company.name, 'green');
+  }
+
+  /** Routes & stations manager (N). */
+  toggleNetwork(tab?: 'routes' | 'stations'): void {
+    if (this.game.selection?.kind === 'routes' && (!tab || this.game.selection.tab === tab)) this.game.select(null);
+    else this.game.select({ kind: 'routes', tab: tab ?? 'routes' });
   }
 
   toggleAlerts(): void {
@@ -1439,6 +1489,10 @@ export class App implements AppContext {
       case 'm':
       case 'M':
         this.toggleFinance();
+        break;
+      case 'n':
+      case 'N':
+        this.toggleNetwork();
         break;
       case 'g':
       case 'G':
