@@ -227,6 +227,50 @@ export const STATION = {
 };
 
 // ---------------------------------------------------------------------------
+// Station upgrades: how many people a station's platforms hold comfortably, and five levels of
+// rebuild that multiply it (and speed boarding and changes). Tier 0 is the station as built.
+export interface StationTier {
+  name: string;
+  /** One line on what the works are. */
+  blurb: string;
+  /** Comfortable waiting capacity, × the basic station's. */
+  capacity: number;
+  /** Boarding/alighting time per passenger, × the basic station's (dwell). */
+  boarding: number;
+  /** Seconds off every change of trains here. */
+  transferSave: number;
+  /** Extra staffing, in basic stations' worth per day. */
+  staff: number;
+  /** Cost, × the station's own build cost by level (STATION.costByLevel). */
+  costMult: number;
+  /** Works, in days (instant in Sandbox). */
+  days: number;
+}
+
+export const STATION_TIERS: StationTier[] = [
+  { name: 'Basic station', blurb: 'Narrow platforms, one entrance, stairs', capacity: 1, boarding: 1, transferSave: 0, staff: 0, costMult: 0, days: 0 },
+  { name: 'Wider platforms', blurb: 'Platforms widened, a second staircase, more gates', capacity: 1.8, boarding: 0.88, transferSave: 10, staff: 0.2, costMult: 0.35, days: 20 },
+  { name: 'Entrances & escalators', blurb: 'New entrances on both sides of the street, escalator banks', capacity: 2.8, boarding: 0.78, transferSave: 20, staff: 0.45, costMult: 0.7, days: 40 },
+  { name: 'New concourse', blurb: 'Big ticket hall, platform screen doors, step-free lifts', capacity: 4.2, boarding: 0.66, transferSave: 30, staff: 0.75, costMult: 1.2, days: 60 },
+  { name: 'Grand interchange', blurb: 'Rebuilt as a hub: extra platform faces, wide passages, shops', capacity: 6.5, boarding: 0.55, transferSave: 45, staff: 1.2, costMult: 2, days: 90 },
+];
+
+export const STATION_CROWD = {
+  /** Basic station: comfortable waiting people per metre of platform (both directions together). */
+  peoplePerMetre: 12,
+  /** While works are on, the platforms hold this share of their capacity. */
+  worksCapacity: 0.85,
+  /** Discomfort (minutes of generalised cost) per minute waited, per 100% over capacity. */
+  overWeight: 1.2,
+  /** Overfill is counted up to this multiple of capacity. */
+  maxOver: 3,
+  /** Dwell grows by this share per 100% over capacity (crowded platforms board slowly). */
+  dwellPerOver: 0.4,
+  /** Yesterday's peak crowding above this nudges you to upgrade (once a day, the worst station). */
+  warnAt: 1.25,
+};
+
+// ---------------------------------------------------------------------------
 // Four-track trunks and express service (v2, docs/v2/express-quad.md §9). Shared by every city:
 // construction costs, levels and the water rule come from TRACK and STATION as for any track.
 export const QUAD = {

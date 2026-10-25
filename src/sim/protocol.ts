@@ -23,6 +23,10 @@ export interface CStation {
   pairSameDir?: boolean;
   /** Park & ride: car park spaces (absent = none). */
   parking?: number;
+  /** Upgrade tier in force (absent = 0). */
+  tier?: number;
+  /** Comfortable waiting capacity, people (platform length × tier; less during works). */
+  capacity?: number;
 }
 
 export interface CElement {
@@ -272,6 +276,8 @@ export interface DayReport {
   routeLateness: Record<number, number>;
   /** Per station id: daily boardings. */
   stationBoardings: Record<number, number>;
+  /** Peak crowding yesterday by station id (waiting ÷ comfortable capacity; stations at least a third full). */
+  stationPeak?: Record<number, number>;
   /** Transit door-to-door minutes for the timed-trip goal (GOALS.tripFrom → tripTo), or null. */
   goalTrip: number | null;
   boroughsServed: number[];

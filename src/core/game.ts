@@ -4,6 +4,7 @@
  */
 import { CHAOS, ECONOMY, GROWTH, PARK_RIDE, TIME, TRACK, type ChaosLevel, type GrowthPace } from '../balance';
 import { Network } from '../construction/network';
+import { nextTier, tierCost, tierInfo, tierOf } from '../construction/stationTiers';
 import {
   advanceConstruction,
   BlueprintHistory,
@@ -17,7 +18,7 @@ import { marketSeedFrom } from '../economy/credit';
 import { defaultFares, flatFares, normalizeFares, type FarePolicy } from '../economy/fares';
 import type { World } from '../data/world';
 import { Emitter } from './emitter';
-import { dayIndex } from './calendar';
+import { dayIndex, SECONDS_PER_DAY } from './calendar';
 import { RouteSet } from '../routes/routeSet';
 import type { ChaosInit, DayExposure, ServiceOverride } from '../sim/protocol';
 import { emptyTimelapse, encodeTimelapse, recordFrame, type SavedTimelapse, type Timelapse, type TLFrame } from '../cinematic/timelapse';
@@ -344,6 +345,47 @@ export class Game {
     return { ok: true, cost };
   }
 
+  /**
+   * Rebuild a station to its next tier (balance.ts STATION_TIERS): pay now, works take days (instant
+   * in Sandbox). During works the platforms hold a little less.
+   */
+  upgradeStation(id: number): { ok: boolean; reason?: string; cost?: number } {
+    const s = this.network.stations.get(id);
+    if (!s || s.status !== 'built') return { ok: false, reason: 'Open the station first' };
+    if (s.tierTo !== undefined) return { ok: false, reason: 'Works are already under way here' };
+    const t = nextTier(s);
+    if (t === null) return { ok: false, reason: 'Already a grand interchange: the top level' };
+    const cost = tierCost(this.network, s, t);
+    if (!this.finance.spend(cost, 'construction')) return { ok: false, reason: 'Not enough money — issue a bond' };
+    s.cost += cost;
+    if (this.sandbox) s.tier = t;
+    else {
+      s.tierTo = t;
+      s.tierStart = this.time;
+      s.tierEnd = this.time + tierInfo(t).days * SECONDS_PER_DAY;
+    }
+    this.network.touch();
+    this.afterNetworkChange();
+    this.events.emit('money', undefined);
+    return { ok: true, cost };
+  }
+
+  /** Station works that finish by t: the new tier comes into force. */
+  private finishStationWorks(t: number): string[] {
+    const done: string[] = [];
+    for (const s of this.network.stations.values()) {
+      if (s.tierTo !== undefined && s.tierEnd !== undefined && t >= s.tierEnd) {
+        s.tier = s.tierTo;
+        delete s.tierTo;
+        delete s.tierStart;
+        delete s.tierEnd;
+        done.push(`${s.name}: ${tierInfo(tierOf(s)).name}`);
+      }
+    }
+    if (done.length) this.network.touch();
+    return done;
+  }
+
   // ------------------------------------------------------------------ time
   /** Called with the sim clock; finishes construction jobs. */
   setTime(t: number): void {
@@ -351,6 +393,11 @@ export class Game {
     if (advanceConstruction(this.network, t)) {
       this.afterNetworkChange();
       this.events.emit('toast', { title: 'Construction complete', body: 'New track or stations are open.', tone: 'green' });
+    }
+    const works = this.finishStationWorks(t);
+    if (works.length) {
+      this.afterNetworkChange();
+      this.events.emit('toast', { title: 'Station upgrade finished', body: works.join(' · '), tone: 'green' });
     }
     this.events.emit('time', t);
   }

@@ -71,6 +71,12 @@ export interface Station {
   pair?: number;
   /** Park & ride: car park spaces (absent = none). */
   parking?: number;
+  /** Upgrade tier in force (STATION_TIERS; absent = 0, the basic station). */
+  tier?: number;
+  /** Works under way to this tier (absent = none), with their start and end times. */
+  tierTo?: number;
+  tierStart?: number;
+  tierEnd?: number;
 }
 
 export interface NetworkData {

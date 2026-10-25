@@ -3,6 +3,7 @@
  * operational routes with paths, speed limits, directed track elements, junction merge locks
  * and timetables.
  */
+import { stationCapacity, tierInfo, tierOf } from '../construction/stationTiers';
 import { OPERATIONS, QUAD, TRACK, TRAINS, type TrackLevel } from '../balance';
 import type { Game } from '../core/game';
 import { curveSpeed, otherEnd } from '../construction/geometry';
@@ -308,12 +309,15 @@ function compileRoute(
 export function compileNetwork(game: Game): CompileResult {
   const net = game.network;
   const builtStations = [...net.stations.values()].filter((s) => s.status === 'built');
+  // Upgraded stations need more staff (in basic stations' worth).
+  const tierStaff = builtStations.reduce((a, s) => a + tierInfo(tierOf(s)).staff, 0);
   const ic = computeInterchanges(net, (id) => net.stations.get(id)!.status === 'built');
   const stationIndex = new Map<number, number>();
   const stations: CStation[] = builtStations.map((s, i) => {
     stationIndex.set(s.id, i);
     const p = net.stationPos(s);
-    return { id: s.id, x: p.x, y: p.y, name: s.name, group: ic.groupOf.get(s.id) ?? i, ...(s.parking ? { parking: s.parking } : {}) };
+    const tier = tierOf(s);
+    return { id: s.id, x: p.x, y: p.y, name: s.name, group: ic.groupOf.get(s.id) ?? i, ...(s.parking ? { parking: s.parking } : {}), ...(tier ? { tier } : {}), capacity: stationCapacity(net, s) };
   });
   // Four-track sections (v2): cross-platform pairs whose platforms are both built. A pair is one
   // station complex for staffing (QUAD.pairStaffing stations). Nothing is added without pairs.
@@ -350,7 +354,7 @@ export function compileNetwork(game: Game): CompileResult {
       routes,
       trackCount: trackMap.size,
       lockCount: locks.size,
-      ...(pairs ? { staffedStations: stations.length - pairs * (2 - QUAD.pairStaffing) } : {}),
+      ...(pairs || tierStaff ? { staffedStations: stations.length - pairs * (2 - QUAD.pairStaffing) + tierStaff } : {}),
     },
     routeIndex,
     stationIndex,

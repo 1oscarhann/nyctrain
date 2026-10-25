@@ -3,7 +3,7 @@
  * pathfinding, and an event-driven simulation of every transit trip (walk → platform queue →
  * train with capacity → transfers → walk) whose observed times feed the next day's choice.
  */
-import { CHAOS, COMMUTERS, EVENTS, FARES, GOALS, OPERATIONS, PARK_RIDE, QUAD, SCHOOLS, SPECIAL, TIME } from '../balance';
+import { STATION_CROWD, STATION_TIERS, CHAOS, COMMUTERS, EVENTS, FARES, GOALS, OPERATIONS, PARK_RIDE, QUAD, SCHOOLS, SPECIAL, TIME } from '../balance';
 import { distanceFareMult, expectedFare, fareAt, isPeakTime, isPeakTod, tripFare, variesByTime, type FarePolicy } from '../economy/fares';
 import { emptyStats } from './regularity';
 import { SECONDS_PER_DAY, dayIndex } from '../core/calendar';
@@ -494,6 +494,8 @@ export class Commuters implements PassengerHooks {
     netVersion: number;
   } = { report: null, stationHourly: new Float32Array(0), stationLeft: new Float32Array(0), peakLoad: new Float32Array(0), peakTrains: new Int32Array(0), netVersion: -1 };
   private stationLeft = new Float32Array(0);
+  /** Today's peak crowding per compiled station (waiting ÷ comfortable capacity). */
+  private stationPeak = new Float32Array(0);
   unserved = new Float32Array(0);
   goalTrip: number | null = null;
   // ---- city chaos
@@ -1023,6 +1025,7 @@ export class Commuters implements PassengerHooks {
     if (this.stationHourly.length !== net.stations.length * 24) {
       this.stationHourly = new Float32Array(net.stations.length * 24);
       this.stationLeft = new Float32Array(net.stations.length);
+      this.stationPeak = new Float32Array(net.stations.length);
     }
     this.peakLoad = new Float32Array(P);
     this.peakTrains = new Int32Array(P);
@@ -1594,7 +1597,7 @@ export class Commuters implements PassengerHooks {
   }
 
   /** Train arrives: riders for this stop get off, then the queue boards up to crush capacity. */
-  arrive(train: Train, route: CRoute, stopIdx: number, t: number): { alight: number; board: number } {
+  arrive(train: Train, route: CRoute, stopIdx: number, t: number): { alight: number; board: number; over?: number } {
     if (!this.graph) return { alight: 0, board: 0 };
     const net = this.net!;
     const dir = route.dirs[train.dir];
@@ -1620,7 +1623,7 @@ export class Commuters implements PassengerHooks {
           const key = Math.min(station.id, nextSt.id);
           this.day.crossTransfers.set(key, (this.day.crossTransfers.get(key) ?? 0) + 1);
           if (this.daily) this.daily.crossed[a] = 1;
-        } else walk = nextSt ? (Math.hypot(nextSt.x - station.x, nextSt.y - station.y) / (1.2 * this.wx.walkSpeed) + 60) : 60;
+        } else walk = nextSt ? Math.hypot(nextSt.x - station.x, nextSt.y - station.y) / (1.2 * this.wx.walkSpeed) + Math.max(15, 60 - (STATION_TIERS[station.tier ?? 0].transferSave + STATION_TIERS[nextSt.tier ?? 0].transferSave) / 2) : 60;
         this.aState[a] = S_WALK;
         if (a === ta) this.tracer!.add({ k: 'walk', t, t1: t + walk, why: across ? 'across' : 'transfer', from: [station.x, station.y], to: nextSt ? [nextSt.x, nextSt.y] : [station.x, station.y], station: nextSt?.id ?? -1, pm: this.aPM[a] === 1 });
         this.push(t + walk, a, E_PLATFORM);
@@ -1639,8 +1642,9 @@ export class Commuters implements PassengerHooks {
     train.load -= off.length;
     // Express service: riders on board step across a cross-platform pair to a faster train.
     if (this.xp?.pairs) this.crossPlatform(train, route, stopIdx, t);
+    const over = this.platformOver(stationIdx);
     const board = this.board(train, route, stopIdx, t, false);
-    return { alight: off.length * this.scale, board: board * this.scale };
+    return { alight: off.length * this.scale, board: board * this.scale, over };
   }
 
   depart(train: Train, route: CRoute, stopIdx: number, t: number): void {
@@ -1674,6 +1678,9 @@ export class Commuters implements PassengerHooks {
     const day = this.day;
     const ta = this.traceA, daily = this.daily;
     let boarded = 0;
+    // Station crowding: waiting over the platforms' comfortable capacity is unpleasant, more so the
+    // longer you stood in it (station upgrades raise the capacity).
+    const over = this.platformOver(stationIdx);
     while (head < q.length && train.load < capAgents) {
       const a = q[head++];
       if (this.aState[a] !== S_WAIT || this.aPlat[a] !== p) continue;
@@ -1707,6 +1714,7 @@ export class Commuters implements PassengerHooks {
       // Crowding experienced on this ride (load after boarding vs comfortable capacity).
       const ride = dir.schedArrive[k] - dir.schedArrive[stopIdx];
       this.aCrowd[a] += (ride / 60) * COMMUTERS.crowdingWeight * Math.max(0, (train.load * this.scale) / route.capComfort - 1) * this.wx.crowd;
+      if (over > 0) this.aCrowd[a] += ((t - this.aWaitStart[a]) / 60) * STATION_CROWD.overWeight * over * this.wx.crowd;
       this.day.routeBoard.set(route.id, (this.day.routeBoard.get(route.id) ?? 0) + 1);
       const hour = Math.floor((t % SECONDS_PER_DAY) / 3600);
       this.stationHourly[stationIdx * 24 + hour] += this.scale;
@@ -1969,6 +1977,33 @@ export class Commuters implements PassengerHooks {
   }
 
   // ------------------------------------------------------------------ reporting
+  /** People waiting on a station's platforms now (all its routes and directions). */
+  private stationWaiting(si: number): number {
+    const g = this.graph;
+    if (!g) return 0;
+    let n = 0;
+    for (const p of g.stationBoard[si] ?? []) n += this.qLive[p];
+    return n * this.scale;
+  }
+
+  /** How far a station is over its comfortable capacity (0 = fine … maxOver − 1), noting today's peak. */
+  private platformOver(si: number): number {
+    const cap = this.net?.stations[si]?.capacity;
+    if (!cap) return 0;
+    const ratio = this.stationWaiting(si) / cap;
+    if (ratio > (this.stationPeak[si] ?? 0)) this.stationPeak[si] = ratio;
+    return Math.max(0, Math.min(STATION_CROWD.maxOver, ratio) - 1);
+  }
+
+  /** Yesterday's peak crowding by station id (only stations that got at least a third full). */
+  private stationPeakReport(): Record<number, number> {
+    const out: Record<number, number> = {};
+    const net = this.net;
+    if (!net) return out;
+    for (let i = 0; i < net.stations.length; i++) if (this.stationPeak[i] >= 0.33) out[net.stations[i].id] = Math.round(this.stationPeak[i] * 100) / 100;
+    return out;
+  }
+
   waitingByStation(n: number): Float64Array {
     const out = new Float64Array(n);
     const graph = this.graph;
@@ -2031,6 +2066,7 @@ export class Commuters implements PassengerHooks {
       routeRiders,
       routeLateness: {},
       stationBoardings,
+      stationPeak: this.stationPeakReport(),
       goalTrip: this.goalTrip,
       boroughsServed: [],
       fares: { trips: Array.from(d.fareCellTrips, (x) => x * this.scale), revenue: Array.from(d.fareCellRevenue, (x) => x * this.scale) },
@@ -2057,6 +2093,7 @@ export class Commuters implements PassengerHooks {
     };
     this.stationHourly.fill(0);
     this.stationLeft.fill(0);
+    this.stationPeak.fill(0);
     this.peakLoad.fill(0);
     this.peakTrains.fill(0);
     this.day = newDayStats(day + 1);

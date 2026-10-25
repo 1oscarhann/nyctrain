@@ -10,10 +10,12 @@ import { cap } from '../../construction/describe';
 import { LEVEL_NAMES } from '../../construction/validate';
 import { progress } from '../../construction/blueprint';
 import { fmtClock, fmtCount, fmtDistance, fmtMoney } from '../../core/units';
-import { PARK_RIDE, SPECIAL, STATION } from '../../balance';
+import { PARK_RIDE, SPECIAL, STATION, STATION_TIERS } from '../../balance';
 import { SCHOOL_KIND_COLOR } from '../../data/schools';
 import { schoolKindLabel } from '../../map/schoolLayers';
 import { AIRPORTS, CAMPUSES } from '../../cities/destinations';
+import { baseCapacity, MAX_TIER, nextTier, stationCapacity, tierCost, tierInfo, tierOf } from '../../construction/stationTiers';
+import { fmtDate } from '../../core/calendar';
 import { toLocal } from '../../core/geo';
 import type { App } from '../app';
 import { barChart } from '../charts';
@@ -118,7 +120,7 @@ export function stationPanel(app: App, id: number): Panel {
   const roles = plats.map((x) => quadRole(net, x.id)).filter((r): r is 'local' | 'express' => r === 'local' || r === 'express');
   const platformsText = partner ? (roles.length === 2 ? [...roles].sort((a, b) => (a === 'local' ? -1 : b === 'local' ? 1 : 0)).join(' + ') : 'two') + ` · ${Math.max(s.cars, partner.cars)} cars` : roles.length ? `${s.cars} cars · ${roles[0]} pair only` : `${s.cars} cars`;
   const cost = plats.reduce((t, x) => t + (x.cost || 0), 0);
-  body.append(statusLine ?? '', closedBanner, routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, least.status === 'built' ? parkAndRide(app, s) : '', destinationsNear(app, s), schoolsNear(app, s), section('Station'), kv([
+  body.append(statusLine ?? '', closedBanner, routeChips, stats, section('Boardings by hour'), chartWrap, flowsWrap, least.status === 'built' ? stationUpgrades(app, s) : '', least.status === 'built' ? parkAndRide(app, s) : '', destinationsNear(app, s), schoolsNear(app, s), section('Station'), kv([
     ['Level', cap(LEVEL_NAMES[level])],
     ['Class', trackClassName(cls)],
     [partner ? 'Platforms' : 'Platform', platformsText],
@@ -152,10 +154,11 @@ export function stationPanel(app: App, id: number): Panel {
     const boardY = by.length ? by.reduce((a, b) => a + b, 0) : undefined;
     const left = detail ? (detail.leftYesterday || detail.leftToday) : 0;
     const waiting = ids.reduce((t, x) => t + app.waitingAt(x), 0);
-    const crowd = Math.max(...ids.map((x) => app.stationCrowding(x)));
+    const cap = ids.reduce((t, x) => { const st = game.network.stations.get(x); return t + (st && st.status === 'built' ? stationCapacity(game.network, st) : 0); }, 0);
+    const crowd = cap ? waiting / cap : 0;
     const cards = [
       statCard('Got on yesterday', boardY !== undefined ? fmtCount(boardY) : '—', undefined, 'people boarding here'),
-      statCard('Waiting now', fmtCount(waiting), crowd > 1 ? 'red' : crowd > 0.6 ? 'amber' : undefined, crowd > 1 ? "more than one train can take" : 'on the platform'),
+      statCard('Waiting now', fmtCount(waiting), crowd > 1 ? 'red' : crowd > 0.75 ? 'amber' : undefined, cap ? `of ${fmtCount(cap)} the platforms hold comfortably${crowd > 1 ? ': overcrowded, upgrade the station' : ''}` : 'on the platform'),
       statCard('Left behind', fmtCount(left), left > 0 ? 'amber' : undefined, left > 0 ? 'trains were too full: add trains or cars' : 'nobody missed a full train'),
       statCard('Got on today', detail ? fmtCount(detail.hourlyToday.reduce((a, b) => a + b, 0)) : '—', undefined, 'so far, live'),
     ];
@@ -315,5 +318,62 @@ function destinationsNear(app: App, s: Station): HTMLElement {
   }
   if (!rows.length) return wrap;
   wrap.append(section('Airports & universities nearby'), h('div', { class: 'stat-grid', style: 'grid-template-columns:1fr' }, ...rows));
+  return wrap;
+}
+
+/** Station upgrades: how full the platforms get, and the ladder of rebuilds (STATION_TIERS). */
+function stationUpgrades(app: App, s: Station): HTMLElement {
+  const game = app.game;
+  const net = game.network;
+  const wrap = h('div');
+  const tier = tierOf(s);
+  const base = baseCapacity(net, s);
+  const cap = stationCapacity(net, s);
+  const waiting = app.waitingAt(s.id);
+  const peak = app.report?.stationPeak?.[s.id];
+  wrap.append(section(`Station · level ${tier} of ${MAX_TIER}`));
+  const fill = Math.min(1.5, cap ? waiting / cap : 0);
+  const tone = fill > 1 ? 'var(--red, #ff5d5d)' : fill > 0.75 ? 'var(--amber, #ffc24a)' : 'var(--green, #4cd08a)';
+  wrap.append(
+    h('div', { class: 'tier-meter' },
+      h('div', { class: 'tier-meter-row' }, h('b', null, tierInfo(tier).name), h('span', { class: 'num' }, `${fmtCount(waiting)} / ${fmtCount(cap)} waiting`)),
+      h('div', { class: 'tier-bar' }, h('div', { style: { width: `${(Math.min(1, fill) * 100).toFixed(1)}%`, background: tone } }), fill > 1 ? h('div', { class: 'tier-over', style: { width: `${((fill - 1) * 200).toFixed(1)}%` } }) : null),
+      h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:3px' },
+        peak !== undefined ? `Busiest moment yesterday: ${Math.round(peak * 100)}% full${peak > 1 ? ' — people stood in a crush, and some will drive instead' : ''}` : 'Comfortable capacity of the platforms; past it, waiting is miserable and trains board slowly.'),
+    ),
+  );
+  if (s.tierTo !== undefined && s.tierEnd !== undefined && s.tierStart !== undefined) {
+    const pct = Math.max(0, Math.min(1, (game.time - s.tierStart) / Math.max(1, s.tierEnd - s.tierStart)));
+    wrap.append(h('div', { class: 'warn', style: 'margin-top:6px' }, `Works under way: ${tierInfo(s.tierTo).name} · ${Math.floor(pct * 100)}% · open ${fmtDate(Math.floor(s.tierEnd / 86400))}. The platforms hold a bit less until then.`));
+  }
+  const ladder = h('div', { class: 'tier-ladder' });
+  const next = nextTier(s);
+  STATION_TIERS.forEach((t, i) => {
+    const done = i <= tier;
+    const building = s.tierTo === i;
+    const perks = i === 0 ? `Holds ${fmtCount(base)}` : `Holds ${fmtCount(base * t.capacity)} (×${t.capacity}) · boards ${Math.round((1 - t.boarding) * 100)}% faster · changes ${t.transferSave} s quicker`;
+    const row = h('div', { class: `tier-row${done ? ' done' : ''}${building ? ' building' : ''}${i === next ? ' next' : ''}` },
+      h('div', { class: 'tier-num' }, done ? '✓' : String(i)),
+      h('div', { class: 'tier-body' },
+        h('div', { class: 'tier-name' }, t.name),
+        h('div', { class: 'tier-blurb' }, t.blurb),
+        h('div', { class: 'tier-perks' }, perks),
+      ),
+    );
+    if (i === next) {
+      const cost = tierCost(net, s, i);
+      const btn = h('button', { class: 'hw-btn primary small', disabled: !game.finance.canAfford(cost), onclick: () => {
+        const r = game.upgradeStation(s.id);
+        if (r.ok) app.toast(game.sandbox ? `${s.name} upgraded` : `Works started at ${s.name}`, `${t.name} · ${fmtMoney(r.cost ?? 0)}${game.sandbox ? '' : ` · ${t.days} days`}`, 'green');
+        else app.toast("Can't upgrade the station", r.reason, 'red');
+        app.refreshPanel();
+      } }, `Upgrade · ${fmtMoney(cost)}${game.sandbox ? '' : ` · ${t.days} days`}`);
+      row.querySelector('.tier-body')!.append(h('div', { style: 'margin-top:6px' }, btn));
+    }
+    ladder.append(row);
+  });
+  wrap.append(ladder);
+  const staff = tierInfo(tier).staff;
+  if (staff > 0) wrap.append(h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:4px' }, `Staffing here costs ${Math.round((1 + staff) * 100)}% of a basic station's.`));
   return wrap;
 }

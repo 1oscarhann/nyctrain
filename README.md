@@ -190,6 +190,26 @@ exactly as before.
 - **Line colours and shapes.** 18–20 colours per city plus a free colour picker, and four bullet
   shapes (disc, square, diamond, line bar).
 
+## Station upgrades
+
+Each station's platforms hold a comfortable number of people waiting: 12 per metre of platform at
+first (an 8-car metro station about 1,850). Past that the station is overcrowded: waiting there
+counts as discomfort in everyone's next mode choice (so some drive instead), and trains board more
+slowly. The station panel shows how full it is now and at its busiest yesterday, and a daily nudge
+names the worst overcrowded station.
+
+Rebuild a station up four levels (each costs a share of its build cost by depth, takes weeks of
+works outside Sandbox, and holds 15% less during them):
+
+| Level | Works | Holds | Boarding | Changes | Cost × build cost | Days |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Wider platforms | ×1.8 | 12% faster | 10 s quicker | 0.35 | 20 |
+| 2 | Entrances & escalators | ×2.8 | 22% faster | 20 s quicker | 0.7 | 40 |
+| 3 | New concourse | ×4.2 | 34% faster | 30 s quicker | 1.2 | 60 |
+| 4 | Grand interchange | ×6.5 | 45% faster | 45 s quicker | 2 | 90 |
+
+Upgraded stations cost more to staff and draw a little bigger on the map.
+
 ## Controls
 
 | Key | Action |

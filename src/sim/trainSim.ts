@@ -7,7 +7,7 @@
  * Positions are path distances `s` (metres) along a route direction's compiled path; the
  * train's head is at s and its tail at s − trainLength.
  */
-import { OPERATIONS, OPS_CONTROL, TIME } from '../balance';
+import { STATION_CROWD, STATION_TIERS, OPERATIONS, OPS_CONTROL, TIME } from '../balance';
 import type { CompiledNetwork, CRoute, CRouteDir, RouteRegularityDetail, ServiceOverride } from './protocol';
 import { cvByStop, newRouteReg, poolStats, recordHeadway, rollDay, suggestRecovery, summarize, type RegularityStats, type RouteReg } from './regularity';
 
@@ -74,7 +74,8 @@ export interface TrackRestriction {
 /** Callbacks into the passenger model. */
 export interface PassengerHooks {
   /** Train arrived at a stop: alight + board. Returns counts for the dwell time. */
-  arrive(train: Train, route: CRoute, stopIdx: number, t: number): { alight: number; board: number };
+  /** over: how far the platform was over its comfortable capacity (0 = fine, 1 = twice full). */
+  arrive(train: Train, route: CRoute, stopIdx: number, t: number): { alight: number; board: number; over?: number };
   /** Train about to leave: last-moment boarding. */
   depart(train: Train, route: CRoute, stopIdx: number, t: number): void;
   /** Train removed with people on board (route changed or deadlock): deliver them. */
@@ -743,8 +744,11 @@ export class TrainSim {
     }
     if (this.pairOn) this.notePair(tr, stopIdx, t);
     const overComfort = tr.load * this.agentScale > r.capComfort;
-    const { alight, board } = this.hooks.arrive(tr, r, stopIdx, t);
-    let dwell = OPERATIONS.dwellBase + ((alight + board) * OPERATIONS.dwellPerPassenger) / r.cars;
+    const { alight, board, over } = this.hooks.arrive(tr, r, stopIdx, t);
+    // Station upgrades board faster; an overcrowded platform boards slower.
+    const st = this.net?.stations[dir.stopStation[stopIdx]];
+    const boarding = STATION_TIERS[st?.tier ?? 0].boarding * (1 + STATION_CROWD.dwellPerOver * (over ?? 0));
+    let dwell = OPERATIONS.dwellBase + ((alight + board) * OPERATIONS.dwellPerPassenger * boarding) / r.cars;
     dwell = Math.min(OPERATIONS.dwellMax, dwell * this.dwellFactor);
     if (overComfort || tr.load * this.agentScale > r.capComfort) dwell *= OPERATIONS.dwellCrowdedFactor;
     if (stopIdx === 0) dwell = Math.max(dwell, OPERATIONS.dwellBase);

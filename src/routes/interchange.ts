@@ -2,7 +2,7 @@
  * Interchanges: stations within 200 m of each other (on different track) are linked.
  * Transfer walk time is distance ÷ 1.2 m/s + 60 s.
  */
-import { COMMUTERS, QUAD, STATION } from '../balance';
+import { COMMUTERS, QUAD, STATION, STATION_TIERS } from '../balance';
 import type { Network } from '../construction/network';
 import type { CStation } from '../sim/protocol';
 
@@ -71,7 +71,10 @@ export function transferTime(distance: number): number {
  * exactly transferTime of the distance.
  */
 export function platformTransfer(a: CStation, b: CStation, bIndex: number): number {
-  return a.pair === bIndex ? QUAD.crossPlatformTransfer : transferTime(Math.hypot(b.x - a.x, b.y - a.y));
+  if (a.pair === bIndex) return QUAD.crossPlatformTransfer;
+  // Station upgrades: wider passages and escalators shorten changes (the two ends' average).
+  const save = (STATION_TIERS[a.tier ?? 0].transferSave + STATION_TIERS[b.tier ?? 0].transferSave) / 2;
+  return Math.max(15, transferTime(Math.hypot(b.x - a.x, b.y - a.y)) - save);
 }
 
 /** Transfer penalty (s) from platform a to the platform with compiled index bIndex: reduced across a pair. */

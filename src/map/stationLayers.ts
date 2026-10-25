@@ -42,7 +42,7 @@ export interface StationStat {
   boardings: number;
   /** People waiting right now (scaled). */
   waiting: number;
-  /** Waiting relative to what one train can carry: >1 means people get left behind. */
+  /** Waiting relative to the platforms' comfortable capacity (station upgrades raise it): >1 is overcrowded. */
   crowding: number;
 }
 
@@ -54,6 +54,8 @@ interface StationDatum {
   radius: number;
   crowding: number;
   progress: number;
+  /** Station upgrade tier (bigger dot, thicker ring). */
+  tier?: number;
   /**
    * A lone platform on a four-track pair (a local-only stop) sits on its pair's route bundle,
    * which the map pushes a few px away from the other pair: local metres, the unit vector to the
@@ -220,9 +222,11 @@ export class StationLayers {
 
   /** Sizes and crowding from the stats: a pair by its combined boardings and its more crowded platform. */
   private applyStats(): void {
+    const net = this.game.network;
     for (const d of this.data) {
       const st = this.stats.get(d.id);
-      d.radius = dotRadius(st?.boardings ?? 0);
+      d.tier = net.stations.get(d.id)?.tier ?? 0;
+      d.radius = dotRadius(st?.boardings ?? 0) + 0.7 * d.tier;
       d.crowding = st?.crowding ?? 0;
     }
     for (const d of this.pairs) {
@@ -403,7 +407,7 @@ export class StationLayers {
         stroked: true,
         getFillColor: (d) => (d.status === 'blueprint' ? DOT_FILL_BLUEPRINT : tfl ? TFL_RING_FILL : DOT_FILL),
         getLineColor: (d) => (this.closed.has(d.id) ? [255, 93, 93, 255] : d.status === 'construction' ? [255, 194, 74, 255] : d.status === 'blueprint' ? [255, 255, 255, 140] : tfl ? TFL_RING_LINE : DOT_OUTLINE),
-        getLineWidth: (d) => (d.status === 'construction' || this.closed.has(d.id) ? 2.5 : tfl ? TFL_RING_LINE_PX : DOT_OUTLINE_PX),
+        getLineWidth: (d) => (d.status === 'construction' || this.closed.has(d.id) ? 2.5 : (tfl ? TFL_RING_LINE_PX : DOT_OUTLINE_PX) + 0.35 * (d.tier ?? 0)),
         lineWidthUnits: 'pixels',
         pickable: true,
         parameters: DEPTH_OFF,

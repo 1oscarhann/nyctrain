@@ -1938,3 +1938,21 @@ table.fleet td {
   background: none;
   cursor: pointer;
 }
+
+/* Station upgrades (station panel). */
+.tier-meter { margin-bottom: 8px; }
+.tier-meter-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; margin-bottom: 4px; }
+.tier-bar { position: relative; height: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.08); overflow: visible; display: flex; }
+.tier-bar > div:first-child { height: 100%; border-radius: 4px; transition: width 0.4s; }
+.tier-bar .tier-over { position: absolute; left: 100%; top: -2px; height: 12px; max-width: 30%; border-radius: 0 4px 4px 0; background: repeating-linear-gradient(45deg, #ff5d5d 0 4px, #8a2222 4px 8px); }
+.tier-ladder { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.tier-row { display: flex; gap: 10px; padding: 7px 8px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.06); opacity: 0.6; }
+.tier-row.done { opacity: 0.85; }
+.tier-row.next, .tier-row.building { opacity: 1; border-color: var(--accent, #00a3b0); background: rgba(0, 163, 176, 0.07); }
+.tier-row.building { border-style: dashed; }
+.tier-num { flex: none; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; background: rgba(255, 255, 255, 0.1); }
+.tier-row.done .tier-num { background: #2f8f5b; color: #fff; }
+.tier-row.next .tier-num { background: var(--accent, #00a3b0); color: #fff; }
+.tier-name { font-weight: 700; font-size: 13px; }
+.tier-blurb { font-size: 11.5px; color: var(--muted, #9aa5b1); }
+.tier-perks { font-size: 11.5px; margin-top: 2px; }

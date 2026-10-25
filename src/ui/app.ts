@@ -6,7 +6,7 @@
 import { ArcLayer, ScatterplotLayer, TextLayer, PathLayer } from '@deck.gl/layers';
 import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
 import type { Layer } from '@deck.gl/core';
-import { BONDS, CHAOS, CINEMATIC, COMMUTERS, ECONOMY, MAP, TIME, TRAINS, type ChaosLevel, type GrowthPace, type StockId, type TrackLevel } from '../balance';
+import { BONDS, CHAOS, CINEMATIC, COMMUTERS, ECONOMY, MAP, STATION_CROWD, TIME, TRAINS, type ChaosLevel, type GrowthPace, type StockId, type TrackLevel } from '../balance';
 import { city, cityBalance } from '../cities';
 import { Game, newChaosSeed, type Selection } from '../core/game';
 import { toLocal, toLonLat } from '../core/geo';
@@ -22,6 +22,7 @@ import { LineTool } from '../construction/lineTool';
 import { SchoolLayers } from '../map/schoolLayers';
 import { DestinationLayers } from '../map/destinationLayers';
 import { StationAudio } from './stationAudio';
+import { nextTier } from '../construction/stationTiers';
 import { LandMask } from '../data/landMask';
 import { TractIndex, type LandCollection, type World } from '../data/world';
 import { WorldTerrain } from '../construction/terrain';
@@ -478,16 +479,14 @@ export class App implements AppContext {
     const c = compileNetwork(this.game);
     const prev = this.compiled;
     // opsKey: holding, timepoints and short turns reach the worker only through a recompile.
-    const sig = (x: CompileResult | null) => (x ? JSON.stringify(x.net.routes.map((r) => [r.id, r.fleet, r.cars, r.headways, r.dirs[0].length, r.dirs[0].stopS.length, r.color, r.name, r.opsKey])) + x.net.stations.length + '|' + x.net.stations.map((s) => s.parking ?? 0).join(',') : '');
+    const sig = (x: CompileResult | null) => (x ? JSON.stringify(x.net.routes.map((r) => [r.id, r.fleet, r.cars, r.headways, r.dirs[0].length, r.dirs[0].stopS.length, r.color, r.name, r.opsKey])) + x.net.stations.length + '|' + x.net.stations.map((s) => `${s.parking ?? 0}/${s.capacity ?? 0}/${s.tier ?? 0}`).join(',') : '');
     if (prev && sig(prev) === sig(c)) return;
     this.compiled = c;
     this.compiledByVersion.set(c.net.version, c);
     if (this.compiledByVersion.size > 4) this.compiledByVersion.delete(this.compiledByVersion.keys().next().value!);
+    // Comfortable waiting capacity per station (platform length × upgrade tier).
     this.stationCap.clear();
-    for (const r of c.net.routes) for (const si of r.dirs[0].stopStation) {
-      const id = c.net.stations[si].id;
-      this.stationCap.set(id, Math.min(this.stationCap.get(id) ?? Infinity, r.capComfort));
-    }
+    for (const st of c.net.stations) if (st.capacity) this.stationCap.set(st.id, st.capacity);
     this.sim.setNetwork(c.net);
     // The value-capture district follows the served stations: the growth view is redrawn.
     this.dropGrowthView();
@@ -562,6 +561,11 @@ export class App implements AppContext {
     return this.stations.stats.get(stationId)?.waiting ?? 0;
   }
 
+  /** Comfortable waiting capacity of a built station (0 if not compiled yet). */
+  stationCapacity(stationId: number): number {
+    return this.stationCap.get(stationId) ?? 0;
+  }
+
   stationCrowding(stationId: number): number {
     return this.stations.stats.get(stationId)?.crowding ?? 0;
   }
@@ -582,6 +586,19 @@ export class App implements AppContext {
     for (const ev of g.finance.events) this.toasts.show(ev.title, ev.body, ev.tone, 7000, () => this.openFinance('borrowing'));
     g.events.emit('money', undefined);
     this.checkGoals(r);
+    // Station crowding: point at the worst overcrowded station that can still be upgraded.
+    if (r.stationPeak) {
+      let worst: { id: number; peak: number } | null = null;
+      for (const [k, v] of Object.entries(r.stationPeak)) {
+        const st = g.network.stations.get(Number(k));
+        if (!st || v < STATION_CROWD.warnAt || nextTier(st) === null) continue;
+        if (!worst || v > worst.peak) worst = { id: st.id, peak: v };
+      }
+      if (worst) {
+        const st = g.network.stations.get(worst.id)!;
+        this.toasts.show(`${st.name} is overcrowded`, `${Math.round(worst.peak * 100)}% full at its busiest yesterday. Upgrade it (station panel) to hold more people and board faster.`, 'amber', 8000, () => g.select({ kind: 'station', id: st.id }));
+      }
+    }
     this.panel?.dayEnd?.();
     this.applyStationStats();
     this.stations.update(this.view.is3D, this.network.quadOffsets);
