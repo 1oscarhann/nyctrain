@@ -190,6 +190,22 @@ exactly as before.
 - **Line colours and shapes.** 18–20 colours per city plus a free colour picker, and four bullet
   shapes (disc, square, diamond, line bar).
 
+## Title screen
+
+The title plays an animation of every map in turn, about 30 seconds each, drawn from the maps' real
+data (src/ui/titleTrailer.ts): the city rises out of the dark with a dot for every few hundred
+residents and jobs, a handful of imaginary lines draw themselves across it, a tracking shot rides
+with one train, then rush hour streams along every line. "Press any key" starts the music and
+brings in the menu: a metro line down the left, each option a station, a train sliding to the one
+you point at (mouse, or arrow keys and Enter). New game and Sandbox branch to the three maps;
+picking one cuts the animation to it, then the founding screen opens.
+
+The scene data for all maps is prebuilt (public/data/title-scenes.json, `npm run build:title`
+after changing a map or src/ui/titleLines.ts). Fonts: Big Shoulders Display and Overpass Mono
+(SIL OFL, bundled). Music: "Lights at Night" by Tsorthan Grove, CC0
+(https://opengameart.org/content/lights-at-night; public/audio/CREDITS.md); the toggle is
+remembered per viewer. The captioned trailer video is made from the same code, outside the game.
+
 ## Your company
 
 A new game starts by founding your company: name it (🎲 suggests one), build its logo from 12 badge

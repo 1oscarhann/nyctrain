@@ -7,6 +7,11 @@ import '@fontsource/overpass/800.css';
 import '@fontsource/cabin/400.css';
 import '@fontsource/cabin/600.css';
 import '@fontsource/cabin/700.css';
+// Title screen: a tall condensed display face (Big Shoulders) and a monospace (Overpass Mono), both SIL OFL.
+import '@fontsource/big-shoulders-display/800';
+import '@fontsource/big-shoulders-display/900';
+import '@fontsource/overpass-mono/400';
+import '@fontsource/overpass-mono/600';
 import './ui/styles.css';
 import { bootstrap } from './ui/boot';
 

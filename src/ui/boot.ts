@@ -1,33 +1,30 @@
 /**
- * Startup: pick a city, load its data, show the title screen (over a slowly turning 3D skyline),
+ * Startup: pick a city, load its data, show the title screen (an animated trailer of every map),
  * start games. Switching city re-applies the city's balance, origin and currency (cities/index.ts)
  * and reloads its data (cached per city).
  */
-import { ECONOMY, MAP, COMMUTERS, type ChaosLevel, type CityId } from '../balance';
-import { applyCity, CITIES, CITY_IDS, city, cityBalance } from '../cities';
+import { MAP, COMMUTERS, type ChaosLevel, type CityId } from '../balance';
+import { applyCity, CITIES, city } from '../cities';
 import { toLonLat } from '../core/geo';
-import { currency, fmtCount, setUnits } from '../core/units';
+import { fmtCount, setUnits } from '../core/units';
 import { fetchLand, fetchWorld, type LandCollection, type World } from '../data/world';
 import { foundCompany } from './founding';
 import type { Company } from '../core/company';
 import { MapView } from '../map/mapView';
+import { TitleScreen } from './titleScreen';
 import type { SaveFile } from '../save/format';
 import { importFile, listSlots, readSlot, SLOTS } from '../save/store';
 import { saveSummary } from '../save/summary';
 import { App } from './app';
-import { h, svgIcon } from './dom';
-import { ICONS } from './icons';
+import { h } from './dom';
 import { loadChaosLevel, loadLastCity, loadSettings, storeChaosLevel, storeLastCity, storeSettings, storeUnits } from './settings';
 import { LEVEL_HINT, LEVEL_LABEL } from './alertFeed';
 import { modal } from './widgets';
-import { titleLight } from '../cinematic';
 import { DAY_NIGHT_HINT, DAY_NIGHT_LABEL, loadPrefs, storePrefs } from '../cinematic/prefs';
 
 let world: World;
 let land: LandCollection;
 let current: App | null = null;
-/** The metro city to go back to from Intertown. */
-let lastMetro: CityId = 'london';
 const cache = new Map<CityId, { world: World; land: LandCollection }>();
 
 /** Make `id` the current city: balance overrides, origin, currency, then its (cached) data. */
@@ -82,109 +79,52 @@ function freshMapContainer(root: HTMLElement): HTMLElement {
   return el;
 }
 
-async function showTitle(root: HTMLElement, notice: string | null = null): Promise<void> {
-  const view = await MapView.create(freshMapContainer(root));
-  // Cinematic: blue hour over the skyline, windows lit (Always day: the plain map); a game takes the light over.
-  titleLight(view.map);
-  // A slow orbit over the city's centre while you decide.
-  const cam = cityBalance().titleCamera;
-  view.map.jumpTo({ center: cam.center, zoom: cam.zoom, bearing: cam.bearing });
-  view.setView3D(true);
-  let spinning = true;
-  const spin = () => {
-    if (!spinning) return;
-    view.map.setBearing(view.map.getBearing() + 0.04);
-    requestAnimationFrame(spin);
-  };
-  setTimeout(() => requestAnimationFrame(spin), 1200);
-
+async function showTitle(root: HTMLElement, notice: string | null = null, skipCard = false): Promise<void> {
+  // The title plays its own animation (ui/titleScreen.ts): no live map until a game starts.
+  root.querySelector('#map')?.remove();
   const settings = loadSettings();
   setUnits(settings.units);
   const metas = await listSlots().catch(() => null);
   const auto = metas?.autosave ?? null;
-
-  const leave = () => {
-    spinning = false;
-    overlay.remove();
-  };
-
-  const switchCity = async (id: CityId) => {
-    if (id === city().id) return;
-    const back = city().id;
-    leave();
-    view.destroy();
-    await showTitle(root, await useCityOr(root, id, back));
-  };
+  let title: TitleScreen | null = null;
 
   const start = async (sandbox: boolean, save: SaveFile | null, tutorial: boolean, chaos?: ChaosLevel, company?: Omit<Company, 'founded'>) => {
-    leave();
-    let v = view;
+    title?.leave();
     if (save && save.city !== city().id) {
-      // A save from the other city: switch over first.
+      // A save from another map: switch over first.
       const back = city().id;
-      v.destroy();
       const err = await useCityOr(root, save.city, back);
-      if (err) return showTitle(root, err);
-      v = await MapView.create(freshMapContainer(root));
-    } else {
-      v.resetFlat();
+      if (err) return showTitle(root, err, true);
     }
+    const v = await MapView.create(freshMapContainer(root));
     v.map.jumpTo({ center: MAP.startCenter, zoom: MAP.startZoom, bearing: 0 });
     startGame(root, v, { sandbox: save ? save.game.sandbox : sandbox, save, tutorial, chaos, company });
   };
 
-  const btn = (label: string, sub: string | null, onclick: () => void, primary = false) =>
-    h('button', { class: `hw-btn ${primary ? 'primary' : ''}`, style: 'height:auto;padding:10px 14px;flex-direction:column;align-items:flex-start;gap:2px;width:100%', onclick }, h('span', { style: 'font-weight:800' }, label), sub ? h('span', { style: `font-size:12px;${primary ? '' : 'color:var(--muted)'};font-weight:400` }, sub) : null);
-
-  const c = city();
-  const synthetic = world.meta.synthetic;
-  // Two modes: Metro (a city's subway: New York or London) and Intertown (regional rail: the South
-  // East, with a New York region to come). The mode follows the city.
-  const intertown = c.intertown === true;
-  if (!intertown) lastMetro = c.id;
-  const metroIds = CITY_IDS.filter((id) => !CITIES[id].intertown);
-  const interIds = CITY_IDS.filter((id) => CITIES[id].intertown);
-  const modePicker = h(
-    'div',
-    { class: 'seg mode-seg', style: 'margin:16px 0 0;width:100%;display:flex' },
-    h('button', { class: !intertown ? 'on' : '', style: 'flex:1', title: 'Build a subway inside one city', onclick: () => switchCity(lastMetro) }, h('b', null, 'Metro'), h('span', { class: 'mode-sub' }, 'one city, underground')),
-    h('button', { class: intertown ? 'on' : '', style: 'flex:1', title: 'Build regional rail between towns', onclick: () => switchCity(interIds[0]) }, h('b', null, 'Intertown'), h('span', { class: 'mode-sub' }, 'regional rail, high speed')),
-  );
-  const cityPicker = h(
-    'div',
-    { class: 'seg', style: 'margin:8px 0 0;width:100%;display:flex' },
-    ...(intertown ? interIds : metroIds).map((id) => h('button', { class: id === c.id ? 'on' : '', style: 'flex:1', onclick: () => switchCity(id), title: `Play in ${CITIES[id].name}` }, intertown ? `${CITIES[id].name} · from Victoria` : CITIES[id].name)),
-    intertown ? h('button', { disabled: true, style: 'flex:1', title: 'Coming later' }, 'New York region · soon') : null,
-  );
-  const card = h(
-    'div',
-    { class: 'hw-panel', style: 'width:min(440px,calc(100vw - 32px));padding:26px 26px 20px' },
-    h('div', { style: 'display:flex;align-items:center;gap:12px' }, h('span', { style: 'width:44px;height:44px;display:inline-flex' }, svgIcon(ICONS.logo)), h('div', null, h('div', { style: 'font-size:30px;font-weight:800;letter-spacing:.01em;line-height:1' }, 'Headway'), h('div', { class: 'hw-muted', style: 'font-size:15px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;margin-top:4px' }, c.name))),
-    modePicker,
-    cityPicker,
-    h('p', { style: 'line-height:1.55;margin:14px 0 18px' }, c.blurb),
-    h(
-      'div',
-      { style: 'display:flex;flex-direction:column;gap:8px' },
-      auto ? btn('Continue', `${saveSummary(auto)} · ${fmtCount(auto.riders)} riders`, async () => { const s = await readSlot('autosave'); if (s) start(s.game.sandbox, s, false); }, true) : null,
-      btn('New game', `${currency()}${+(ECONOMY.startingCash / 1e9).toFixed(1)}B to start · bonds available · goals to chase`, () => chooseTutorial(false), !auto),
-      btn('Sandbox', 'Unlimited money, instant construction', () => chooseTutorial(true)),
-      btn('Load game', 'Saved slots or a file', () => loadDialog()),
-      btn('Settings', null, () => settingsDialog()),
-    ),
-    notice ? h('div', { class: 'err', style: 'margin-top:12px' }, notice) : null,
-    h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:14px;line-height:1.45' }, synthetic ? '⚠ Running on a SYNTHETIC dataset — real commuting data was unreachable when the data was built.' : `Commuting data: ${world.meta.source}. ${fmtCount(world.tracts.reduce((s, t) => s + t.residents, 0))} commuters across ${world.tracts.length.toLocaleString()} ${c.zoneWord}.`),
-  );
-  const overlay = h('div', { style: 'position:absolute;inset:0;display:flex;align-items:center;justify-content:flex-start;padding-left:max(16px,6vw);z-index:90;background:linear-gradient(90deg,rgba(16,20,25,.82),rgba(16,20,25,.25) 60%,rgba(16,20,25,0))' }, card);
-  root.append(overlay);
-
-  async function chooseTutorial(sandbox: boolean) {
-    // Found the company: name, logo, the government's start-up grant, city chaos and the tutorial.
+  /** A map picked on the title: load it, found the company (name, logo, grant), start. */
+  const newGame = async (id: CityId, sandbox: boolean) => {
+    if (id !== city().id) {
+      const err = await useCityOr(root, id, city().id);
+      if (err) return alertBox(err);
+    }
     const r = await foundCompany(root, { sandbox, chaos: loadChaosLevel(), levelLabels: LEVEL_LABEL, levelHints: LEVEL_HINT });
     if (!r) return;
     storeChaosLevel(r.chaos);
     start(sandbox, null, r.tutorial, r.chaos, r.company);
-  }
+  };
+
+  title = new TitleScreen(root, {
+    continueSummary: auto ? `${saveSummary(auto)} · ${fmtCount(auto.riders)} riders` : null,
+    onContinue: async () => {
+      const s = await readSlot('autosave');
+      if (s) start(s.game.sandbox, s, false);
+    },
+    onNew: (id, sandbox) => void newGame(id, sandbox),
+    onLoad: () => void loadDialog(),
+    onSettings: () => settingsDialog(),
+    notice,
+    skipCard,
+  });
 
   async function loadDialog() {
     const m = await listSlots();
@@ -230,7 +170,7 @@ async function showTitle(root: HTMLElement, notice: string | null = null): Promi
       units.replaceChildren(...(['imperial', 'metric'] as const).map((u) => h('button', { class: s.units === u ? 'on' : '', onclick: () => { s.units = u; setUnits(u); storeUnits(u); render(); } }, u === 'imperial' ? 'Miles, mph' : 'Kilometres, km/h')));
       scale.replaceChildren(...COMMUTERS.agentScaleChoices.map((n) => h('button', { class: s.agentScale === n ? 'on' : '', onclick: () => { s.agentScale = n; storeSettings(s); render(); } }, `1 : ${n}`)));
       const cp = loadPrefs();
-      dayNight.replaceChildren(...(['cycle', 'day', 'light'] as const).map((m) => h('button', { class: cp.dayNight === m ? 'on' : '', title: DAY_NIGHT_HINT[m], onclick: () => { storePrefs({ dayNight: m }); titleLight(view.map); render(); } }, DAY_NIGHT_LABEL[m])));
+      dayNight.replaceChildren(...(['cycle', 'day', 'light'] as const).map((m) => h('button', { class: cp.dayNight === m ? 'on' : '', title: DAY_NIGHT_HINT[m], onclick: () => { storePrefs({ dayNight: m }); render(); } }, DAY_NIGHT_LABEL[m])));
       windows.replaceChildren(...([true, false] as const).map((on) => h('button', { class: cp.windows === on ? 'on' : '', disabled: cp.dayNight !== 'cycle', onclick: () => { storePrefs({ windows: on }); render(); } }, on ? 'Lit windows' : 'Dark')));
       dnHint.textContent = `${DAY_NIGHT_HINT[cp.dayNight]}.`;
     };
@@ -270,7 +210,7 @@ function startGame(root: HTMLElement, view: MapView, p: { sandbox: boolean; save
       current = null;
       teardownUi(root);
       view.destroy();
-      showTitle(root);
+      showTitle(root, null, true);
     },
     restart: async (save) => {
       current?.destroy();

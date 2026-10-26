@@ -2068,3 +2068,91 @@ body.fs-open #toasts { z-index: 40; }
 .found .actions { align-items: center; }
 .hw-btn.icon-only { width: 32px; padding: 0; justify-content: center; }
 .mgr-table .mgr-row { min-width: 1060px; }
+
+/* ------------------------------------------------------------------ Title screen (ui/titleScreen.ts)
+   The animation plays full screen; a press-any-key card, then the menu as a metro line down the left,
+   its options the stations, a train sliding to the one you point at. */
+#title {
+  --tt-ink: #03080c;
+  --tt-fg: #eef2f6;
+  --tt-muted: #8a97a6;
+  --tt-faint: #56616e;
+  --tt-rail: rgba(238, 242, 246, 0.22);
+  --tt-signal: #ffb25a;
+  --tt-display: 'Big Shoulders Display', 'Arial Narrow', Impact, sans-serif;
+  --tt-mono: 'Overpass Mono', ui-monospace, Menlo, monospace;
+  --tt-gutter: max(clamp(20px, 5vw, 72px), env(safe-area-inset-left, 0px));
+  position: absolute; inset: 0; z-index: 90; background: var(--tt-ink); color: var(--tt-fg); overflow: hidden; transition: opacity 0.9s ease;
+}
+#title.tt-leaving { opacity: 0; pointer-events: none; }
+#title .tt-scene { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#title .tt-scrim { position: absolute; inset: 0; pointer-events: none; opacity: 0.3; background: linear-gradient(90deg, rgba(2, 5, 8, 0.86) 0%, rgba(2, 5, 8, 0.55) 26%, rgba(2, 5, 8, 0) 48%); transition: opacity 1.2s ease; }
+#title.tt-open .tt-scrim { opacity: 1; }
+#title .tt-ui { transition: opacity 0.9s ease, transform 1.1s cubic-bezier(0.2, 0.8, 0.2, 1); }
+#title:not(.tt-open) .tt-ui { opacity: 0; pointer-events: none; transform: translateX(-24px); }
+
+#title .tt-card { position: absolute; z-index: 3; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; pointer-events: none; transition: opacity 1.1s ease, transform 1.4s cubic-bezier(0.2, 0.8, 0.2, 1); }
+#title.tt-open .tt-card { opacity: 0; transform: scale(1.04); }
+#title .tt-card h2 { margin: 0; font-family: var(--tt-display); font-weight: 900; font-size: clamp(72px, 12vw, 168px); letter-spacing: 0.14em; line-height: 0.9; text-transform: uppercase; text-shadow: 0 4px 40px rgba(0, 0, 0, 0.7); animation: tt-cardin 2.4s cubic-bezier(0.2, 0.8, 0.2, 1) both 0.6s; }
+#title .tt-card h2 span, #title .tt-word span { color: var(--tt-signal); }
+#title .tt-card p { margin: 0; font-family: var(--tt-mono); font-size: 13px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--tt-fg); animation: tt-cardin 1.6s ease both 2.2s, tt-breathe 2.6s ease-in-out infinite 3.8s; }
+@keyframes tt-cardin { from { opacity: 0; letter-spacing: 0.32em; } to { opacity: 1; } }
+@keyframes tt-breathe { 50% { opacity: 0.55; } }
+
+#title .tt-word { position: absolute; z-index: 3; left: var(--tt-gutter); top: calc(7.5vh + env(safe-area-inset-top, 0px) + 22px); margin: 0; font-family: var(--tt-display); font-weight: 900; font-size: 34px; letter-spacing: 0.12em; line-height: 1; text-transform: uppercase; }
+
+#title .tt-nav { position: absolute; z-index: 3; left: var(--tt-gutter); top: 50%; transform: translateY(-50%); }
+#title:not(.tt-open) .tt-nav { transform: translate(-24px, -50%); }
+#title .tt-kicker { font-family: var(--tt-mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--tt-muted); margin: 0 0 12px 34px; min-height: 14px; }
+#title .tt-notice { margin: 14px 0 0 34px; font-size: 12.5px; color: #ff8a7a; max-width: 360px; }
+#title .tt-stops { position: relative; list-style: none; margin: 0; padding: 0 0 0 34px; display: flex; flex-direction: column; gap: 6px; }
+#title .tt-stops::before { content: ''; position: absolute; left: 6px; top: 16px; bottom: 16px; width: 3px; border-radius: 2px; background: var(--tt-rail); transform-origin: top; }
+#title.tt-open .tt-stops::before { animation: tt-rail 1.2s cubic-bezier(0.2, 0.8, 0.2, 1) both 0.2s; }
+@keyframes tt-rail { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+#title .tt-stops li { position: relative; }
+#title.tt-open .tt-stops.tt-anim li { animation: tt-arrive 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(0.35s + var(--i, 0) * 0.09s); }
+@keyframes tt-arrive { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+#title .tt-stop { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 0; background: none; border: 0; color: var(--tt-muted); font: inherit; text-align: left; cursor: pointer; transition: color 0.25s ease, transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1); }
+#title .tt-stop::before { content: ''; position: absolute; left: -34px; top: 15px; width: 9px; height: 9px; border-radius: 50%; background: var(--tt-ink); border: 2.5px solid var(--tt-rail); transition: border-color 0.25s, background 0.25s; }
+#title .tt-stop .lbl { font-family: var(--tt-display); font-weight: 800; font-size: clamp(26px, 3vw, 38px); line-height: 1; letter-spacing: 0.04em; text-transform: uppercase; }
+#title .tt-stop .sub { font-family: var(--tt-mono); font-size: 11px; color: var(--tt-faint); letter-spacing: 0.02em; max-height: 0; overflow: hidden; opacity: 0; transition: max-height 0.35s ease, opacity 0.35s ease; white-space: nowrap; }
+#title .tt-stop.small .lbl { font-size: 18px; letter-spacing: 0.08em; }
+#title .tt-stop.here, #title .tt-stop:focus-visible { color: var(--tt-fg); transform: translateX(8px); outline: none; }
+#title .tt-stop.here::before, #title .tt-stop:focus-visible::before { border-color: var(--tt-signal); background: var(--tt-signal); }
+#title .tt-stop.here .sub, #title .tt-stop.picked .sub { max-height: 20px; opacity: 1; }
+#title .tt-stop.picked { color: var(--tt-fg); }
+#title .tt-stop.picked::before { border-color: var(--tt-signal); background: var(--tt-fg); }
+#title .tt-stop.go .lbl { color: var(--tt-signal); }
+#title .tt-train { position: absolute; left: 4px; top: 0; width: 7px; height: 26px; border-radius: 4px; background: var(--tt-signal); box-shadow: 0 0 14px rgba(255, 178, 90, 0.7); transition: transform 0.55s cubic-bezier(0.45, 0, 0.2, 1); pointer-events: none; }
+
+#title .tt-reel { position: absolute; z-index: 3; left: var(--tt-gutter); bottom: calc(7.5vh + env(safe-area-inset-bottom, 0px) + 14px); display: flex; gap: 10px; align-items: flex-end; }
+#title .tt-reel button { background: none; border: 0; padding: 0; cursor: pointer; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; font: inherit; font-family: var(--tt-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tt-faint); }
+#title .tt-reel button.on { color: var(--tt-fg); }
+#title .tt-reel .bar { width: 64px; height: 2px; background: rgba(238, 242, 246, 0.16); border-radius: 1px; overflow: hidden; }
+#title .tt-reel .bar i { display: block; height: 100%; width: 0; background: var(--tt-signal); }
+
+#title .tt-sound { position: absolute; z-index: 3; right: max(clamp(20px, 5vw, 72px), env(safe-area-inset-right, 0px)); bottom: calc(7.5vh + env(safe-area-inset-bottom, 0px) + 12px); display: flex; align-items: center; gap: 10px; background: none; border: 0; padding: 4px 0; cursor: pointer; font: inherit; font-family: var(--tt-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tt-faint); }
+#title .tt-sound b { color: var(--tt-fg); font-weight: 600; }
+#title .tt-eq { display: inline-flex; gap: 2px; align-items: flex-end; height: 10px; }
+#title .tt-eq i { width: 2px; background: var(--tt-signal); animation: tt-eq 1.1s ease-in-out infinite; }
+#title .tt-eq i:nth-child(2) { animation-delay: -0.4s; }
+#title .tt-eq i:nth-child(3) { animation-delay: -0.7s; }
+#title .tt-sound[aria-pressed='false'] .tt-eq i { animation: none; height: 2px; background: var(--tt-faint); }
+@keyframes tt-eq { 0%, 100% { height: 3px; } 50% { height: 10px; } }
+#title button:focus-visible { outline: 2px solid var(--tt-signal); outline-offset: 4px; }
+#title .tt-stop:focus-visible { outline: none; }
+@media (prefers-reduced-motion: reduce) {
+  #title .tt-ui, #title .tt-stop, #title .tt-train, #title .tt-card { transition: none; }
+  #title .tt-stops li, #title .tt-stops::before, #title .tt-card h2, #title .tt-card p, #title .tt-eq i { animation: none !important; }
+}
+@media (max-width: 760px) {
+  #title .tt-scrim { background: linear-gradient(0deg, rgba(2, 5, 8, 0.9) 0%, rgba(2, 5, 8, 0.6) 45%, rgba(2, 5, 8, 0) 70%); }
+  #title .tt-nav { top: auto; bottom: calc(7.5vh + 54px); transform: none; }
+  #title:not(.tt-open) .tt-nav { transform: translateX(-24px); }
+  #title .tt-stop .lbl { font-size: 26px; }
+  #title .tt-stop .sub { white-space: normal; }
+  #title .tt-word { font-size: 26px; }
+  #title .tt-credit { display: none; }
+  #title .tt-reel .bar { width: 46px; }
+  #title .tt-reel, #title .tt-sound { bottom: calc(7.5vh + 16px); }
+}
