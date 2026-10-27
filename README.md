@@ -183,8 +183,9 @@ viaduct, pointing south-west and north), a high-speed station at each of 16 airp
   km are a tenth of a metro's.
 * **Money is kept in hundreds of yen** (`currencyScale: 100`), so every shared number still means
   what it does elsewhere: a high-speed car is 4.5M (¥450M), a day's staff at a station 20,000
-  (¥2M). Displays multiply by 100 and count in T for trillions. Fares: ¥1,500 × (1 + km ÷ 45),
-  straight line, one fare all day: Tokyo–Osaka ≈ ¥14,800. Values of time ¥1,500 an hour (private),
+  (¥2M). Displays multiply by 100 and count in T for trillions. Fares: ¥700 × (1 + km ÷ 20),
+  straight line, one fare all day, about the real fare plus limited-express charge: Tokyo–Odawara
+  ≈ ¥3,300, Tokyo–Osaka ≈ ¥14,700, a 15 km airport hop ≈ ¥1,200. Values of time ¥1,500 an hour (private),
   ¥2,200 (sightseeing), ¥4,500 (business). Event-goers and airport passengers now pay distance fares
   too (on every intertown map).
 * **Getting to the station** is a local train, a bus or a lift: 25 km/h over 1.3× the straight
@@ -195,6 +196,11 @@ viaduct, pointing south-west and north), a high-speed station at each of 16 airp
 * **Airports are where a lot of people come and go**: Haneda 216,000 passengers a day, Narita
   91,000, Kansai 71,000, Fukuoka, New Chitose, Itami, Chubu and nine more, each with a station
   under the terminal from day one. Their passengers come from the whole region (60 km decay).
+* **Journeys are between cities.** The survey has no trips inside a metro area (commuting), so a
+  line that stays around Tokyo carries airport passengers and little else: about 22,000 journeys a
+  day start and end near different stations of a Narita–Tokyo–Haneda line, against 200,000+ on a
+  Tokyo–Osaka one. After a day under 2% with every station within 150 km of each other, a toast
+  says so (once a session).
 * **Earthquakes** (`CityChaos.quakes`): about eight a year at Normal, mostly off the Pacific coast of
   Tohoku and Kanto, under the Tokai and Nankai coasts, in Kyushu and eastern Hokkaido. Every line
   within 60–160 km of the epicentre crawls at 30 km/h for 15–50 min while it is inspected (a red

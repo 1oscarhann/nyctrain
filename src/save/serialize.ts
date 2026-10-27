@@ -136,7 +136,10 @@ export function applySave(game: Game, save: SaveFile): { goals: GoalState; lastR
   game.time = g.time;
   game.sandbox = g.sandbox;
   game.growthPace = isGrowthPace(g.growthPace) ? g.growthPace : 'steady';
-  game.fares = normalizeFares(g.fares);
+  // Japan's base fare fell from ¥1,500 to ¥700 with a steeper distance rate (long trips cost the
+  // same): a save still on the old default moves with it.
+  const oldJapan = city().id === 'japan' && g.fares?.peak === 15 && (g.fares.offPeak ?? 15) === 15;
+  game.fares = normalizeFares(oldJapan ? { ...g.fares, peak: 7, offPeak: 7 } : g.fares);
   // Research first: route marks and the network's numbers follow it.
   game.research = sanitizeResearch(g.research);
   applyTech(game.research.done);

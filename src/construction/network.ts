@@ -817,13 +817,18 @@ function fixedTangent(net: Network, n: TrackNode): number {
 function leadLength(A: TrackNode, sign: number, tx: number, ty: number, prefRadius: number): number {
   const dist = Math.hypot(tx - A.x, ty - A.y);
   let L = Math.min(dist * 0.45, 200);
-  for (let i = 0; i < 3; i++) {
+  // A longer lead turns more sharply (the target swings round), so iterate to a fixed point, and
+  // aim 3% wide: a lead off a high-speed terminal that doubles back used to stop three steps in at
+  // 1,474 m, under the 1,500 m minimum.
+  for (let i = 0; i < 30; i++) {
     const lx = A.x + A.hx * sign * L, ly = A.y + A.hy * sign * L;
     const dx = tx - lx, dy = ty - ly;
     const dl = Math.hypot(dx, dy) || 1;
     const th = deflection(A.hx * sign, A.hy * sign, dx / dl, dy / dl);
-    const want = prefRadius * Math.tan(th / 2);
-    L = Math.max(TRACK.leadMinLength, Math.min(want, dist * 0.45));
+    const want = prefRadius * 1.03 * Math.tan(th / 2);
+    const next = Math.max(TRACK.leadMinLength, Math.min(want, dist * 0.45));
+    if (Math.abs(next - L) < 0.1) return next;
+    L = next;
   }
   return L;
 }

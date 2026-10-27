@@ -1967,12 +1967,15 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
     economy: {
       /** ¥5 trillion: about one Tokaido-length line through the mountains, with trains. */
       startingCash: 50e9,
-      /** Base fare ¥1,500, +1 fare per 45 km (straight line): Tokyo–Osaka ≈ ¥14,800. */
-      fareDefault: 15,
+      /**
+       * Base fare ¥700, +1 fare per 20 km (straight line), about the real fare plus limited-express
+       * charge: Tokyo–Odawara ≈ ¥3,300, Tokyo–Osaka ≈ ¥14,700, an airport hop of 15 km ≈ ¥1,200.
+       */
+      fareDefault: 7,
       fareMin: 0,
-      fareMax: 50,
+      fareMax: 25,
       fareStep: 0.5,
-      fareDistanceKm: 45,
+      fareDistanceKm: 20,
       fareFreeKm: 0,
       /** A big high-speed station's staff, ≈ ¥2M a day. */
       staffingPerStationDay: 20_000,
@@ -1981,7 +1984,7 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
       bondMax: 100e9,
     },
     /** One fare all day (no peak pricing on Japan's high-speed lines). */
-    fares: { peak: 15, offPeak: 15, lowIncome: 1 },
+    fares: { peak: 7, offPeak: 7, lowIncome: 1 },
     credit: {
       farebox: { x: [0.8, 1.4, 2.0, 2.8], y: [0, 50, 80, 100] },
       coverage: { x: [0, 0.5, 1.0, 1.5, 3.0], y: [0, 30, 55, 75, 100] },

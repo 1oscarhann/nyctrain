@@ -13,7 +13,7 @@ import { city, cityBalance } from '../cities';
 import { Game, newChaosSeed, type Selection } from '../core/game';
 import { toLocal, toLonLat } from '../core/geo';
 import { dayIndex, isNewMonth, monthKey, SECONDS_PER_DAY, timeOfDay, yearOf } from '../core/calendar';
-import { fmtCount, fmtDensity, fmtMoney, setUnits } from '../core/units';
+import { fmtCount, fmtDensity, fmtDistance, fmtMoney, setUnits } from '../core/units';
 import { defaultFares, fareSummary, type FarePolicy } from '../economy/fares';
 import { dayKpi } from '../economy/finance';
 import { yearsWithData } from '../economy/yearReview';
@@ -622,6 +622,7 @@ export class App implements AppContext {
     for (const ev of g.finance.events) this.toasts.show(ev.title, ev.body, ev.tone, 7000, () => this.openFinance('borrowing'));
     g.events.emit('money', undefined);
     this.checkGoals(r);
+    this.nudgeIntercity(r);
     // Station crowding: point at the worst overcrowded station that can still be upgraded.
     if (r.stationPeak) {
       // The worst: most people turned away, else the fullest.
@@ -673,6 +674,31 @@ export class App implements AppContext {
     g.pruneService(g.time);
     // Autosave at midnight with the state that came with the report (no round trip).
     this.save('autosave');
+  }
+
+  private intercityNudged = false;
+
+  /**
+   * The high-speed map's journeys are between cities (the national survey has no commuting inside a
+   * metro area), so a network that stays around one city carries little more than its airport
+   * passengers and looks broken. Say why, once a session, after a day of low ridership.
+   */
+  private nudgeIntercity(r: DayReport): void {
+    if (this.intercityNudged || !city().tractWords || !r.riders || r.transitShare > 0.02) return;
+    // Stations a route calls at (the airports' stations stand all over the map from day one).
+    const served = new Set(this.game.routes.list().flatMap((rt) => rt.stops));
+    const pts = [...this.game.network.stations.values()].filter((s) => s.status === 'built' && served.has(s.id)).map((s) => this.game.network.stationPos(s));
+    if (pts.length < 2) return;
+    let span = 0;
+    for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) span = Math.max(span, Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y));
+    if (span > 150_000) return;
+    this.intercityNudged = true;
+    this.toasts.show(
+      'Your stations are all in one region',
+      `They span ${fmtDistance(span)}. Journeys on this map are between cities, mostly 100 to 600 km: trips inside one metro area (commuting) aren't on it, so a line around one city carries little more than its airport passengers. Run it on to the next city: a Tokyo–Osaka line carries 200,000+ a day.`,
+      'amber',
+      20000,
+    );
   }
 
   // ------------------------------------------------------------------ Living City (plumbing; the UI reads these)
