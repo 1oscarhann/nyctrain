@@ -249,13 +249,13 @@ export function tractValueCaptureLine(tg: TractGrowth, pace: GrowthPace, nextClo
 // ------------------------------------------------------------------ station panel and finances
 /** Station panel: "$0.4M/month · 6 tracts" (London: "… · 2 areas"). */
 export function stationValueCaptureText(levy: number, tracts: number): string {
-  const word = city().id === 'london' ? (tracts === 1 ? 'area' : 'areas') : tracts === 1 ? 'tract' : 'tracts';
+  const word = city().id !== 'nyc' ? (tracts === 1 ? 'area' : 'areas') : tracts === 1 ? 'tract' : 'tracts';
   return `${fmtMoney(levy)}/month · ${tracts} ${word}`;
 }
 
 /** Its tooltip. */
 export function stationValueCaptureTip(): string {
-  return `${captureWords()} from the ${city().id === 'london' ? 'areas' : 'tracts'} nearest this station, paid at each month end`;
+  return `${captureWords()} from the ${city().id !== 'nyc' ? 'areas' : 'tracts'} nearest this station, paid at each month end`;
 }
 
 /** The finance panel's value-capture heading: "Value capture (Transit Improvement District)"; London names the business rate supplement district. */
@@ -266,7 +266,7 @@ export function valueCaptureHeading(): string {
 /** The finance panel's value-capture section text. */
 export function valueCaptureSection(v: GrowthView | null, lastMonth: number | null, pace: GrowthPace): { body: string; last: string } {
   const n = v ? v.district.reduce((s, x) => s + x, 0) : null;
-  const zones = city().id === 'london' ? 'neighbourhood areas' : 'tracts';
+  const zones = city().id !== 'nyc' ? 'neighbourhood areas' : 'tracts';
   const where = n === null ? `Tracts within ${districtWord()} of a served station` : `${n.toLocaleString()} ${zones} within ${districtWord()} of a served station`;
   const body = `${where}. ${captureWords()} from rising land values is paid to the authority at each month end.`;
   const proj = pace === 'off' ? 'city growth is off' : v ? `projected this month: ${fmtMoney(v.projectedValueCapture)}` : 'projected this month: …';

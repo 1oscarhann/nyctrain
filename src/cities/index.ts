@@ -4,17 +4,18 @@
  * New York defaults in balance.ts, applies the city's CITY_BALANCE overrides, and sets the
  * map projection origin and the currency symbol.
  */
-import { CITY_BALANCE, COMMUTERS, CREDIT, ECONOMY, GOALS, GROWTH, MAP, SCHOOLS, TRACK, VALUE_CAPTURE, type CityBalance, type CityId, type ZoneRule } from '../balance';
+import { CITY_BALANCE, COMMUTERS, CREDIT, ECONOMY, GOALS, GROWTH, MAP, SCHOOLS, STATION, TRACK, VALUE_CAPTURE, type CityBalance, type CityId, type ZoneRule } from '../balance';
 import { setOrigin } from '../core/geo';
 import { setCurrency } from '../core/units';
 import { LONDON } from './london';
 import { NYC } from './nyc';
 import { SOUTHEAST } from './southeast';
+import { BIRMINGHAM, BRISTOL, LEEDS, MANCHESTER } from './ukMetros';
 import type { CityConfig } from './types';
 
 export type { CityConfig, CityId };
 
-export const CITIES: Record<CityId, CityConfig> = { nyc: NYC, london: LONDON, southeast: SOUTHEAST };
+export const CITIES: Record<CityId, CityConfig> = { nyc: NYC, london: LONDON, southeast: SOUTHEAST, manchester: MANCHESTER, birmingham: BIRMINGHAM, leeds: LEEDS, bristol: BRISTOL };
 export const CITY_IDS = Object.keys(CITIES) as CityId[];
 
 // New York's values as written in balance.ts, captured before any city is applied.
@@ -27,6 +28,7 @@ const DEFAULTS = {
   GROWTH: structuredClone(GROWTH),
   VALUE_CAPTURE: structuredClone(VALUE_CAPTURE),
   TRACK: structuredClone(TRACK),
+  STATION: structuredClone(STATION),
   SCHOOLS: structuredClone(SCHOOLS),
 };
 
@@ -46,6 +48,7 @@ export function applyCity(id: CityId): CityConfig {
   Object.assign(GROWTH, structuredClone(DEFAULTS.GROWTH), structuredClone(b.growth));
   Object.assign(VALUE_CAPTURE, structuredClone(DEFAULTS.VALUE_CAPTURE), structuredClone(b.valueCapture));
   Object.assign(TRACK, structuredClone(DEFAULTS.TRACK), structuredClone(b.track ?? {}));
+  Object.assign(STATION, structuredClone(DEFAULTS.STATION), structuredClone(b.station ?? {}));
   const { terms: _terms, ...schools } = b.schools ?? {};
   Object.assign(SCHOOLS, structuredClone(DEFAULTS.SCHOOLS), structuredClone(schools));
   setOrigin(b.origin[0], b.origin[1]);

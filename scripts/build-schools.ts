@@ -3,7 +3,7 @@
  *
  *   npm run data:schools
  *
- * England (London, South East): the DfE school census, "Schools, pupils and their characteristics"
+ * England (London, the South East, Manchester, Birmingham, Leeds, Bristol): the DfE school census, "Schools, pupils and their characteristics"
  * 2025/26, school-level data (Explore Education Statistics): every state-funded and independent
  * school with its name, type, phase, postcode and pupils by age. Postcodes are placed with the ONS
  * Postcode Directory (latest, ONS ArcGIS), the same geography service the commuting pipeline uses.
@@ -25,6 +25,8 @@ import { createWriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SchoolKind, SchoolRecord, SchoolsFile } from '../src/data/schools';
+import { UK_METRO_IDS, UK_METROS } from '../src/cities/ukMetroRegions';
+import { CITY_BALANCE, type CityId } from '../src/balance';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CACHE = join(ROOT, 'scripts', '.cache', 'schools');
@@ -111,6 +113,9 @@ function engKind(s: EngSchool): SchoolKind {
   return 'primary';
 }
 
+/** England's regions (as the census names them) that hold a map. */
+const REGIONS = ['London', 'South East', 'North West', 'West Midlands', 'Yorkshire and The Humber', 'South West'];
+
 async function readCensus(path: string): Promise<Map<string, EngSchool>> {
   const rl = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
   let header: string[] | null = null;
@@ -127,12 +132,12 @@ async function readCensus(path: string): Promise<Map<string, EngSchool>> {
     }
     rows++;
     if (rows % 2_000_000 === 0) log(`  … ${(rows / 1e6).toFixed(0)}M rows, ${schools.size} schools`);
-    // Cheap pre-filter before the full parse: only the two regions.
-    if (!line.includes('"London"') && !line.includes('"South East"')) continue;
+    // Cheap pre-filter before the full parse: only the regions with a map.
+    if (!REGIONS.some((r) => line.includes(`"${r}"`) || line.includes(`,${r},`))) continue;
     const c = parseCsvLine(line);
     if (c.length !== header.length || c[ix.geographic_level] !== 'School') continue;
     const region = c[ix.region_name];
-    if (region !== 'London' && region !== 'South East') continue;
+    if (!REGIONS.includes(region)) continue;
     const topic = c[ix.breakdown_topic];
     const isTotal = topic === 'Total' && c[ix.sex] === 'Total' && c[ix.attendance_pattern] === 'Total';
     const isAge = topic === 'Age' && (c[ix.sex] === 'Female' || c[ix.sex] === 'Male') && (c[ix.attendance_pattern] === 'Full-time' || c[ix.attendance_pattern] === 'Part-time');
@@ -167,7 +172,7 @@ async function readCensus(path: string): Promise<Map<string, EngSchool>> {
       }
     }
   }
-  log(`  ${rows.toLocaleString('en-GB')} census rows, ${schools.size} schools in London and the South East`);
+  log(`  ${rows.toLocaleString('en-GB')} census rows, ${schools.size} schools in ${REGIONS.join(', ')}`);
   return schools;
 }
 
@@ -264,7 +269,7 @@ async function main() {
   const pcs = [...new Set([...schools.values()].map((s) => s.postcode).filter(Boolean))];
   log('3/3 Placing schools by postcode (ONS Postcode Directory)…');
   const geo = await geocode(pcs);
-  const recs: (SchoolRecord & { region: string })[] = [];
+  const recs: (SchoolRecord & { region: string; la: string })[] = [];
   let missing = 0;
   for (const s of schools.values()) {
     const g = geo.get(s.postcode);
@@ -275,12 +280,27 @@ async function main() {
     // Age range from the pupils by age (for the tooltip: "ages 4–11").
     const ages = s.ages.map((n, a) => (n > 0 ? a : -1)).filter((a) => a >= 0);
     const range = ages.length ? `${Math.max(2, ages[0])}–${ages[ages.length - 1]}` : '';
-    recs.push({ n: s.name, lon: +g.lon.toFixed(5), lat: +g.lat.toFixed(5), k: engKind(s), p: s.pupils, s: s.secondary, t: s.type, a: range, region: s.region });
+    recs.push({ n: s.name, lon: +g.lon.toFixed(5), lat: +g.lat.toFixed(5), k: engKind(s), p: s.pupils, s: s.secondary, t: s.type, a: range, region: s.region, la: s.la });
   }
   log(`  ${recs.length} schools placed, ${missing} postcodes not found`);
-  const strip = ({ region: _r, ...rest }: SchoolRecord & { region: string }): SchoolRecord => rest;
-  write('london', { version: 1, year: '2025/26', source: ENGLAND_ATTR, schools: recs.filter((r) => r.region === 'London').map(strip) });
-  write('southeast', { version: 1, year: '2025/26', source: ENGLAND_ATTR, schools: recs.map(strip) });
+  const strip = ({ region: _r, la: _l, ...rest }: SchoolRecord & { region: string; la: string }): SchoolRecord => rest;
+  // A few schools are counted under an authority but sit far away (a placement school on the
+  // coast): keep each map's schools inside its bounds.
+  const inMap = (id: CityId) => {
+    const [w, so, e, n] = CITY_BALANCE[id].map.bounds;
+    return (r: SchoolRecord) => r.lon > w && r.lon < e && r.lat > so && r.lat < n;
+  };
+  write('london', { version: 1, year: '2025/26', source: ENGLAND_ATTR, schools: recs.filter((r) => r.region === 'London').filter(inMap('london')).map(strip) });
+  write('southeast', { version: 1, year: '2025/26', source: ENGLAND_ATTR, schools: recs.filter((r) => r.region === 'London' || r.region === 'South East').map(strip) });
+  // The city-region maps: their local authorities (by the census's LA names).
+  for (const id of UK_METRO_IDS) {
+    const las = new Set(UK_METROS[id].regions.flatMap((r) => [r.name, r.onsName ?? r.name]));
+    const mine = recs.filter((r) => las.has(r.la));
+    const found = new Set(mine.map((r) => r.la));
+    const missingLa = UK_METROS[id].regions.filter((r) => !found.has(r.name) && !found.has(r.onsName ?? r.name)).map((r) => r.name);
+    if (missingLa.length) fail(`${id}: no schools found for ${missingLa.join(', ')} (LA names changed?)`);
+    write(id, { version: 1, year: '2025/26', source: ENGLAND_ATTR, schools: mine.filter(inMap(id)).map(strip) });
+  }
 }
 
 main().catch((e) => {

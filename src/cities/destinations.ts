@@ -55,6 +55,10 @@ export const AIRPORTS: Record<CityId, Airport[]> = {
     { name: 'LaGuardia Airport', lon: -73.874, lat: 40.7769, perDay: 90_000, stub: { a: [-73.8800, 40.7738], b: [-73.8700, 40.7752], level: 'elevated', station: 'LaGuardia Airport' } },
   ],
   london: [HEATHROW, CITY_AIRPORT],
+  manchester: [{ name: 'Manchester Airport', lon: -2.2727, lat: 53.365, perDay: 77_000, stub: { a: [-2.2778, 53.3656], b: [-2.2688, 53.3649], level: 'elevated', station: 'Manchester Airport' } }],
+  birmingham: [{ name: 'Birmingham Airport', lon: -1.748, lat: 52.4539, perDay: 31_000, stub: { a: [-1.7528, 52.4532], b: [-1.7438, 52.4541], level: 'elevated', station: 'Birmingham Airport' } }],
+  leeds: [{ name: 'Leeds Bradford Airport', lon: -1.6606, lat: 53.8659, perDay: 11_000, stub: { a: [-1.6652, 53.8668], b: [-1.6562, 53.8656], level: 'at-grade', station: 'Leeds Bradford Airport' } }],
+  bristol: [{ name: 'Bristol Airport', lon: -2.7191, lat: 51.3827, perDay: 27_000, stub: { a: [-2.7237, 51.3832], b: [-2.7148, 51.3824], level: 'at-grade', station: 'Bristol Airport' } }],
   southeast: [HEATHROW, CITY_AIRPORT, { name: 'Gatwick Airport', lon: -0.1821, lat: 51.1537, perDay: 118_000, stub: { a: [-0.1606, 51.1615], b: [-0.1616, 51.1515], level: 'at-grade', station: 'Gatwick Airport' } }, { name: 'Southampton Airport', lon: -1.3568, lat: 50.9503, perDay: 2_000, stub: { a: [-1.3628, 50.9555], b: [-1.3602, 50.9457], level: 'at-grade', station: 'Southampton Airport Parkway' } }],
 };
 
@@ -80,6 +84,33 @@ export const CAMPUSES: Record<CityId, Campus[]> = {
     { name: 'Pace University', lon: -74.0049, lat: 40.7111, students: 8_000 },
   ],
   london: LONDON_UNIS,
+  manchester: [
+    { name: 'University of Manchester', lon: -2.2339, lat: 53.4668, students: 44_000 },
+    { name: 'Manchester Metropolitan University', lon: -2.2405, lat: 53.4705, students: 40_000 },
+    { name: 'University of Salford', lon: -2.2705, lat: 53.4862, students: 25_000 },
+    { name: 'University of Bolton', lon: -2.4372, lat: 53.5732, students: 8_000 },
+  ],
+  birmingham: [
+    { name: 'University of Birmingham', lon: -1.93, lat: 52.4508, students: 38_000 },
+    { name: 'Birmingham City University', lon: -1.8835, lat: 52.4835, students: 30_000 },
+    { name: 'Aston University', lon: -1.888, lat: 52.4865, students: 17_000 },
+    { name: 'Coventry University', lon: -1.4997, lat: 52.4053, students: 38_000 },
+    { name: 'University of Warwick', lon: -1.5615, lat: 52.3793, students: 29_000 },
+    { name: 'University of Wolverhampton', lon: -2.1276, lat: 52.588, students: 22_000 },
+  ],
+  leeds: [
+    { name: 'University of Leeds', lon: -1.5551, lat: 53.8067, students: 38_000 },
+    { name: 'Leeds Beckett University', lon: -1.5492, lat: 53.803, students: 24_000 },
+    { name: 'University of Huddersfield', lon: -1.778, lat: 53.643, students: 19_000 },
+    { name: 'University of Bradford', lon: -1.764, lat: 53.792, students: 10_000 },
+    { name: 'Leeds Trinity University', lon: -1.648, lat: 53.846, students: 9_000 },
+  ],
+  bristol: [
+    { name: 'University of Bristol', lon: -2.6029, lat: 51.4584, students: 30_000 },
+    { name: 'UWE Bristol', lon: -2.548, lat: 51.5, students: 30_000 },
+    { name: 'University of Bath', lon: -2.328, lat: 51.378, students: 20_000 },
+    { name: 'Bath Spa University', lon: -2.44, lat: 51.373, students: 9_000 },
+  ],
   southeast: [
     ...LONDON_UNIS,
     { name: 'University of Oxford', lon: -1.2544, lat: 51.7548, students: 26_000 },

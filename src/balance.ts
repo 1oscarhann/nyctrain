@@ -1124,7 +1124,7 @@ const LONDON_CHAOS: CityChaos = {
 
 // ---------------------------------------------------------------------------
 // Cities
-export type CityId = 'nyc' | 'london' | 'southeast';
+export type CityId = 'nyc' | 'london' | 'southeast' | 'manchester' | 'birmingham' | 'leeds' | 'bristol';
 type LL = [number, number];
 
 /** Where a job counts as being in the CBD (parking penalty). */
@@ -1142,7 +1142,7 @@ export interface CityBalance {
   coreRegions: string[];
   cbd: ZoneRule;
   commuters: Partial<Pick<typeof COMMUTERS, 'driveSpeedCore' | 'driveSpeedOther' | 'driveLongAfter' | 'driveSpeedLong' | 'maxAccessWalk' | 'parkingCbdTime' | 'parkingCbdCost' | 'parkingOtherTime' | 'valueOfTime' | 'driveCostPerKm' | 'modeConstant'>>;
-  economy: Partial<Pick<typeof ECONOMY, 'startingCash' | 'fareDefault' | 'fareMin' | 'fareMax' | 'fareStep' | 'fareDistanceKm' | 'fareFreeKm'>>;
+  economy: Partial<Pick<typeof ECONOMY, 'startingCash' | 'fareDefault' | 'fareMin' | 'fareMax' | 'fareStep' | 'fareDistanceKm' | 'fareFreeKm' | 'staffingPerStationDay'>>;
   /**
    * The fare policy of a new game (v2): peak (FARES.peakPeriods) and off-peak fares, and the
    * low-income multiplier for FARES.lowIncomeBand (1 = full fare). `ECONOMY.fareDefault` stays the
@@ -1159,7 +1159,9 @@ export interface CityBalance {
   /** Event venues and kinds, and the climate (CHAOS_BY_CITY). */
   chaos: CityChaos;
   /** Track numbers that differ from TRACK (intertown: wider main-line curves). */
-  track?: Partial<Pick<typeof TRACK, 'filletMaxTangent'>>;
+  track?: Partial<Pick<typeof TRACK, 'filletMaxTangent' | 'costPerM'>>;
+  /** Station numbers that differ from STATION (cheaper building outside London). */
+  station?: Partial<Pick<typeof STATION, 'costByLevel'>>;
   /** The school run: values that differ from SCHOOLS, and the term calendar ('uk' or 'us'). */
   schools?: Partial<Pick<typeof SCHOOLS, 'originDecay' | 'childFare'>> & { terms?: 'uk' | 'us' };
   /**
@@ -1217,8 +1219,112 @@ const SOUTHEAST_CHAOS: CityChaos = {
   climate: LONDON_CHAOS.climate,
 };
 
+
+// The English city regions (src/cities/ukMetros.ts): their stadiums and arenas, named by place.
+const FOOTBALL = (venue: string, label: string, att: [number, number], chance = 0.08): EventKindDef => ({
+  venue, label, months: FOOTBALL_MONTHS, weekdays: MIDWEEK, chance, attendance: att,
+  starts: [[19.75, 0.6], [20, 0.4]], duration: 1.9 * HOUR, arrive: [-90 * MIN, 5 * MIN], leave: [-5 * MIN, 40 * MIN],
+});
+const ARENA = (venue: string, label: string, att: [number, number], chance = 0.25): EventKindDef => ({
+  venue, label, months: ALL_MONTHS, chance, attendance: att,
+  starts: [[20, 0.7], [19.5, 0.3]], duration: 3 * HOUR, arrive: [-75 * MIN, 30 * MIN], leave: [-10 * MIN, 30 * MIN],
+});
+const NORTH_CLIMATE: ClimateDef = {
+  snow: [0.05, 0.05, 0.02, 0, 0, 0, 0, 0, 0, 0, 0.01, 0.03],
+  rain: [0.19, 0.16, 0.16, 0.13, 0.13, 0.12, 0.13, 0.14, 0.14, 0.18, 0.2, 0.19],
+  heat: [0, 0, 0, 0, 0, 0.005, 0.02, 0.015, 0, 0, 0, 0],
+};
+
+const MANCHESTER_CHAOS: CityChaos = {
+  venues: [
+    { key: 'old-trafford', name: 'Old Trafford stadium', lon: -2.2913, lat: 53.4631, region: 'Trafford', parkingTime: 35 * MIN, parkingCost: 15 },
+    { key: 'east-manchester', name: 'East Manchester stadium', lon: -2.2004, lat: 53.4831, region: 'Manchester', parkingTime: 35 * MIN, parkingCost: 15 },
+    { key: 'victoria-arena', name: 'Victoria arena', lon: -2.2441, lat: 53.4879, region: 'Manchester', parkingTime: 25 * MIN, parkingCost: 15 },
+    { key: 'ot-cricket', name: 'Old Trafford cricket ground', lon: -2.2868, lat: 53.4566, region: 'Trafford', parkingTime: 30 * MIN, parkingCost: 15 },
+  ],
+  kinds: [
+    FOOTBALL('old-trafford', 'Old Trafford football', [60_000, 74_000], 0.1),
+    FOOTBALL('east-manchester', 'East Manchester football', [45_000, 53_000], 0.1),
+    ARENA('victoria-arena', 'Victoria arena concert', [14_000, 21_000], 0.3),
+    { venue: 'ot-cricket', label: 'Old Trafford test match', months: [6], window: [6, 23, 6, 27], chance: 1, attendance: [18_000, 26_000],
+      starts: [[11, 1]], duration: 7.5 * HOUR, arrive: [-60 * MIN, 2 * HOUR], leave: [-3 * HOUR, 30 * MIN] },
+  ],
+  climate: NORTH_CLIMATE,
+};
+
+const BIRMINGHAM_CHAOS: CityChaos = {
+  venues: [
+    { key: 'aston', name: 'Aston stadium', lon: -1.8848, lat: 52.5092, region: 'Birmingham', parkingTime: 35 * MIN, parkingCost: 12 },
+    { key: 'bordesley', name: 'Bordesley stadium', lon: -1.8682, lat: 52.4757, region: 'Birmingham', parkingTime: 30 * MIN, parkingCost: 12 },
+    { key: 'edgbaston', name: 'Edgbaston cricket ground', lon: -1.9026, lat: 52.4559, region: 'Birmingham', parkingTime: 30 * MIN, parkingCost: 15 },
+    { key: 'broad-street-arena', name: 'Broad Street arena', lon: -1.9147, lat: 52.4794, region: 'Birmingham', parkingTime: 25 * MIN, parkingCost: 15 },
+    { key: 'bickenhill-arena', name: 'Bickenhill exhibition arena', lon: -1.7238, lat: 52.4532, region: 'Solihull', parkingTime: 30 * MIN, parkingCost: 18 },
+    { key: 'molineux', name: 'Molineux stadium', lon: -2.1304, lat: 52.5903, region: 'Wolverhampton', parkingTime: 30 * MIN, parkingCost: 10 },
+  ],
+  kinds: [
+    FOOTBALL('aston', 'Aston football', [36_000, 42_600], 0.1),
+    FOOTBALL('bordesley', 'Bordesley football', [20_000, 29_400]),
+    FOOTBALL('molineux', 'Wolverhampton football', [28_000, 31_700]),
+    ARENA('broad-street-arena', 'Broad Street arena concert', [10_000, 15_800], 0.2),
+    ARENA('bickenhill-arena', 'Bickenhill arena concert', [12_000, 15_600], 0.25),
+    { venue: 'edgbaston', label: 'Edgbaston test match', months: [6], window: [6, 2, 6, 6], chance: 1, attendance: [20_000, 25_000],
+      starts: [[11, 1]], duration: 7.5 * HOUR, arrive: [-60 * MIN, 2 * HOUR], leave: [-3 * HOUR, 30 * MIN] },
+  ],
+  climate: NORTH_CLIMATE,
+};
+
+const LEEDS_CHAOS: CityChaos = {
+  venues: [
+    { key: 'elland-road', name: 'Elland Road stadium', lon: -1.5721, lat: 53.7778, region: 'Leeds', parkingTime: 35 * MIN, parkingCost: 12 },
+    { key: 'headingley', name: 'Headingley stadium', lon: -1.5822, lat: 53.8175, region: 'Leeds', parkingTime: 30 * MIN, parkingCost: 12 },
+    { key: 'headingley-cricket', name: 'Headingley cricket ground', lon: -1.5818, lat: 53.8167, region: 'Leeds', parkingTime: 30 * MIN, parkingCost: 12 },
+    { key: 'leeds-arena', name: 'Leeds city arena', lon: -1.5434, lat: 53.8034, region: 'Leeds', parkingTime: 25 * MIN, parkingCost: 12 },
+    { key: 'huddersfield', name: 'Huddersfield stadium', lon: -1.768, lat: 53.6543, region: 'Kirklees', parkingTime: 25 * MIN, parkingCost: 8 },
+    { key: 'valley-parade', name: 'Valley Parade stadium', lon: -1.7589, lat: 53.804, region: 'Bradford', parkingTime: 25 * MIN, parkingCost: 8 },
+  ],
+  kinds: [
+    FOOTBALL('elland-road', 'Elland Road football', [33_000, 37_600], 0.1),
+    FOOTBALL('huddersfield', 'Huddersfield football', [15_000, 24_000]),
+    FOOTBALL('valley-parade', 'Bradford football', [16_000, 25_000]),
+    ARENA('leeds-arena', 'Leeds arena concert', [10_000, 13_800], 0.3),
+    { venue: 'headingley', label: 'Headingley rugby', months: [1, 2, 3, 4, 5, 6, 7, 8], weekdays: [4, 5], chance: 0.1, attendance: [14_000, 21_000],
+      starts: [[19.75, 1]], duration: 2 * HOUR, arrive: [-90 * MIN, 5 * MIN], leave: [-10 * MIN, 35 * MIN] },
+    { venue: 'headingley-cricket', label: 'Headingley test match', months: [6], window: [6, 7, 6, 11], chance: 1, attendance: [15_000, 18_350],
+      starts: [[11, 1]], duration: 7.5 * HOUR, arrive: [-60 * MIN, 2 * HOUR], leave: [-3 * HOUR, 30 * MIN] },
+  ],
+  climate: NORTH_CLIMATE,
+};
+
+const BRISTOL_CHAOS: CityChaos = {
+  venues: [
+    { key: 'ashton-gate', name: 'Ashton Gate stadium', lon: -2.6205, lat: 51.4401, region: 'Bristol', parkingTime: 30 * MIN, parkingCost: 12 },
+    { key: 'horfield', name: 'Horfield stadium', lon: -2.5832, lat: 51.4862, region: 'Bristol', parkingTime: 25 * MIN, parkingCost: 10 },
+    { key: 'bath-rec', name: 'Bath riverside rugby ground', lon: -2.3553, lat: 51.3822, region: 'Bath and North East Somerset', parkingTime: 35 * MIN, parkingCost: 15 },
+    { key: 'clifton-downs', name: 'Clifton Downs', lon: -2.6206, lat: 51.4728, region: 'Bristol', parkingTime: 30 * MIN, parkingCost: 15 },
+  ],
+  kinds: [
+    FOOTBALL('ashton-gate', 'Ashton Gate football', [18_000, 27_000], 0.1),
+    FOOTBALL('horfield', 'Horfield football', [8_000, 10_000]),
+    { venue: 'ashton-gate', label: 'Ashton Gate rugby', months: [0, 1, 2, 3, 8, 9, 10, 11], weekdays: [5], chance: 0.15, attendance: [15_000, 27_000],
+      starts: [[19.75, 1]], duration: 2 * HOUR, arrive: [-90 * MIN, 5 * MIN], leave: [-10 * MIN, 35 * MIN] },
+    { venue: 'bath-rec', label: 'Bath rugby', months: [0, 1, 2, 3, 8, 9, 10, 11], weekdays: [5], chance: 0.15, attendance: [12_000, 14_500],
+      starts: [[19.75, 1]], duration: 2 * HOUR, arrive: [-90 * MIN, 5 * MIN], leave: [-10 * MIN, 35 * MIN] },
+    { venue: 'clifton-downs', label: 'Downs summer concert', months: [5, 6], chance: 0.08, attendance: [20_000, 30_000],
+      starts: [[18, 1]], duration: 4.5 * HOUR, arrive: [-3 * HOUR, 60 * MIN], leave: [-30 * MIN, 40 * MIN] },
+  ],
+  climate: { ...LONDON_CHAOS.climate, rain: [0.17, 0.14, 0.14, 0.12, 0.12, 0.11, 0.11, 0.13, 0.13, 0.17, 0.18, 0.17] },
+};
+
 /** Each city's events and weather (the shared chaos tunables are CHAOS, WEATHER and EVENTS above). */
-export const CHAOS_BY_CITY: Record<CityId, CityChaos> = { nyc: NYC_CHAOS, london: LONDON_CHAOS, southeast: SOUTHEAST_CHAOS };
+export const CHAOS_BY_CITY: Record<CityId, CityChaos> = {
+  nyc: NYC_CHAOS,
+  london: LONDON_CHAOS,
+  southeast: SOUTHEAST_CHAOS,
+  manchester: MANCHESTER_CHAOS,
+  birmingham: BIRMINGHAM_CHAOS,
+  leeds: LEEDS_CHAOS,
+  bristol: BRISTOL_CHAOS,
+};
 
 /** Central London: roughly the congestion-charge zone, inside the inner ring road (London and the South East). */
 const CITY_BALANCE_LONDON_CBD: ZoneRule = {
@@ -1229,6 +1335,74 @@ const CITY_BALANCE_LONDON_CBD: ZoneRule = {
         [-0.114, 51.49], [-0.127, 51.4875], [-0.144, 51.496], [-0.153, 51.501], [-0.1525, 51.507], [-0.1586, 51.5131],
   ],
 };
+
+/**
+ * The English city regions (Manchester, Birmingham, Leeds, Bristol): metro maps like London's, with
+ * UK fares, values of time and taxes, but cheaper central parking, faster roads, more car owners
+ * (a smaller pull away from driving) and a smaller budget for a smaller city.
+ */
+const UK_BUILD_COST = 0.6;
+function scaleLevels(v: Record<TrackLevel, number>, k: number): Record<TrackLevel, number> {
+  return Object.fromEntries(Object.entries(v).map(([l, c]) => [l, Math.round(c * k)])) as Record<TrackLevel, number>;
+}
+
+function ukMetroBalance(o: Pick<CityBalance, 'origin' | 'map' | 'titleCamera' | 'coreRegions' | 'cbd' | 'goals' | 'chaos'> & { valuePerResident: number; startingCash?: number; small?: boolean }): CityBalance {
+  return {
+    origin: o.origin,
+    map: o.map,
+    titleCamera: o.titleCamera,
+    coreRegions: o.coreRegions,
+    cbd: o.cbd,
+    commuters: {
+      driveSpeedCore: 16 * KMH,
+      driveSpeedOther: 25 * KMH,
+      /** Beyond 10 km of road, the motorways and A roads at about 45 km/h door to door (peak). */
+      driveLongAfter: 10_000,
+      driveSpeedLong: 45 * KMH,
+      parkingCbdTime: 15 * MIN,
+      /** A day's city-centre parking (no congestion charge outside London). */
+      parkingCbdCost: 10,
+      parkingOtherTime: 4 * MIN,
+      valueOfTime: [8, 13, 22],
+      driveCostPerKm: 0.25,
+      /** Car ownership is higher than in London: a smaller pull away from driving. */
+      modeConstant: { walk: 0, drive: 20, transit: 0 },
+    },
+    /**
+     * Zonal fares (like the regional trams): +1 fare per 12 km beyond the first 4, so a 16 km trip
+     * pays two. Unstaffed-style stations cost half London's to run.
+     */
+    economy: { startingCash: o.startingCash ?? 3.5e9, fareDefault: 2.5, fareMin: 0, fareMax: 5, fareStep: 0.1, fareDistanceKm: 12, fareFreeKm: 4, staffingPerStationDay: 4000 },
+    /** Building is cheaper outside London (land, utilities, contractors): track and stations at 60%. */
+    track: { costPerM: scaleLevels(TRACK.costPerM, UK_BUILD_COST) },
+    station: { costByLevel: scaleLevels(STATION.costByLevel, UK_BUILD_COST) },
+    fares: { peak: 2.5, offPeak: 2.2, lowIncome: 1 },
+    /** London's anchors: these networks carry fewer riders per pound than New York's, as London's do. */
+    credit: {
+      farebox: { x: [0.3, 0.6, 0.9, 1.2], y: [0, 50, 80, 100] },
+      coverage: { x: [-0.5, 0, 0.5, 1.0, 2.5], y: [0, 30, 55, 75, 100] },
+    },
+    /** Rider goals in proportion: these maps have a third of London's commuters (Bristol an eighth). */
+    goals: {
+      riderMilestones: o.small ? [50_000, 100_000, 200_000, 300_000] : [100_000, 200_000, 400_000, 600_000],
+      clockworkMinRiders: o.small ? 50_000 : 100_000,
+      ratingGoalMinDebt: o.small ? 1e9 : 1.5e9,
+      ...o.goals,
+    },
+    chaos: o.chaos,
+    schools: { childFare: 0.5, terms: 'uk', originDecay: 3500 },
+    /** 2010s growth outside London: residents ≈ +0.6%/yr, jobs a little faster in the core cities. */
+    growth: { cityGrowthPerYear: 0.008 },
+    valueCapture: {
+      valuePerResident: o.valuePerResident,
+      valuePerJob: 75_000,
+      /** Council tax bands are lower than London's but so are home values: a higher effective rate. */
+      taxRateHomes: 0.004,
+      taxRateJobs: 0.025,
+      captureShare: 0.14,
+    },
+  };
+}
 
 export const CITY_BALANCE: Record<CityId, CityBalance> = {
   nyc: {
@@ -1411,4 +1585,50 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
     /** Victoria: a 14-car terminal platform, elevated so a new line can cross the river straight away (and ramp down beyond). */
     hubs: [{ name: 'Victoria', from: [-0.1441, 51.4955], to: [-0.1466, 51.4905], level: 'elevated', cls: 'heavy', cars: 14, at: 190 }],
   },
+  manchester: ukMetroBalance({
+    origin: [-2.2446, 53.4794], // Albert Square, by the Town Hall
+    map: { startCenter: [-2.245, 53.478], startZoom: 12, bounds: [-2.95, 53.25, -1.75, 53.75] },
+    titleCamera: { center: [-2.2475, 53.4775], zoom: 14.6, bearing: -20 }, // Deansgate and the city centre
+    coreRegions: ['Manchester', 'Salford'],
+    /** Inside the inner relief road (Mancunian Way, Trinity Way, Great Ancoats Street). */
+    cbd: { kind: 'polygon', ring: [[-2.2605, 53.4855], [-2.2475, 53.4895], [-2.2345, 53.4875], [-2.2275, 53.4835], [-2.2265, 53.4755], [-2.233, 53.4705], [-2.2455, 53.4695], [-2.2565, 53.4725], [-2.2625, 53.4795]] },
+    goals: { tripMinutes: 30, tripFrom: [-2.2309, 53.4774], tripTo: [-2.2727, 53.365], valueCaptureMonth: 2e6 },
+    chaos: CHAOS_BY_CITY.manchester,
+    valuePerResident: 230_000,
+  }),
+  birmingham: ukMetroBalance({
+    origin: [-1.9035, 52.4797], // Victoria Square
+    map: { startCenter: [-1.9, 52.48], startZoom: 12, bounds: [-2.4, 52.25, -1.3, 52.72] },
+    titleCamera: { center: [-1.8975, 52.4785], zoom: 14.6, bearing: 25 }, // New Street and the Bullring
+    coreRegions: ['Birmingham'],
+    /** Inside the Middleway ring road. */
+    cbd: { kind: 'polygon', ring: [[-1.918, 52.488], [-1.905, 52.4925], [-1.89, 52.49], [-1.879, 52.484], [-1.877, 52.476], [-1.884, 52.469], [-1.899, 52.466], [-1.912, 52.47], [-1.92, 52.478]] },
+    goals: { tripMinutes: 25, tripFrom: [-1.8985, 52.4777], tripTo: [-1.748, 52.4539], valueCaptureMonth: 2e6 },
+    chaos: CHAOS_BY_CITY.birmingham,
+    valuePerResident: 230_000,
+  }),
+  leeds: ukMetroBalance({
+    origin: [-1.547, 53.7958], // City Square
+    map: { startCenter: [-1.55, 53.796], startZoom: 12, bounds: [-2.35, 53.45, -1.05, 54.02] },
+    titleCamera: { center: [-1.546, 53.7975], zoom: 14.6, bearing: 15 }, // the station and the city centre
+    coreRegions: ['Leeds', 'Bradford'],
+    /** Inside the inner ring road. */
+    cbd: { kind: 'polygon', ring: [[-1.5605, 53.803], [-1.548, 53.806], [-1.533, 53.803], [-1.528, 53.796], [-1.535, 53.79], [-1.548, 53.788], [-1.56, 53.792], [-1.564, 53.798]] },
+    goals: { tripMinutes: 30, tripFrom: [-1.547, 53.7958], tripTo: [-1.6606, 53.8659], valueCaptureMonth: 2e6 },
+    chaos: CHAOS_BY_CITY.leeds,
+    valuePerResident: 210_000,
+  }),
+  bristol: ukMetroBalance({
+    origin: [-2.597, 51.4545], // The Centre
+    map: { startCenter: [-2.59, 51.455], startZoom: 12, bounds: [-3.25, 51.2, -2.1, 51.72] },
+    titleCamera: { center: [-2.5955, 51.4505], zoom: 14.8, bearing: -30 }, // the harbour and the centre
+    coreRegions: ['Bristol'],
+    /** The centre, Broadmead, the harbourside and Temple Quarter. */
+    cbd: { kind: 'polygon', ring: [[-2.605, 51.458], [-2.596, 51.461], [-2.584, 51.46], [-2.58, 51.453], [-2.585, 51.448], [-2.598, 51.4475], [-2.607, 51.451]] },
+    goals: { tripMinutes: 30, tripFrom: [-2.5813, 51.4491], tripTo: [-2.7191, 51.3827], valueCaptureMonth: 1.5e6 },
+    chaos: CHAOS_BY_CITY.bristol,
+    valuePerResident: 330_000,
+    startingCash: 2.5e9,
+    small: true,
+  }),
 };

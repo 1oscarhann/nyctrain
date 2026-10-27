@@ -17,6 +17,10 @@ type Scene = SceneData & { commuters: number; areas: number; source: string };
 const MAPS: { id: CityId; mode: string }[] = [
   { id: 'london', mode: 'Metro' },
   { id: 'nyc', mode: 'Metro' },
+  { id: 'manchester', mode: 'Metro' },
+  { id: 'birmingham', mode: 'Metro' },
+  { id: 'leeds', mode: 'Metro' },
+  { id: 'bristol', mode: 'Metro' },
   { id: 'southeast', mode: 'Regional rail' },
 ];
 
@@ -204,7 +208,8 @@ export class TitleScreen {
 
   private millions(id: string): string {
     const c = this.scenes?.[id]?.commuters;
-    return c ? `${(c / 1e6).toFixed(2)} million commuters` : '';
+    if (!c) return '';
+    return c >= 1e6 ? `${(c / 1e6).toFixed(2)} million commuters` : `${Math.round(c / 1e3).toLocaleString('en-GB')},000 commuters`;
   }
 
   private items(): Item[] {

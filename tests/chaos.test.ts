@@ -149,16 +149,17 @@ describe('event calendar (New York)', () => {
   });
 });
 
-describe('event tables fit the day (both cities)', () => {
+describe('event tables fit the day (every map)', () => {
   it('passes checkKinds, with venues in the city and in known regions', () => {
-    for (const id of ['nyc', 'london'] as const) {
+    // The metro maps (the South East's race weeks run in windows the checker doesn't model).
+    for (const id of (Object.keys(CHAOS_BY_CITY) as (keyof typeof CHAOS_BY_CITY)[]).filter((c) => c !== 'southeast')) {
       const cc = CHAOS_BY_CITY[id];
       expect(checkKinds(cc)).toEqual([]);
       expect(CITY_BALANCE[id].chaos).toBe(cc);
       const regions = new Set(CITIES[id].regions.map((r) => r.name));
       const [w, s, e, n] = CITY_BALANCE[id].map.bounds;
       for (const v of cc.venues) {
-        expect(regions.has(v.region)).toBe(true);
+        expect(regions.has(v.region), `${id}: ${v.key} in ${v.region}`).toBe(true);
         expect(v.lon).toBeGreaterThan(w);
         expect(v.lon).toBeLessThan(e);
         expect(v.lat).toBeGreaterThan(s);

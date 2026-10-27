@@ -1,7 +1,9 @@
 # Headway
 
 A metro builder set in real cities where nobody ever built one. Pick a mode on the title screen:
-**Metro** (**New York**, the five boroughs, or **London**, all 33 boroughs) or **Intertown**
+**Metro** (**New York**, the five boroughs; **London**, all 33 boroughs; or one of four English
+city regions: **Manchester**, **Birmingham**, **Leeds** and **Bristol**, see
+[More cities](#more-cities-manchester-birmingham-leeds-bristol)) or **Intertown**
 (**South East**: London and the whole ONS South East region, a railway builder at regional
 scale; see [Intertown](#intertown-the-south-east)). You get the actual streets,
 shoreline and buildings, real commuting data and a few billion dollars or pounds. You design
@@ -22,7 +24,7 @@ npm run build        # strict typecheck + production bundle in dist/
 npm run preview      # serve dist/
 ```
 
-From the title screen: pick the city (New York / London; remembered), then **New game**
+From the title screen: pick the map (remembered), then **New game**
 (career, $6B in New York, £5B in London), **Sandbox** (unlimited money, instant construction),
 **Load game**, **Settings** (units, agent scale, day and night) and **Continue** (the autosave). Units follow
 the city (miles in New York, kilometres in London) until you pick some for that city in Settings
@@ -77,6 +79,46 @@ earnings bands (30/40/30 across London) with an ordered logit on the home MSOA's
 income (ONS small-area income estimates 2011/12). Contains National Statistics data © Crown
 copyright and database right 2011/2013; contains OS data © Crown copyright and database right;
 Open Government Licence v3.0.
+
+## More cities: Manchester, Birmingham, Leeds, Bristol
+
+Four more metro maps, each a whole English city region with real 2011 census commuting (every
+commute that starts and ends inside it) and, as in London, none of the trams, metros or local
+railways that were ever built. Same rules as London: metric, pounds, UK fares, values of time,
+taxes and the UK school year, but with cheaper central parking, faster roads and more car owners.
+
+| Map | Covers | MSOAs | Commuters | Start | Airport (built free) | Trip goal |
+|---|---|---|---|---|---|---|
+| Manchester | Greater Manchester: 10 boroughs | 346 | 904,361 | £3.5B | Manchester Airport | Piccadilly–airport < 30 min |
+| Birmingham | the West Midlands: 7 boroughs, Wolverhampton to Coventry | 356 | 836,857 | £3.5B | Birmingham Airport | New Street–airport < 25 min |
+| Leeds | West Yorkshire: Leeds, Bradford, Calderdale, Kirklees, Wakefield | 299 | 783,428 | £3.5B | Leeds Bradford Airport | City Square–airport < 30 min |
+| Bristol | the West of England: Bristol, Bath & NE Somerset, North Somerset, South Gloucestershire | 140 | 391,843 | £2.5B | Bristol Airport | Temple Meads–airport < 30 min |
+
+* **Data**: `npm run data:uk` (all four) or `npm run data:uk -- leeds` (`scripts/build-data-ukmetro.ts`,
+  the London pipeline made generic; writes `public/data/<city>/`). Districts, chart areas, landmarks
+  and land-mask checks are in `src/cities/ukMetroRegions.ts`. MSOAs are picked by the income file's
+  local-authority codes (so "Bristol, City of" needs no name matching) and cross-checked against
+  the centroid names. OpenStreetMap water (rivers, lakes, docks, reservoirs; ponds under 5,000 m²
+  skipped) is cut out of every district; the coast and estuaries are already clipped by the ONS
+  boundaries. Schools come from the same DfE census as London (`npm run data:schools`).
+* **City config**: `src/cities/ukMetros.ts` (names, blurbs, goals, tutorial copy) and
+  `ukMetroBalance()` in `src/balance.ts` (driving 16 km/h in the core boroughs, 25 elsewhere, 45 on
+  roads beyond 10 km; £10 and 15 minutes to park in the centre, no congestion charge; drive
+  constant 20 instead of London's 35; fares £2.50 peak, £2.20 off-peak, zonal: +1 fare per 12 km
+  beyond the first 4). Building costs 60% of London's (track and stations, `track.costPerM` and
+  the new `station.costByLevel` city overrides) and stations cost half as much to staff.
+* **Money is tighter than London**: a first line carries far fewer people per pound. Headless, 10
+  days in, agent scale 10, 4-car trains every 6 min at peak: a 30 km elevated line through each
+  centre (£1.5–3.3B) carries 15–67k riders a day and a 3 km, 5-station elevated centre line
+  (£0.8–0.9B) 15–26k, both covering their trains and staff but not all their upkeep (a loss of
+  £10–70k a day, small next to the grant). Second lines, transfers, growth and value capture are
+  how they come to pay. Each has its own stadiums
+  and arenas (named by place), a wetter northern climate for the three northern maps, universities
+  and the title screen's sketch of an imaginary network.
+* **Goals**: a crossing (Manchester to Salford or Trafford, Birmingham into the Black Country,
+  Leeds to Bradford, Bristol to Bath), every district joined up (stretch) and the airport run.
+  The generic goals scale down with the city: daily-rider milestones of 100k, 200k, 400k and 600k
+  (Bristol 50k to 300k), and the clockwork and credit goals' rider and debt floors likewise.
 
 ## Intertown: the South East
 
@@ -198,7 +240,7 @@ data (src/ui/titleTrailer.ts): the city rises out of the dark with a dot for eve
 residents and jobs, a handful of imaginary lines draw themselves across it, a tracking shot rides
 with one train, then rush hour streams along every line. "Press any key" starts the music and
 brings in the menu: a metro line down the left, each option a station, a train sliding to the one
-you point at (mouse, or arrow keys and Enter). New game and Sandbox branch to the three maps;
+you point at (mouse, or arrow keys and Enter). New game and Sandbox branch to the seven maps;
 picking one cuts the animation to it, then the founding screen opens.
 
 The scene data for all maps is prebuilt (public/data/title-scenes.json, `npm run build:title`

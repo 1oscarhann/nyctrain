@@ -27,7 +27,7 @@ export interface StoryCtx {
 }
 
 /** A taxi in each city's word. */
-export const cabWord = (city: CityId) => (city === 'london' ? 'taxi' : 'cab');
+export const cabWord = (city: CityId) => (city === 'nyc' ? 'cab' : 'taxi');
 
 export const BAND_LABEL = ['lower-income', 'middle-income', 'higher-income'] as const;
 

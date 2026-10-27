@@ -5,6 +5,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { CITY_BALANCE } from '../src/balance';
 import { applyCity, CITY_IDS, city } from '../src/cities';
 import { toLocal } from '../src/core/geo';
 import { SCHOOL_KINDS, SchoolIndex, type SchoolsFile } from '../src/data/schools';
@@ -16,7 +17,7 @@ afterAll(() => {
 const load = (): SchoolsFile => JSON.parse(readFileSync(join(__dirname, '..', 'public', city().dataPath, 'schools.json'), 'utf8')) as SchoolsFile;
 
 /** Fewest schools each map should have (England's census, NYC DOE buildings). */
-const MIN: Record<string, number> = { nyc: 1500, london: 2500, southeast: 6000 };
+const MIN: Record<string, number> = { nyc: 1500, london: 2500, southeast: 6000, manchester: 900, birmingham: 900, leeds: 800, bristol: 350 };
 
 describe('schools data', () => {
   for (const id of CITY_IDS) {
@@ -24,7 +25,7 @@ describe('schools data', () => {
       applyCity(id);
       const f = load();
       expect(f.schools.length).toBeGreaterThan(MIN[id]);
-      const [w, s, e, n] = (city().id === 'nyc' ? [-74.3, 40.45, -73.65, 40.95] : [-2.3, 50.35, 1.8, 52.35]) as number[];
+      const [w, s, e, n] = (city().id === 'nyc' ? [-74.3, 40.45, -73.65, 40.95] : CITY_BALANCE[id].map.bounds) as number[];
       let withPupils = 0;
       for (const sc of f.schools) {
         expect(sc.n.trim().length).toBeGreaterThan(2);
