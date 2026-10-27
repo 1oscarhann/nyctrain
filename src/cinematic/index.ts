@@ -13,6 +13,7 @@
  */
 import type { Map as MLMap } from 'maplibre-gl';
 import { CINEMATIC } from '../balance';
+import { city } from '../cities';
 import { Emitter } from '../core/emitter';
 import { lineScale } from '../map/networkLayers';
 import { SNAP_HELD } from '../sim/protocol';
@@ -21,6 +22,7 @@ import { bullet, h, svgIcon } from '../ui/dom';
 import { ICONS } from '../ui/icons';
 import type { App } from '../ui/app';
 import { followStatus } from '../ui/cinematicText';
+import { logoSvg } from '../ui/logo';
 import type { FollowPose } from './chase';
 import { Daylight, type DayNightMode } from './daylight';
 import { FollowCam, type FollowEndReason, type FollowTarget } from './followCam';
@@ -73,6 +75,16 @@ export class Cinematic {
       glow: () => this.glow,
       onOpen: () => this.onTimelapse(true),
       onClose: () => this.onTimelapse(false),
+      film: () => {
+        const c = app.game.company;
+        return {
+          company: c?.name ?? `${city().name} Transit`,
+          logoSvg: c ? logoSvg(c.logo, 256, c.name) : null,
+          riders: app.report?.riders ?? null,
+          credits: `Map © OpenStreetMap contributors · OpenMapTiles · OpenFreeMap${city().attribution ? ` · ${city().attribution}` : ''}`,
+          music: new URL('audio/title-lights-at-night.mp3', document.baseURI).href,
+        };
+      },
     });
     view.addLayers('timelapse', () => this.timelapse.layers());
     app.root.append(this.chip);

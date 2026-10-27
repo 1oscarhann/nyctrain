@@ -102,6 +102,23 @@ export class MapView {
     this.dirty = true;
   }
 
+  /**
+   * Draw the map with the current layers now, synchronously, and return its canvas. The canvas
+   * can be read straight after (the timelapse video export does), before the browser clears it.
+   */
+  drawNow(): HTMLCanvasElement {
+    this.dirty = false;
+    this.overlay.setProps({ layers: this.collectLayers() });
+    this.map.redraw();
+    return this.map.getCanvas();
+  }
+
+  /** Resolves once the visible map tiles have loaded (or after `maxMs`). */
+  async tilesLoaded(maxMs = 8000): Promise<void> {
+    const t0 = performance.now();
+    while (!this.map.areTilesLoaded() && performance.now() - t0 < maxMs) await new Promise((r) => setTimeout(r, 100));
+  }
+
   /** Keep re-rendering every frame while something animates (trains, pulses). */
   beginAnimation(): () => void {
     this.animating++;

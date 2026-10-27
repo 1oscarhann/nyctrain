@@ -1555,7 +1555,7 @@ table.fleet td {
 .hw-photo > .hw-panel,
 .hw-photo > #toasts,
 .hw-photo > .hw-tip,
-.hw-timelapse > .hw-panel:not(#tl-bar),
+.hw-timelapse > .hw-panel:not(#tl-bar):not(#tl-export),
 .hw-timelapse > #toasts,
 .hw-timelapse > .hw-tip {
   display: none !important;
@@ -1720,6 +1720,63 @@ table.fleet td {
 #tl-bar .tl-keys {
   font-size: 11.5px;
   white-space: nowrap;
+}
+/* Save as video: a card over the map; while it renders a clear sheet keeps the map still. */
+#tl-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  background: rgba(6, 9, 13, 0.18);
+}
+.tl-exporting #tl-bar {
+  display: none;
+}
+#tl-export {
+  position: absolute;
+  left: 50%;
+  bottom: 36px;
+  transform: translateX(-50%);
+  z-index: 41;
+  width: min(440px, calc(100vw - 32px));
+  padding: 14px 16px;
+  border-left: 3px solid var(--amber);
+}
+#tl-export .tl-ex-title {
+  font-weight: 800;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+#tl-export .tl-ex-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+#tl-export .tl-ex-check {
+  margin-top: 10px;
+}
+#tl-export .tl-ex-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-line);
+  overflow: hidden;
+  margin: 10px 0 2px;
+}
+#tl-export .tl-ex-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--amber);
+  transition: width 0.2s linear;
+}
+#tl-export .tl-ex-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+#tl-export .tl-ex-hint {
+  flex: 1;
+  font-size: 11.5px;
 }
 @media (max-width: 720px) {
   #tl-bar .tl-keys {

@@ -1149,6 +1149,16 @@ worker, and the simulation is the same with any of it in use.
   network, stations pop up as the line reaches them, with the month and the track length (miles
   or kilometres), stations and routes counting up. Space plays and pauses, ← → step a month, 1×
   2× 4×, a scrubber; the game is paused while it plays, and Esc puts everything back.
+- **Save video** (timelapse bar). Renders the timelapse to an MP4 in the browser and downloads it
+  (`<company>-timelapse.mp4`): a 3 s title over the empty city (logo, company, the city and the
+  dates), the replay (sped up so it lasts under 50 s), a hold on the network as it is now, and an
+  end card (logo, track, stations and routes, yesterday's journeys, the Headway mark), with the
+  date and counters over the replay and the map credits in a corner. Optional music: the title
+  track, looped and faded. The map draws each frame itself (`MapView.drawNow`, a synchronous
+  MapLibre redraw) at the screen's own shape, up to 1920 × 1080, 30 fps. WebCodecs encodes H.264
+  where the browser has it (Chrome, Edge, Safari), else VP9 or AV1 (each candidate encodes a test
+  frame first), with AAC or Opus audio, muxed by `mp4-muxer`; nothing is uploaded. A sheet keeps
+  the map still while it renders; Esc cancels. Browsers without WebCodecs don't show the button.
 - **Settings.** Menu → Light (or Settings on the title screen): **Day and night** (default) or
   **Always day** (the map as before: no runtime style changes at all), lit windows or dark. Per
   browser, not in saves. The title screen is blue hour with the windows lit.

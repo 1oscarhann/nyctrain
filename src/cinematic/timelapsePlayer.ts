@@ -23,6 +23,7 @@ import type { MapView } from '../map/mapView';
 import { h, svgIcon } from '../ui/dom';
 import { ICONS } from '../ui/icons';
 import { ADDITIVE, GLOW_MIN } from './glow';
+import { filmFileName, planFilm, renderFilm, videoExportSupported, type FilmInfo } from './timelapseExport';
 import {
   cloneTimelapse,
   cumLengths,
@@ -74,6 +75,8 @@ export interface TimelapseHost {
   /** The App hides the live layers and the chrome and pauses (open), and restores them (close). */
   onOpen(): void;
   onClose(): void;
+  /** For the video: the company, its logo, yesterday's riders, the map credits and the music. */
+  film(): { company: string; logoSvg: string | null; riders: number | null; credits: string; music: string };
 }
 
 export class TimelapsePlayer {
@@ -105,6 +108,11 @@ export class TimelapsePlayer {
   private playBtn: HTMLButtonElement;
   private scrub: HTMLInputElement;
   private speedSeg = h('div', { class: 'seg' });
+  // Video export: a card for the options and progress, and a sheet that keeps the map still.
+  private exporting: AbortController | null = null;
+  private card = h('div', { id: 'tl-export', class: 'hw-panel' });
+  private sheet = h('div', { id: 'tl-sheet' });
+  private saveBtn: HTMLButtonElement | null = null;
 
   constructor(private host: TimelapseHost) {
     this.head.append(this.kicker, this.dateEl, this.statsEl);
@@ -116,7 +124,8 @@ export class TimelapsePlayer {
       this.renderControls();
     });
     const close = h('button', { class: 'hw-btn ghost small', title: 'Close (Esc)', onclick: () => this.close() }, svgIcon(ICONS.close));
-    this.bar.append(this.playBtn, this.scrub, this.speedSeg, h('span', { class: 'tl-keys hw-muted' }, 'Space · ← → · Esc'), close);
+    if (videoExportSupported()) this.saveBtn = h('button', { class: 'hw-btn small', title: 'Save the timelapse as an MP4 video', onclick: () => this.openExport() }, svgIcon(ICONS.download), 'Save video') as HTMLButtonElement;
+    this.bar.append(this.playBtn, this.scrub, this.speedSeg, h('span', { class: 'tl-keys hw-muted' }, 'Space · ← → · Esc'), ...(this.saveBtn ? [this.saveBtn] : []), close);
   }
 
   get open(): boolean {
@@ -152,6 +161,8 @@ export class TimelapsePlayer {
 
   close(): void {
     if (!this._open) return;
+    this.exporting?.abort();
+    this.closeExport();
     this._open = false;
     this.play(false);
     this.offFrame?.();
@@ -172,6 +183,14 @@ export class TimelapsePlayer {
   /** Keys while open: Space, ← →, Esc (everything else is swallowed). */
   key(e: KeyboardEvent): boolean {
     if (!this._open) return false;
+    // While the video renders only Esc does anything (it cancels); with the card open, Esc shuts it.
+    if (this.exporting || this.card.isConnected) {
+      if (e.key === 'Escape') {
+        if (this.exporting) this.exporting.abort();
+        else this.closeExport();
+      }
+      return true;
+    }
     switch (e.key) {
       case ' ':
         e.preventDefault();
@@ -368,7 +387,7 @@ export class TimelapsePlayer {
   }
 
   /** Frame the final network (keeping the bearing and pitch). */
-  private fitNetwork(now: TLFrame): void {
+  private fitNetwork(now: TLFrame, duration = 900): void {
     const tl = this.tl;
     if (!tl) return;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -386,7 +405,113 @@ export class TimelapsePlayer {
     const map = this.host.view.map;
     const pad = 400;
     const sw = toLonLat(x0 - pad, y0 - pad), ne = toLonLat(x1 + pad, y1 + pad);
-    map.fitBounds([sw, ne], { padding: { top: 140, bottom: 120, left: 60, right: 60 }, bearing: map.getBearing(), pitch: map.getPitch(), duration: 900, maxZoom: 15 });
+    // Room for the date at the top and the controls at the bottom, scaled down on small screens.
+    const cw = map.getContainer().clientWidth || 1280, ch = map.getContainer().clientHeight || 800;
+    const padding = { top: Math.min(140, ch * 0.2), bottom: Math.min(120, ch * 0.14), left: Math.min(60, cw * 0.06), right: Math.min(60, cw * 0.06) };
+    map.fitBounds([sw, ne], { padding, bearing: map.getBearing(), pitch: map.getPitch(), duration, maxZoom: 15 });
+  }
+
+  // ------------------------------------------------------------------ save as video
+  private openExport(): void {
+    if (this.exporting || !this._open) return;
+    this.play(false);
+    const canvas = this.host.view.map.getCanvas();
+    const plan = planFilm(this.total, canvas.width, canvas.height);
+    const film = this.host.film();
+    const music = h('input', { type: 'checkbox' }) as HTMLInputElement;
+    music.checked = true;
+    const secs = Math.round(plan.seconds);
+    this.card.replaceChildren(
+      h('div', { class: 'tl-ex-title' }, 'Save as video'),
+      h(
+        'div',
+        { class: 'hw-muted tl-ex-text' },
+        `An MP4 of ${film.company} growing, month by month: ${secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)} min ${String(secs % 60).padStart(2, '0')} s`} at ${plan.width} × ${plan.height}${plan.speed > 1.05 ? `, played at ${plan.speed.toFixed(1)}×` : ''}. It renders here in your browser; keep this tab open.`,
+      ),
+      h('label', { class: 'found-check tl-ex-check' }, music, ' Music: “Lights at Night” (CC0)'),
+      h('div', { class: 'tl-ex-foot' }, h('button', { class: 'hw-btn small ghost', onclick: () => this.closeExport() }, 'Cancel'), h('button', { class: 'hw-btn small primary', onclick: () => void this.runExport(music.checked) }, 'Save video')),
+    );
+    this.host.root.append(this.sheet, this.card);
+  }
+
+  private closeExport(): void {
+    this.card.remove();
+    this.sheet.remove();
+    this.host.root.classList.remove('tl-exporting');
+  }
+
+  private async runExport(withMusic: boolean): Promise<void> {
+    if (this.exporting) return;
+    const ac = new AbortController();
+    this.exporting = ac;
+    const keepT = this.t;
+    const film = this.host.film();
+    const bar = h('div', { class: 'tl-ex-bar' }, h('i'));
+    const label = h('div', { class: 'tl-ex-text num' }, 'Getting the map ready…');
+    this.card.replaceChildren(h('div', { class: 'tl-ex-title' }, 'Rendering your timelapse'), label, bar, h('div', { class: 'tl-ex-foot' }, h('span', { class: 'hw-muted tl-ex-hint' }, 'Esc cancels'), h('button', { class: 'hw-btn small ghost', onclick: () => ac.abort() }, 'Cancel')));
+    this.host.root.classList.add('tl-exporting');
+    const last = this.frames[this.frames.length - 1];
+    if (last) this.fitNetwork(last, 0);
+    await this.host.view.tilesLoaded();
+    const info: FilmInfo = {
+      company: film.company,
+      logoSvg: film.logoSvg,
+      city: city().name,
+      span: `${monthLabel(this.frames[0]?.day ?? this.host.game.day)} – ${monthLabel(this.host.game.day)}`,
+      riders: film.riders && film.riders > 0 ? `${Math.round(film.riders).toLocaleString('en-GB')} journeys a day` : null,
+      credits: film.credits,
+      music: withMusic ? film.music : null,
+    };
+    const t0 = performance.now();
+    try {
+      const res = await renderFilm(
+        {
+          duration: this.total,
+          showAt: (t) => {
+            this.seek(t);
+            return { date: this.dateEl.textContent ?? '', stats: this.statsEl.textContent ?? '' };
+          },
+          draw: () => this.host.view.drawNow(),
+        },
+        info,
+        {
+          signal: ac.signal,
+          onProgress: (done, total) => {
+            const f = done / total;
+            (bar.firstChild as HTMLElement).style.width = `${(f * 100).toFixed(1)}%`;
+            const el = (performance.now() - t0) / 1000;
+            const left = f > 0.03 ? Math.max(0, Math.round((el / f) * (1 - f))) : null;
+            label.textContent = `${Math.round(f * 100)}%${left !== null ? ` · about ${left < 60 ? `${left} s` : `${Math.ceil(left / 60)} min`} left` : ''}`;
+          },
+        },
+      );
+      const name = filmFileName(film.company);
+      const url = URL.createObjectURL(res.blob);
+      const a = h('a', { href: url, download: name }) as HTMLAnchorElement;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 120_000);
+      const mb = res.blob.size / 1e6;
+      this.card.replaceChildren(
+        h('div', { class: 'tl-ex-title' }, 'Video saved'),
+        h('div', { class: 'hw-muted tl-ex-text' }, `${name} · ${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB · ${Math.round(res.seconds)} s${res.audio ? ' with music' : withMusic ? ' (no music: this browser can’t encode audio)' : ''}. Check your downloads.`),
+        h('div', { class: 'tl-ex-foot' }, h('a', { class: 'hw-btn small ghost', href: url, download: name }, 'Download again'), h('button', { class: 'hw-btn small primary', onclick: () => this.closeExport() }, 'Done')),
+      );
+    } catch (e) {
+      const cancelled = e instanceof DOMException && e.name === 'AbortError';
+      if (cancelled) this.closeExport();
+      else
+        this.card.replaceChildren(
+          h('div', { class: 'tl-ex-title' }, 'Couldn’t make the video'),
+          h('div', { class: 'hw-muted tl-ex-text' }, e instanceof Error ? e.message : String(e)),
+          h('div', { class: 'tl-ex-foot' }, h('button', { class: 'hw-btn small primary', onclick: () => this.closeExport() }, 'OK')),
+        );
+    } finally {
+      this.exporting = null;
+      this.host.root.classList.remove('tl-exporting');
+      if (this._open) this.seek(keepT);
+    }
   }
 
   /** The replay's deck.gl layers (the App draws only these while the player is open). */
