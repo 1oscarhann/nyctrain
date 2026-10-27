@@ -153,10 +153,10 @@ export function quadStrokeTip(net: Network, res: QuadResult, reports: Map<number
 }
 
 /** Crossover mode's hover text (§2.1): a valid scissors with its length and cost, or why not. */
-export function crossoverTip(c: { ok: true; cost: number; error?: string } | { ok: false; reason: string } | null): string {
+export function crossoverTip(c: { ok: true; cost: number; length: number; error?: string } | { ok: false; reason: string } | null): string {
   if (!c) return `<div class="hw-muted">Hover over a four-track section to place a scissors crossover</div>`;
   if (!c.ok) return `<div class="title">Scissors crossover</div><div class="reason hw-red">${esc(c.reason)}</div>`;
-  const head = `<div class="title">Scissors crossover · ${fmtDistance(QUAD.crossoverLength, true)} · ${fmtMoney(c.cost)}</div><div class="hw-muted">Trains can switch pairs in both directions</div>`;
+  const head = `<div class="title">Scissors crossover · ${fmtDistance(c.length, true)} · ${fmtMoney(c.cost)}</div><div class="hw-muted">Trains can switch pairs in both directions</div>`;
   return head + (c.error ? `<div class="reason hw-red">${esc(c.error)}</div>` : `<div class="hw-green" style="margin-top:3px">Click to place · <span class="kbd">Esc</span> or <span class="kbd">X</span> to stop</div>`);
 }
 

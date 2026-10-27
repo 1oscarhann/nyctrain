@@ -328,12 +328,12 @@ export function buildTwin(net: Network, legsIn: readonly QuadLeg[], cls: TrackCl
   const nodes = pathNodes(net, list);
   const K = list.length;
   const sw = spec.side * QUAD.spacing;
-  const span = fmtDistance(QUAD.turnoutLength + 2 * QUAD.connectorMargin, true);
+  const span = fmtDistance(QUAD.turnoutLength[cls] + 2 * QUAD.connectorMargin, true);
   const reach = fmtDistance(QUAD.connectorSearch, true);
 
   // 1. Where the other pair starts and ends along the path.
-  const sCut = spec.start.kind === 'fan' ? findStraight(net, list, 'start', QUAD.turnoutLength, cls) : null;
-  const eCut = spec.end.kind === 'fan' ? findStraight(net, list, 'end', QUAD.turnoutLength, cls) : null;
+  const sCut = spec.start.kind === 'fan' ? findStraight(net, list, 'start', QUAD.turnoutLength[cls], cls) : null;
+  const eCut = spec.end.kind === 'fan' ? findStraight(net, list, 'end', QUAD.turnoutLength[cls], cls) : null;
   if (spec.start.kind === 'fan' && !sCut) return refused(`Needs a straight, level ${span} stretch within ${reach} of the start to split into four tracks`);
   if (spec.end.kind === 'fan' && !eCut) return refused(`Needs a straight, level ${span} stretch within ${reach} of the end to split into four tracks`);
   const total = pathPos(net, list, K - 1, list[K - 1].dir === 0 ? net.geom(list[K - 1].edge).length : 0);
@@ -450,9 +450,9 @@ export function buildTwin(net: Network, legsIn: readonly QuadLeg[], cls: TrackCl
     const want: { end: 'start' | 'end'; a: XY; len: number; lo: number; hi: number }[] = [];
     for (const end of ['start', 'end'] as const) {
       if (spec[end].kind !== 'free') continue;
-      const cut = findStraight(net, quadPath, end, QUAD.crossoverLength, cls);
+      const cut = findStraight(net, quadPath, end, QUAD.crossoverLength[cls], cls);
       if (!cut) {
-        problems.push(`No straight ${fmtDistance(QUAD.crossoverLength + 2 * QUAD.connectorMargin, true)} near the ${end} for a crossover — add one with X`);
+        problems.push(`No straight ${fmtDistance(QUAD.crossoverLength[cls] + 2 * QUAD.connectorMargin, true)} near the ${end} for a crossover — add one with X`);
         continue;
       }
       const pa = pathPos(net, quadPath, cut.leg, cut.uJ), pb = pathPos(net, quadPath, cut.leg, cut.uX);
@@ -466,7 +466,7 @@ export function buildTwin(net: Network, legsIn: readonly QuadLeg[], cls: TrackCl
       const at = locateTagged(net, spec.g, spec.roleDrawn, w.a);
       const res = at ? addScissors(net, spec.g, at.edge, at.u, at.u + w.len, cls, tracker.sync) : null;
       if (res?.ok) links.push(...res.links);
-      else problems.push(`No straight ${fmtDistance(QUAD.crossoverLength + 2 * QUAD.connectorMargin, true)} near the ${w.end} for a crossover — add one with X`);
+      else problems.push(`No straight ${fmtDistance(QUAD.crossoverLength[cls] + 2 * QUAD.connectorMargin, true)} near the ${w.end} for a crossover — add one with X`);
     }
   }
 
@@ -520,14 +520,14 @@ function scissorsFits(net: Network, edge: number, uA: number, uB: number, cls: T
 }
 
 /**
- * Crossover placement (the X tool): the QUAD.crossoverLength span centred nearest `u` on a quad
+ * Crossover placement (the X tool): the QUAD.crossoverLength[cls] span centred nearest `u` on a quad
  * edge where a scissors fits, sliding up to 300 m either way (read-only; build it with addScissors).
  */
 export function scissorsCandidate(net: Network, edge: number, u: number, cls: TrackClass): { ok: true; g: number; edge: number; uA: number; uB: number } | { ok: false; reason: string } {
   const t = net.edges.get(edge)?.quad;
   if (!t || t.role === 'link') return { ok: false, reason: 'Crossovers go on a four-track section' };
   const L = net.geom(edge).length;
-  const half = QUAD.crossoverLength / 2;
+  const half = QUAD.crossoverLength[cls] / 2;
   for (let k = 0; k <= 30; k++) {
     for (const sgn of k === 0 ? [1] : [1, -1]) {
       const c = u + sgn * k * 10;

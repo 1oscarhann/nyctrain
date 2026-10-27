@@ -158,7 +158,10 @@ Track has a **line speed** per class (`TRACK.lineSpeed`: heavy 200, light 100, h
 unchanged. **High-speed line** is a third track class: 1.8× the cost, curves of 1.5 km or wider
 (canted: lateral 1.4 m/s²), 3 km fillet tangents. It is heavy-rail track built for speed, so it
 joins ordinary heavy track at junctions and high-speed trains can run into an ordinary terminal
-(at 200 km/h there). Light track still can't join either.
+(at 200 km/h there). Light track still can't join either. Four-track high-speed sections work too:
+their fan turnouts and scissors crossovers are 400 m long (`QUAD.turnoutLength` /
+`crossoverLength` by track class; metro 150 m), r ≈ 2.85 km, about 225 km/h through the diverging
+road, where the metro's 150 m connectors (r ≈ 550 m) broke the high-speed line's 1.5 km minimum.
 
 Platforms are counted in platform cars (18 m on heavy track, 20 m light, 26 m high-speed), and a
 route's train length is what fits its shortest platform for its train type (a 14-car heavy

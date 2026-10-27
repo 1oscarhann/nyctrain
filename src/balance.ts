@@ -278,10 +278,14 @@ export const STATION_CROWD = {
 export const QUAD = {
   /** Centre to centre of the two double-track pairs, metres (four tracks at about 4.5 m). */
   spacing: 9,
-  /** Turnout from the drawn pair to the express pair at a fan end (40 m leads + 70 m diagonal: r ≈ 551 m). */
-  turnoutLength: 150,
-  /** Each half of a scissors crossover (same geometry and speed as a turnout). */
-  crossoverLength: 150,
+  /**
+   * Turnout from the drawn pair to the express pair at a fan end, by track class. Metro: 40 m leads
+   * + 70 m diagonal, r ≈ 551 m. High-speed: 400 m (40 m leads + 320 m diagonal, r ≈ 2.85 km, about
+   * 225 km/h through the diverging road), since its curves must be at least TRACK.minRadius.
+   */
+  turnoutLength: { heavy: 150, light: 150, highspeed: 400 } as Record<TrackClass, number>,
+  /** Each half of a scissors crossover (same geometry and speed as a turnout), by track class. */
+  crossoverLength: { heavy: 150, light: 150, highspeed: 400 } as Record<TrackClass, number>,
   /** Clearance from the end of a straight piece to a turnout or crossover junction. */
   connectorMargin: 20,
   /** How far along the stroke a fan's turnout may start before the stroke is refused. */

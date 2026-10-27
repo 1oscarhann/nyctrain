@@ -238,7 +238,7 @@ describe('express UI: track tool texts (§2.1)', () => {
     // Crossover mode.
     expect(strip(crossoverTip(null))).toContain('Hover over a four-track section');
     expect(strip(crossoverTip({ ok: false, reason: 'Crossovers need straight, level track clear of platforms' }))).toContain('clear of platforms');
-    const ok = strip(crossoverTip({ ok: true, cost: 42.1e6 }));
+    const ok = strip(crossoverTip({ ok: true, cost: 42.1e6, length: 150 }));
     expect(ok).toMatch(/^Scissors crossover · 150 m · \$42\.1M Trains can switch pairs in both directions Click to place/);
   });
 });

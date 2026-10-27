@@ -278,7 +278,7 @@ export class TrackTool implements Tool {
     if (!xo.ok) this.ctx.tip(crossoverTip({ ok: false, reason: xo.reason ?? 'No room for a crossover here' }), p.px);
     else {
       const cost = xo.reports.reduce((t, r) => t + r.cost, 0);
-      this.ctx.tip(crossoverTip({ ok: true, cost, error: xo.reports.find((r) => !r.ok)?.errors[0] }), p.px);
+      this.ctx.tip(crossoverTip({ ok: true, cost, length: QUAD.crossoverLength[xo.cls], error: xo.reports.find((r) => !r.ok)?.errors[0] }), p.px);
     }
     this.ctx.redraw();
   }
@@ -294,7 +294,7 @@ export class TrackTool implements Tool {
     const game = this.ctx.game;
     const res = game.editBlueprint(() => addScissors(game.network, xo.g, xo.edge, xo.uA, xo.uB, xo.cls));
     if (!res.ok) this.ctx.toast("Can't place a crossover here", res.reason, 'red');
-    else this.ctx.toast('Crossover planned', `Scissors · ${fmtDistance(QUAD.crossoverLength, true)} · Build to start construction`, 'green');
+    else this.ctx.toast('Crossover planned', `Scissors · ${fmtDistance(QUAD.crossoverLength[xo.cls], true)} · Build to start construction`, 'green');
     this.xo = null;
     this.move(p);
   }
@@ -620,7 +620,7 @@ export class TrackTool implements Tool {
             'div',
             { class: 'opt-hint', style: 'margin-top:8px' },
             this.crossing
-              ? `Hover a four-track section and click to place a ${fmtDistance(QUAD.crossoverLength, true)} scissors crossover: trains can switch pairs both ways. `
+              ? `Hover a four-track section and click to place a ${fmtDistance(QUAD.crossoverLength[this.cls], true)} scissors crossover: trains can switch pairs both ways. `
               : `Four tracks: the line you draw is the local pair; the express pair runs alongside on the ${SIDE_LABEL[this.side]} and splits off where you connect to other track. Inner curves need ${fmtDistance(QUAD.spacing, true)} more radius. `,
             h('span', { class: 'kbd' }, 'Q'),
             ' two tracks · ',

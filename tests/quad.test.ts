@@ -189,6 +189,35 @@ describe('quad strokes', () => {
     expect(compileNetwork(game).net.lockCount).toBe(8);
   });
 
+  it('5b. high-speed four tracks: 400 m turnouts and crossovers wide enough for the line (r ≥ 1.5 km)', () => {
+    const game = stubGame();
+    const net = game.network;
+    net.addStroke([P(-3000, 0, 'at-grade'), P(0, 0, 'at-grade')], 'highspeed', none, none);
+    const end = nodeAt(net, 0, 0);
+    const r = addQuadStroke(net, [P(0, 0, 'at-grade'), P(9000, 0, 'at-grade')], 'highspeed', { kind: 'node', node: end }, none, { side: 1 });
+    expect(r.ok).toBe(true);
+    expect(r.problems).toEqual([]);
+    expect(allOk(net, [...net.edges.keys()])).toEqual([]);
+    let minR = Infinity, minV = Infinity;
+    for (const id of r.links) {
+      const rep = edgeReport(net, id, dry);
+      minR = Math.min(minR, rep.minRadius);
+      minV = Math.min(minV, rep.speedLimit);
+    }
+    expect(minR).toBeGreaterThanOrEqual(1500);
+    expect(minV * 3.6).toBeGreaterThan(200);
+    // The X tool places one on a high-speed pair too.
+    const exp = r.express.find((id) => net.geom(id).length > 2000)!;
+    const c = scissorsCandidate(net, exp, net.geom(exp).length / 2, 'highspeed');
+    expect(c.ok).toBe(true);
+    if (c.ok) {
+      expect(c.uB - c.uA).toBeCloseTo(QUAD.crossoverLength.highspeed, 6);
+      const x = addScissors(net, c.g, c.edge, c.uA, c.uB, 'highspeed');
+      expect(x.ok).toBe(true);
+      expect(allOk(net, x.links)).toEqual([]);
+    }
+  });
+
   it('6. fan start from a double-track end: a degree-3 junction, a fast turnout, both platforms reachable, 1 lock', () => {
     const game = stubGame();
     const net = game.network;
