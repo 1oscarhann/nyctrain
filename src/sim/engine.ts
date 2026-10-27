@@ -2,6 +2,7 @@
  * The simulation engine: clock, trains and commuters. Pure TypeScript with no DOM, so it runs
  * inside the Web Worker and directly in Node for the headless test.
  */
+import { applyTech } from '../core/tech';
 import { CHAOS, ECONOMY, GROWTH, TIME, type ChaosLevel, type GrowthPace } from '../balance';
 import { dayIndex, isNewMonth, SECONDS_PER_DAY, timeOfDay } from '../core/calendar';
 import { isSchoolDay } from '../core/schoolTerm';
@@ -145,6 +146,8 @@ export class Engine {
   }
 
   setNetwork(net: CompiledNetwork): void {
+    // Research in force (signalling, dwell, incident rates): the same list the main thread applied.
+    applyTech(net.research ?? []);
     this.net = net;
     this.benefitCache = null;
     this.trains.setNetwork(net, this.time);

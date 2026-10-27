@@ -23,6 +23,9 @@ import { dayIndex, SECONDS_PER_DAY } from './calendar';
 import { RouteSet } from '../routes/routeSet';
 import type { ChaosInit, DayExposure, ServiceOverride } from '../sim/protocol';
 import { emptyTimelapse, encodeTimelapse, recordFrame, type SavedTimelapse, type Timelapse, type TLFrame } from '../cinematic/timelapse';
+import { advance, cantStart, emptyResearch, researchCost, researchDef, type ResearchState } from './research';
+import { applyTech } from './tech';
+import type { ResearchId } from '../balance';
 
 /** City chaos settings (saved). The calendar, weather and incident plan all derive from the seed. */
 export interface ChaosSettings {
@@ -57,6 +60,8 @@ export interface GameEvents extends Record<string, unknown> {
   select: Selection | null;
   /** City chaos settings changed (level or event service). */
   chaos: void;
+  /** Research started, cancelled or finished. */
+  research: void;
 }
 
 export type Selection =
@@ -69,6 +74,8 @@ export type Selection =
   | { kind: 'goals' }
   /** Routes & stations manager (full screen). */
   | { kind: 'routes'; tab?: 'routes' | 'stations' }
+  /** Research (full screen). */
+  | { kind: 'research' }
   /** Service alerts panel, optionally focused on an alert (alert id) or a city event (event id). */
   | { kind: 'alerts'; focus?: number; event?: number };
 
@@ -93,6 +100,8 @@ export class Game {
    * Cinematic (v2): the network at each month close, for the timelapse player (saved, v7). Main
    * thread only: nothing in the simulation reads it.
    */
+  /** Research projects: finished and in progress (saved). Their effects are in force (core/tech.ts). */
+  research: ResearchState = emptyResearch();
   private _timelapse: Timelapse = emptyTimelapse();
   private timelapseSaved: SavedTimelapse | null = null;
 
@@ -122,6 +131,42 @@ export class Game {
     this.chaos = { level, levelToday: level, seed: (opts.chaosSeed ?? CHAOS.defaultSeed) >>> 0, service: [], nextServiceId: 1 };
     this.finance = new Finance(opts.sandbox, dayIndex(this.time), opts.marketSeed ?? marketSeedFrom(this.chaos.seed));
     if (opts.fixedRate) this.finance.market.fixed = true;
+    // A new game starts with no research in force (a load applies its own).
+    applyTech([]);
+  }
+
+  // ------------------------------------------------------------------ research
+  /** Start a project: pays its cost now (Sandbox: free, and it finishes at once). Returns why not, or null. */
+  startResearch(id: ResearchId): string | null {
+    const why = cantStart(this.research, id, this.finance.cash, this.sandbox);
+    if (why) return why;
+    const cost = this.sandbox ? 0 : researchCost(id);
+    if (cost && !this.finance.spendResearch(cost)) return 'Not enough money';
+    this.research.active.push({ id, daysLeft: this.sandbox ? 0 : researchDef(id).days, paid: cost });
+    if (this.sandbox) advance(this.research);
+    this.events.emit('research', undefined);
+    this.events.emit('money', undefined);
+    return null;
+  }
+
+  /** Stop a project: part of its cost comes back (RESEARCH_TUNING.cancelRefund). */
+  cancelResearch(id: ResearchId, refundShare: number): number {
+    const a = this.research.active.find((x) => x.id === id);
+    if (!a) return 0;
+    this.research.active = this.research.active.filter((x) => x !== a);
+    const back = a.paid * refundShare;
+    if (back) this.finance.spendResearch(-back);
+    this.events.emit('research', undefined);
+    this.events.emit('money', undefined);
+    return back;
+  }
+
+  /** A weekday's work (at day end). Returns the projects that finished; their effects are in force. */
+  advanceResearch(): ResearchId[] {
+    if (!this.research.active.length) return [];
+    const done = advance(this.research);
+    this.events.emit('research', undefined);
+    return done;
   }
 
   /**

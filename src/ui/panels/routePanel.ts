@@ -22,7 +22,8 @@ import { city } from '../../cities';
 import type { RouteRegularityDetail } from '../../sim/protocol';
 import type { App } from '../app';
 import { loadChart, regularityChart } from '../charts';
-import { headwayStepper, trainLengthStepper, trainTypePicker } from '../routeControls';
+import { headwayStepper, refitButton, trainLengthStepper, trainTypePicker } from '../routeControls';
+import { bestMark, stockName, stockSpec } from '../../core/tech';
 import { applyRouteChange } from '../routeOps';
 import { bullet, h, svgIcon } from '../dom';
 import { ICONS } from '../icons';
@@ -120,7 +121,7 @@ export function routePanel(app: App, id: number): Panel {
   const net = game.network;
   const path = game.routes.path(net, r);
   const op = game.routes.operational(net, r);
-  const sh = shell(`Route · ${r.express ? 'Express · ' : ''}${TRAINS[r.stock].name} · ${r.cars} cars`, r.name, () => game.select(null), bullet(r.color, r.bullet, 34, r.express, r.shape));
+  const sh = shell(`Route · ${r.express ? 'Express · ' : ''}${stockName(r.stock, r.mark)} · ${r.cars} cars`, r.name, () => game.select(null), bullet(r.color, r.bullet, 34, r.express, r.shape));
   const body = sh.body;
   const tip = (el: HTMLElement, title: string, text?: string, key?: string) => attachTip(el, app.tooltip, title, key, text);
   if (!op.ok) body.append(h('div', { class: path.ok ? 'warn' : 'err' }, op.reason ?? 'Not running'));
@@ -261,6 +262,7 @@ export function routePanel(app: App, id: number): Panel {
     'div',
     { class: 'rp-trains' },
     row('Train type', trainTypePicker(app, r)),
+    ...(refitButton(app, r) ? [row('Newer trains', refitButton(app, r)!)] : []),
     row('Length', trainLengthStepper(app, r)),
     row('Peak', headwayStepper(app, r, 'peak', ['am', 'pm'], false), '6–10, 16–20'),
     row('Midday', headwayStepper(app, r, 'midday', ['midday'], false), '10–16'),
@@ -612,7 +614,7 @@ export function routeEditor(app: App, tool: RouteTool): Panel {
       };
       body.append(
         section('Trains'),
-        h('div', { class: 'stock-grid' }, ...options.map((s) => h('button', { class: 'stock-btn' + (s === stock ? ' on' : ''), title: TRAINS[s].blurb, onclick: () => pick(s) }, h('b', null, TRAINS[s].name), h('span', { class: 'hw-muted' }, `${fmtSpeed(TRAINS[s].topSpeed)} · ${TRAINS[s].capacityComfort}/car · ${fmtMoney(TRAINS[s].costPerCar)}/car`)))),
+        h('div', { class: 'stock-grid' }, ...options.map((s) => h('button', { class: 'stock-btn' + (s === stock ? ' on' : ''), title: TRAINS[s].blurb, onclick: () => pick(s) }, h('b', null, stockName(s, bestMark(s))), h('span', { class: 'hw-muted' }, `${fmtSpeed(stockSpec(s, bestMark(s)).topSpeed)} · ${stockSpec(s, bestMark(s)).capacityComfort}/car · ${fmtMoney(stockSpec(s, bestMark(s)).costPerCar)}/car`)))),
         h('div', { class: 'opt-hint', style: 'margin-top:4px' }, TRAINS[stock].blurb + (stock === 'highspeed' ? '. Build high-speed line (track tool) for its full speed.' : '')),
       );
     }

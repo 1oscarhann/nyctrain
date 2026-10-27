@@ -1,6 +1,7 @@
 /**
  * The player's routes, with cached paths along the track.
  */
+import { bestMark, validMark } from '../core/tech';
 import { defaultStock, gaugeOf, OPERATIONS, STATION, STOCK_IDS, TRAINS, type StockId } from '../balance';
 import { platformLength, type Network } from '../construction/network';
 import type { Station } from '../construction/types';
@@ -38,7 +39,12 @@ export class RouteSet {
   create(partial: Omit<Route, 'id' | 'ownedCars' | 'control' | 'stock'> & { ownedCars?: number; control?: Partial<RouteControl>; stock?: StockId }): Route {
     const base = this.newControl();
     const control = partial.control ? normalizeControl(partial.control, base) : base;
-    const r: Route = { ownedCars: 0, ...partial, stock: validStock(partial.stock, partial.cls), express: partial.express ?? false, control, id: this.nextId++ };
+    const stock = validStock(partial.stock, partial.cls);
+    const r: Route = { ownedCars: 0, ...partial, stock, express: partial.express ?? false, control, id: this.nextId++ };
+    // New trains come at the latest mark researched.
+    const mark = partial.mark !== undefined ? validMark(stock, partial.mark) : bestMark(stock);
+    if (mark > 1) r.mark = mark;
+    else delete r.mark;
     r.control.timepoints = r.control.timepoints.filter((s) => r.stops.includes(s));
     this.routes.set(r.id, r);
     this.invalidate();
@@ -146,7 +152,12 @@ export class RouteSet {
     // Routes saved before operations control have none: legacy settings (holding off, no recovery).
     // Express service (v2): routes saved before it are locals.
     // Train types: routes saved before them run the metro trains of their track ('heavy' / 'light').
-    for (const r of d.routes) this.routes.set(r.id, { ...r, stock: validStock(r.stock, r.cls), headways: { ...r.headways }, stops: [...r.stops], control: normalizeControl(r.control, legacyControl()), express: r.express === true, shape: isBulletShape(r.shape) ? r.shape : undefined });
+    for (const r of d.routes) {
+      const stock = validStock(r.stock, r.cls);
+      const mark = validMark(stock, r.mark);
+      const { mark: _m, ...rest } = r;
+      this.routes.set(r.id, { ...rest, stock, ...(mark > 1 ? { mark } : {}), headways: { ...r.headways }, stops: [...r.stops], control: normalizeControl(r.control, legacyControl()), express: r.express === true, shape: isBulletShape(r.shape) ? r.shape : undefined });
+    }
     this.nextId = d.nextId;
     this.spareCars = emptySpares();
     for (const s of STOCK_IDS) this.spareCars[s] = Math.max(0, Math.floor(Number(d.spareCars?.[s] ?? 0)) || 0);

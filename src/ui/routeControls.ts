@@ -8,7 +8,8 @@ import { fmtCount, fmtMoney } from '../core/units';
 import type { PeriodId, Route } from '../routes/types';
 import type { App } from './app';
 import { h } from './dom';
-import { applyRouteChange, headwayText, perHour, previewRouteChange, stepHeadway, stockChoices, type RoutePatch } from './routeOps';
+import { applyRouteChange, headwayText, perHour, previewRouteChange, refitQuote, refitRoute, stepHeadway, stockChoices, type RoutePatch } from './routeOps';
+import { bestMark, stockName, stockSpec } from '../core/tech';
 
 /** A hover tip whose text is worked out when the pointer arrives (prices change as you play). */
 export function lazyTip(app: App, el: HTMLElement, f: () => { title: string; body?: string }): void {
@@ -60,17 +61,21 @@ export function trainLengthStepper(app: App, r: Route, after: () => void = () =>
     const p: RoutePatch = { cars: r.cars + d };
     const pv = previewRouteChange(game, r, p);
     const b = h('button', { class: 'hw-btn small step', disabled: !pv.ok, onclick: () => applyRouteChange(app, r.id, p) && after() }, d < 0 ? '−' : '+') as HTMLButtonElement;
-    lazyTip(app, b, () => (pv.ok ? { title: `${r.cars + d}-car trains`, body: `${priceText(app, r, p).body} · ${fmtCount((r.cars + d) * TRAINS[r.stock].capacityComfort)} people a train` } : { title: "Can't", body: pv.reason }));
+    lazyTip(app, b, () => (pv.ok ? { title: `${r.cars + d}-car trains`, body: `${priceText(app, r, p).body} · ${fmtCount((r.cars + d) * stockSpec(r.stock, r.mark).capacityComfort)} people a train` } : { title: "Can't", body: pv.reason }));
     return b;
   };
-  return h('div', { class: 'stepper' }, btn(-1), h('div', { class: 'step-val' }, h('b', null, `${r.cars} cars`), h('span', null, `${fmtCount(r.cars * TRAINS[r.stock].capacityComfort)} a train`)), btn(1));
+  return h('div', { class: 'stepper' }, btn(-1), h('div', { class: 'step-val' }, h('b', null, `${r.cars} cars`), h('span', null, `${fmtCount(r.cars * stockSpec(r.stock, r.mark).capacityComfort)} a train`)), btn(1));
 }
 
 /** Train type for the route's track family (asks first: the old cars go to spares). */
 export function trainTypePicker(app: App, r: Route, after: () => void = () => {}): HTMLSelectElement {
   const game = app.game;
   const sel = h('select', { class: 'mgr-select' }) as HTMLSelectElement;
-  for (const s of stockChoices(r)) sel.append(h('option', { value: s }, `${TRAINS[s].name} · ${Math.round(TRAINS[s].topSpeed * 3.6)} km/h`));
+  // The route's own type shows its mark; the others, what new trains of that type would be.
+  for (const s of stockChoices(r)) {
+    const mark = s === r.stock ? r.mark : bestMark(s);
+    sel.append(h('option', { value: s }, `${stockName(s, mark)} · ${Math.round(stockSpec(s, mark).topSpeed * 3.6)} km/h`));
+  }
   sel.value = r.stock;
   sel.addEventListener('change', async () => {
     const s = sel.value as StockId;
@@ -82,8 +87,8 @@ export function trainTypePicker(app: App, r: Route, after: () => void = () => {}
       return;
     }
     const ok = await app.confirm(
-      `Run ${TRAINS[s].name} trains on ${r.name}?`,
-      `${TRAINS[s].blurb}. ${pv.cost > 0 ? `Buys ${pv.carsToBuy} cars for ${fmtMoney(pv.cost)}` : 'Nothing to buy'}${pv.fromSpare ? ` (and uses ${pv.fromSpare} spare)` : ''}. The ${r.ownedCars} ${TRAINS[r.stock].name} cars go to the spare pool: reuse them on another route or sell them in Finances → Fleet.`,
+      `Run ${stockName(s, bestMark(s))} trains on ${r.name}?`,
+      `${TRAINS[s].blurb}. ${pv.cost > 0 ? `Buys ${pv.carsToBuy} cars for ${fmtMoney(pv.cost)}` : 'Nothing to buy'}${pv.fromSpare ? ` (and uses ${pv.fromSpare} spare)` : ''}. The ${r.ownedCars} ${stockName(r.stock, r.mark)} cars go to the spare pool: reuse them on another route or sell them in Finances → Fleet.`,
       'Switch trains',
     );
     if (ok && applyRouteChange(app, r.id, p)) after();
@@ -92,3 +97,13 @@ export function trainTypePicker(app: App, r: Route, after: () => void = () => {}
   return sel;
 }
 
+
+/** Refit to the newest mark, when research has one: "Refit to Mk II · £40M" (null otherwise). */
+export function refitButton(app: App, r: Route, after: () => void = () => {}): HTMLElement | null {
+  const q = refitQuote(r);
+  if (!q) return null;
+  const spec = stockSpec(r.stock, q.mark);
+  const b = h('button', { class: 'hw-btn small primary refit-btn', disabled: !app.game.finance.canAfford(q.cost), onclick: () => refitRoute(app, r.id) && after() }, `Refit to ${q.name.replace(TRAINS[r.stock].name + ' ', '')} · ${fmtMoney(q.cost)}`) as HTMLButtonElement;
+  lazyTip(app, b, () => ({ title: `Refit ${r.name} to ${q.name}`, body: `${Math.round(spec.topSpeed * 3.6)} km/h, ${spec.accel.toFixed(2)} m/s², ${fmtCount(spec.capacityComfort)} a car. ${r.ownedCars} cars at ${Math.round((q.cost / Math.max(1, r.ownedCars) / spec.costPerCar) * 100)}% of the new price.` }));
+  return b;
+}

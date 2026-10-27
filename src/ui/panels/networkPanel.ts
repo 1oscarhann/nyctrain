@@ -14,7 +14,7 @@ import type { App } from '../app';
 import { bullet, h, svgIcon } from '../dom';
 import { ICONS } from '../icons';
 import { quickPlan } from '../routeOps';
-import { headwayStepper, lazyTip, trainLengthStepper, trainTypePicker } from '../routeControls';
+import { headwayStepper, lazyTip, refitButton, trainLengthStepper, trainTypePicker } from '../routeControls';
 import { regularityTag } from '../opsMoney';
 import { shell, statCard, type Panel } from './common';
 
@@ -109,7 +109,7 @@ export function networkPanel(app: App, tab: NetworkTab = 'routes'): Panel {
           ),
           h('div', { class: 'num big' }, rep ? fmtCount(rep.routeRiders[r.id] ?? 0) : '—'),
           loadCell,
-          h('div', null, stockPicker(r), h('div', { class: 'hw-muted sub' }, `${plan.trainsNeeded} trains · ${fmtCount(plan.carsNeeded)} cars`)),
+          h('div', null, stockPicker(r), refitButton(app, r, rerender) ?? h('div', { class: 'hw-muted sub' }, `${plan.trainsNeeded} trains · ${fmtCount(plan.carsNeeded)} cars`)),
           carsStepper(r),
           stepper(r, 'peak', ['am', 'pm'], false),
           stepper(r, 'midday', ['midday'], false),

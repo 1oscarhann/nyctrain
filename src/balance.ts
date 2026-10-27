@@ -685,6 +685,139 @@ export const FLEET = {
 };
 
 // ---------------------------------------------------------------------------
+// Research (src/core/tech.ts): projects bought with cash that take weekdays to finish, then
+// upgrade trains (new marks you refit routes to), track, signalling, stations or costs. Costs are a
+// share of the city's starting cash, so every map's tree costs the same in proportion.
+export type ResearchId =
+  | 'metro-2' | 'metro-3' | 'light-2' | 'commuter-2' | 'intercity-2' | 'hs-2' | 'hs-3'
+  | 'tilting' | 'lightweight'
+  | 'mainline-230' | 'hs-360'
+  | 'cbtc' | 'ato' | 'driverless'
+  | 'psd' | 'gates'
+  | 'regen' | 'tbm' | 'viaducts'
+  | 'labs-2';
+
+export type ResearchBranch = 'trains' | 'track' | 'stations' | 'costs';
+
+export interface ResearchDef {
+  id: ResearchId;
+  name: string;
+  /** What it does, one line (the numbers are in the effects below and in tech.ts). */
+  blurb: string;
+  branch: ResearchBranch;
+  /** Cost as a share of ECONOMY.startingCash (London £5B: 0.03 = £150M). */
+  cost: number;
+  /** Weekdays of work. */
+  days: number;
+  requires?: ResearchId[];
+}
+
+export const RESEARCH_BRANCHES: { id: ResearchBranch; name: string }[] = [
+  { id: 'trains', name: 'Trains' },
+  { id: 'track', name: 'Track & signalling' },
+  { id: 'stations', name: 'Stations' },
+  { id: 'costs', name: 'Costs & the lab' },
+];
+
+export const RESEARCH: ResearchDef[] = [
+  { id: 'metro-2', branch: 'trains', name: 'Metro Mk II', blurb: 'Metro trains reach 110 km/h, pull away faster and carry 5% more', cost: 0.03, days: 30 },
+  { id: 'metro-3', branch: 'trains', name: 'Metro Mk III', blurb: 'Metro trains reach 130 km/h with the fastest starts of any train, and carry 10% more', cost: 0.05, days: 60, requires: ['metro-2'] },
+  { id: 'light-2', branch: 'trains', name: 'Light metro Mk II', blurb: 'Light metro reaches 120 km/h and carries 15% more in articulated cars', cost: 0.025, days: 30 },
+  { id: 'commuter-2', branch: 'trains', name: 'Commuter Mk II', blurb: 'Commuter trains reach 200 km/h and accelerate harder', cost: 0.03, days: 40 },
+  { id: 'intercity-2', branch: 'trains', name: 'Intercity Mk II', blurb: 'Intercity trains reach 250 km/h (on high-speed line) and get going quicker', cost: 0.04, days: 50 },
+  { id: 'hs-2', branch: 'trains', name: 'High-speed Mk II', blurb: 'High-speed trains reach 320 km/h and accelerate harder', cost: 0.04, days: 50 },
+  { id: 'hs-3', branch: 'trains', name: 'High-speed Mk III', blurb: '360 km/h high-speed trains (on 360 km/h line), the fastest wheels can go', cost: 0.06, days: 80, requires: ['hs-2', 'hs-360'] },
+  { id: 'tilting', branch: 'trains', name: 'Tilting trains', blurb: 'Commuter, intercity and high-speed trains take curves 20% faster', cost: 0.035, days: 45 },
+  { id: 'lightweight', branch: 'trains', name: 'Lightweight carbodies', blurb: 'Every train accelerates 8% harder and costs 10% less to run per car-km', cost: 0.03, days: 40, requires: ['regen'] },
+  { id: 'mainline-230', branch: 'track', name: 'Upgraded main lines', blurb: 'Ordinary heavy track runs at up to 230 km/h (was 200)', cost: 0.04, days: 50 },
+  { id: 'hs-360', branch: 'track', name: '360 km/h high-speed line', blurb: 'High-speed track runs at up to 360 km/h (was 320)', cost: 0.06, days: 70 },
+  { id: 'cbtc', branch: 'track', name: 'Moving-block signalling', blurb: 'Trains run closer together: 90-second headways and 40% fewer signal failures', cost: 0.05, days: 60 },
+  { id: 'ato', branch: 'track', name: 'Automatic train operation', blurb: 'Computer-driven trains: dwells 5 s shorter and tighter timetables', cost: 0.04, days: 45, requires: ['cbtc'] },
+  { id: 'driverless', branch: 'track', name: 'Driverless trains', blurb: 'No cab crew: train operations cost 15% less', cost: 0.06, days: 70, requires: ['ato'] },
+  { id: 'psd', branch: 'stations', name: 'Platform screen doors', blurb: 'Boarding 15% faster and 40% fewer police incidents on the tracks', cost: 0.03, days: 40 },
+  { id: 'gates', branch: 'stations', name: 'Contactless gates', blurb: 'Every station holds 20% more people before it gets crowded', cost: 0.02, days: 25 },
+  { id: 'regen', branch: 'costs', name: 'Regenerative braking', blurb: 'Braking trains feed power back: operations 20% cheaper per car-km', cost: 0.03, days: 40 },
+  { id: 'tbm', branch: 'costs', name: 'Better tunnel boring', blurb: 'Deep and cut-and-cover track 20% cheaper, their stations 15% cheaper, 25% quicker to dig', cost: 0.04, days: 50 },
+  { id: 'viaducts', branch: 'costs', name: 'Precast viaducts', blurb: 'Elevated track 20% cheaper, its stations 15% cheaper, 30% quicker to build', cost: 0.03, days: 40 },
+  { id: 'labs-2', branch: 'costs', name: 'Second design team', blurb: 'Run two research projects at once', cost: 0.02, days: 20 },
+];
+
+export const RESEARCH_TUNING = {
+  /** Projects at once, and with the second design team. */
+  slots: 1,
+  slotsWithLabs: 2,
+  /** Cancelling a project refunds this share of what it cost. */
+  cancelRefund: 0.5,
+  /** Refitting a route's trains to a newer mark costs this share of the new cars' price. */
+  refitShare: 0.35,
+};
+
+/**
+ * Train marks: Mk I is TRAINS as written; each later mark (unlocked by its research) replaces the
+ * speed and acceleration, scales capacity and the price of new cars. A route runs one mark;
+ * refit it in the route panel or Routes & stations.
+ */
+export interface TrainMark {
+  name: string;
+  research?: ResearchId;
+  topSpeed: number;
+  accel: number;
+  brake: number;
+  capacity: number;
+  costMult: number;
+}
+
+export const TRAIN_MARKS: Record<StockId, TrainMark[]> = {
+  heavy: [
+    { name: 'Mk I', topSpeed: 90 * KMH, accel: 1.1, brake: 1.2, capacity: 1, costMult: 1 },
+    { name: 'Mk II', research: 'metro-2', topSpeed: 110 * KMH, accel: 1.25, brake: 1.3, capacity: 1.05, costMult: 1.1 },
+    { name: 'Mk III', research: 'metro-3', topSpeed: 130 * KMH, accel: 1.35, brake: 1.4, capacity: 1.1, costMult: 1.2 },
+  ],
+  light: [
+    { name: 'Mk I', topSpeed: 100 * KMH, accel: 1.3, brake: 1.3, capacity: 1, costMult: 1 },
+    { name: 'Mk II', research: 'light-2', topSpeed: 120 * KMH, accel: 1.35, brake: 1.35, capacity: 1.15, costMult: 1.1 },
+  ],
+  commuter: [
+    { name: 'Mk I', topSpeed: 160 * KMH, accel: 0.8, brake: 0.9, capacity: 1, costMult: 1 },
+    { name: 'Mk II', research: 'commuter-2', topSpeed: 200 * KMH, accel: 0.95, brake: 1.0, capacity: 1, costMult: 1.12 },
+  ],
+  intercity: [
+    { name: 'Mk I', topSpeed: 200 * KMH, accel: 0.5, brake: 0.7, capacity: 1, costMult: 1 },
+    { name: 'Mk II', research: 'intercity-2', topSpeed: 250 * KMH, accel: 0.6, brake: 0.75, capacity: 1, costMult: 1.15 },
+  ],
+  highspeed: [
+    { name: 'Mk I', topSpeed: 300 * KMH, accel: 0.45, brake: 0.65, capacity: 1, costMult: 1 },
+    { name: 'Mk II', research: 'hs-2', topSpeed: 320 * KMH, accel: 0.55, brake: 0.7, capacity: 1, costMult: 1.1 },
+    { name: 'Mk III', research: 'hs-3', topSpeed: 360 * KMH, accel: 0.6, brake: 0.75, capacity: 1, costMult: 1.25 },
+  ],
+};
+
+/** The size of each research effect (tech.ts applies them). */
+export const TECH_EFFECTS = {
+  tiltCurve: 1.2,
+  tiltStocks: ['commuter', 'intercity', 'highspeed'] as StockId[],
+  lightweightAccel: 1.08,
+  lightweightOperating: 0.9,
+  mainlineSpeed: 230 * KMH,
+  hsLineSpeed: 360 * KMH,
+  cbtcSafetyMargin: 40,
+  cbtcHeadway: 1.5,
+  cbtcSignalFailures: 0.6,
+  atoDwellCut: 5,
+  driverlessOperating: 0.85,
+  psdBoarding: 0.85,
+  psdPolice: 0.6,
+  gatesCapacity: 1.2,
+  regenOperating: 0.8,
+  tbmCost: 0.8,
+  tbmStationCost: 0.85,
+  tbmDays: 0.75,
+  viaductCost: 0.8,
+  viaductStationCost: 0.85,
+  viaductDays: 0.7,
+};
+
+// ---------------------------------------------------------------------------
 // Fares (v2). Each city's default policy for new games is CITY_BALANCE[city].fares; the range and
 // step are ECONOMY.fareMin / fareMax / fareStep (per city).
 export const FARES = {

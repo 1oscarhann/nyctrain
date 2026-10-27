@@ -33,6 +33,7 @@ export class Toolbar {
   private alertsBtn: HTMLElement;
   private finBtn: HTMLElement;
   private netBtn!: HTMLElement;
+  private researchBtn!: HTMLElement;
   private goalsBtn!: HTMLElement;
   private badge = h('span', { class: 'badge num', style: 'display:none' });
 
@@ -55,6 +56,8 @@ export class Toolbar {
     attachTip(photo, app.tooltip, 'Photo mode', 'P', 'Hide the interface; L letterbox, C caption'); 
     const routes = (this.netBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-network', onclick: () => app.toggleNetwork() }, svgIcon(ICONS.routes)));
     attachTip(routes, app.tooltip, 'Routes & stations', 'N', 'Every route and station on one screen: how often trains come, train length and type, station upgrades'); 
+    const research = (this.researchBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-research', onclick: () => app.toggleResearch() }, svgIcon(ICONS.flask)));
+    attachTip(research, app.tooltip, 'Research', 'U', 'Faster trains, better signalling, cheaper building: fund projects and refit your fleet');
     const fin = (this.finBtn = h('button', { class: 'hw-btn ghost tool-btn', id: 'btn-finance', onclick: () => app.toggleFinance() }, svgIcon(ICONS.finance)));
     attachTip(fin, app.tooltip, 'Finances', 'M', 'Income, costs, bonds, fares, fleet');
     const goals = (this.goalsBtn = h('button', { class: 'hw-btn ghost tool-btn', onclick: () => (app.game.selection?.kind === 'goals' ? app.game.select(null) : app.game.select({ kind: 'goals' })) }, svgIcon(ICONS.goals)));
@@ -76,7 +79,7 @@ export class Toolbar {
     }
     this.schoolsBox = h('div', { class: 'schools-box' });
     this.overlayMenu.append(this.schoolsBox);
-    this.el = h('div', { id: 'toolbar', class: 'hw-panel' }, ...btns, h('div', { class: 'tool-sep' }), this.viewBtn, this.overlayBtn, timelapse, photo, h('div', { class: 'tool-sep' }), routes, fin, goals, this.alertsBtn, help);
+    this.el = h('div', { id: 'toolbar', class: 'hw-panel' }, ...btns, h('div', { class: 'tool-sep' }), this.viewBtn, this.overlayBtn, timelapse, photo, h('div', { class: 'tool-sep' }), routes, research, fin, goals, this.alertsBtn, help);
     this.options = h('div', { id: 'tool-options', class: 'hw-panel' });
     app.root.append(this.overlayMenu);
     app.view.events.on('view3d', () => this.update());
@@ -125,6 +128,7 @@ export class Toolbar {
     this.alertsBtn.classList.toggle('active', this.app.alertsShowing());
     this.finBtn.classList.toggle('active', this.app.game.selection?.kind === 'finance' && this.app.tools.active?.id !== 'route');
     this.netBtn.classList.toggle('active', this.app.game.selection?.kind === 'routes' && this.app.tools.active?.id !== 'route');
+    this.researchBtn.classList.toggle('active', this.app.game.selection?.kind === 'research');
     this.goalsBtn.classList.toggle('active', this.app.game.selection?.kind === 'goals' && this.app.tools.active?.id !== 'route');
   }
 

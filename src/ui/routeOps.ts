@@ -3,7 +3,8 @@
  * train type, applied at once with the fleet bought (or freed) to match. A preview prices any change
  * first, so each button can say what it costs.
  */
-import { gaugeOf, OPERATIONS, stocksFor, TRAINS, type StockId } from '../balance';
+import { gaugeOf, OPERATIONS, RESEARCH_TUNING, stocksFor, TRAINS, type StockId } from '../balance';
+import { bestMark, stockName, stockSpec, validMark } from '../core/tech';
 import { fmtMoney } from '../core/units';
 import type { Game } from '../core/game';
 import { purchaseFleet } from '../routes/fleet';
@@ -41,7 +42,9 @@ export function patched(r: Route, p: RoutePatch): Route {
   const swapped = stock !== r.stock;
   let cars = p.cars ?? r.cars;
   if (swapped) cars = Math.max(TRAINS[stock].minCars, Math.min(TRAINS[stock].maxCars, cars));
-  return { ...r, stock, cars, ownedCars: swapped ? 0 : r.ownedCars, headways: { ...r.headways, ...(p.headways ?? {}) }, control: p.control ? structuredClone(p.control) : r.control };
+  // A new train type comes at its latest mark.
+  const mark = swapped ? bestMark(stock) : r.mark;
+  return { ...r, stock, mark: mark && mark > 1 ? mark : undefined, cars, ownedCars: swapped ? 0 : r.ownedCars, headways: { ...r.headways, ...(p.headways ?? {}) }, control: p.control ? structuredClone(p.control) : r.control };
 }
 
 /** Run times are the expensive part (a route compile): cached per route shape and train type. */
@@ -62,7 +65,7 @@ export function quickPlan(game: Game, r: Route): { trainsNeeded: number; carsNee
   const carsNeeded = n * r.cars;
   const fromSpare = Math.min(game.routes.spareCars[r.stock], Math.max(0, carsNeeded - r.ownedCars));
   const carsToBuy = Math.max(0, carsNeeded - r.ownedCars - fromSpare);
-  return { trainsNeeded: n, carsNeeded, fromSpare, carsToBuy, cost: carsToBuy * TRAINS[r.stock].costPerCar, idleCars: Math.max(0, r.ownedCars - carsNeeded) };
+  return { trainsNeeded: n, carsNeeded, fromSpare, carsToBuy, cost: carsToBuy * stockSpec(r.stock, r.mark).costPerCar, idleCars: Math.max(0, r.ownedCars - carsNeeded) };
 }
 
 export function previewRouteChange(game: Game, r: Route, p: RoutePatch): RoutePreview {
@@ -93,10 +96,10 @@ export function applyRouteChange(app: App, routeId: number, p: RoutePatch): bool
     return false;
   }
   const next = patched(r, p);
-  const before = { stock: r.stock, cars: r.cars, ownedCars: r.ownedCars, headways: { ...r.headways }, control: structuredClone(r.control) };
+  const before = { stock: r.stock, mark: r.mark, cars: r.cars, ownedCars: r.ownedCars, headways: { ...r.headways }, control: structuredClone(r.control) };
   const swapped = next.stock !== r.stock;
   if (swapped) game.routes.spareCars[r.stock] += r.ownedCars;
-  game.routes.update(r.id, { stock: next.stock, cars: next.cars, ownedCars: next.ownedCars, headways: next.headways, control: next.control });
+  game.routes.update(r.id, { stock: next.stock, mark: next.mark, cars: next.cars, ownedCars: next.ownedCars, headways: next.headways, control: next.control });
   const res = purchaseFleet(game, r);
   if (!res.ok) {
     if (swapped) game.routes.spareCars[before.stock] -= before.ownedCars;
@@ -109,11 +112,12 @@ export function applyRouteChange(app: App, routeId: number, p: RoutePatch): bool
   return true;
 }
 
-/** Headway choices, shortest first (OPERATIONS.headwayChoices). */
-export const HEADWAYS = [...OPERATIONS.headwayChoices].sort((a, b) => a - b);
+/** Headway choices, shortest first (OPERATIONS.headwayChoices: research adds 90 seconds). */
+const headways = (): number[] => [...OPERATIONS.headwayChoices].sort((a, b) => a - b);
 
 /** One step more often (−1) or less often (+1) from a headway; 0 = no service. */
 export function stepHeadway(cur: number, dir: -1 | 1, allowOff: boolean): number | null {
+  const HEADWAYS = headways();
   if (cur <= 0) return dir < 0 ? HEADWAYS[HEADWAYS.length - 1] : null;
   const i = HEADWAYS.findIndex((v) => v >= cur - 1e-9);
   const at = i < 0 ? HEADWAYS.length - 1 : i;
@@ -138,3 +142,27 @@ export function headwayText(...hs: number[]): string {
 
 /** Trains per hour at a headway. */
 export const perHour = (hw: number): number => (hw > 0 ? Math.round(60 / hw) : 0);
+
+/** A refit to the latest mark of the route's train type: the mark and its price (null: nothing newer). */
+export function refitQuote(r: Route): { mark: number; name: string; cost: number } | null {
+  const best = bestMark(r.stock);
+  if (best <= validMark(r.stock, r.mark)) return null;
+  return { mark: best, name: stockName(r.stock, best), cost: Math.round(r.ownedCars * stockSpec(r.stock, best).costPerCar * RESEARCH_TUNING.refitShare) };
+}
+
+/** Refit a route's trains to the latest mark now (paid as trains). */
+export function refitRoute(app: App, routeId: number): boolean {
+  const game = app.game;
+  const r = game.routes.get(routeId);
+  const q = r ? refitQuote(r) : null;
+  if (!r || !q) return false;
+  if (!game.finance.spend(q.cost, 'trains')) {
+    app.toast("Can't afford the refit", `${fmtMoney(q.cost)} needed`, 'red');
+    return false;
+  }
+  game.routes.update(r.id, { mark: q.mark });
+  app.toast(`${r.name}: ${q.name}`, `Refitted for ${fmtMoney(q.cost)}: ${Math.round(stockSpec(r.stock, q.mark).topSpeed * 3.6)} km/h`, 'green');
+  game.events.emit('routes', undefined);
+  game.events.emit('money', undefined);
+  return true;
+}

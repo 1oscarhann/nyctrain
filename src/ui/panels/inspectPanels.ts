@@ -1,6 +1,6 @@
 /** Train, tract and track panels. */
+import { stockName } from '../../core/tech';
 import { city } from '../../cities';
-import { TRAINS } from '../../balance';
 import { edgeTooltip } from '../../construction/describe';
 import { fmtDate, isNewMonth, monthLabel } from '../../core/calendar';
 import { fmtClock, fmtCount, fmtDensity, fmtSpeed } from '../../core/units';
@@ -75,7 +75,7 @@ export function trainPanel(app: App, id: number): Panel {
         ['Speed', held ? 'Held by the dispatcher' : dwelling ? 'Dwelling' : fmtSpeed(t.v)],
         ['Cars', String(r.cars)],
         ['Capacity', `${fmtCount(r.capComfort)} comfortable · ${fmtCount(r.capCrush)} crush`],
-        ['Train type', TRAINS[r.stock ?? 'heavy'].name],
+        ['Train type', stockName(r.stock ?? 'heavy', r.mark)],
         ['Top speed', fmtSpeed(r.vmax)],
       ]),
     );

@@ -38,6 +38,8 @@ export interface Route {
   cls: TrackClass;
   /** Train type (balance.ts TRAINS). Routes from before train types load as their track's metro trains. */
   stock: StockId;
+  /** Train mark (balance.ts TRAIN_MARKS, research): absent = Mk I. Refit to move up. */
+  mark?: number;
   /** Station ids in order (direction 0 runs first → last). */
   stops: number[];
   cars: number;

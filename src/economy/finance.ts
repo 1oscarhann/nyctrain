@@ -36,6 +36,8 @@ export interface DayLedger {
    * exactly the ledgers it had before Living City; read it as `valueCapture ?? 0`.
    */
   valueCapture?: number;
+  /** Research projects started this day (paid at once; not an asset). Absent = none. */
+  research?: number;
   /** Service figures for monthly and yearly reviews. */
   kpi?: DayKpi;
 }
@@ -256,6 +258,14 @@ export class Finance {
     return true;
   }
 
+  /** Research: paid at once, adds nothing to the maintenance base. A negative amount refunds. */
+  spendResearch(amount: number): boolean {
+    if (amount > 0 && !this.canAfford(amount)) return false;
+    if (!this.sandbox) this.cash -= amount;
+    this.today.research = (this.today.research ?? 0) + amount;
+    return true;
+  }
+
   /** Bulldozing refunds part of an asset's cost. */
   refund(assetCost: number, fraction: number): number {
     const r = assetCost * fraction;
@@ -380,7 +390,7 @@ export class Finance {
       days: days.length,
       revenue,
       operatingCosts,
-      capital: sum((h) => h.construction + h.trains - h.refunds),
+      capital: sum((h) => h.construction + h.trains - h.refunds + (h.research ?? 0)),
       bondPayments: sum((h) => h.bondInterest + h.bondPrincipal),
       profit: revenue + valueCapture - operatingCosts - interest - fees,
       ...(hasVc ? { valueCapture } : {}),

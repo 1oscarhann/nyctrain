@@ -96,6 +96,8 @@ export interface SaveFile {
     timelapse: SavedTimelapse;
     /** Your company: name, logo and start-up grant (absent in older saves). */
     company?: unknown;
+    /** Research: finished and in-progress projects (absent in older saves: none). */
+    research?: unknown;
   };
   settings: SaveSettings;
   modeState: SavedModeState | null;

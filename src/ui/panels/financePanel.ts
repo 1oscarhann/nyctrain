@@ -118,6 +118,7 @@ export function financePanel(app: App): Panel {
           ['Bond prepayments', signed(-(y.prepaid ?? 0))],
           ['Operating result', signed(y.revenue + vc - opCost - y.bondInterest - fees)],
           ['Construction & trains', signed(-(y.construction + y.trains - y.refunds))],
+          ...(y.research ? [['Research', signed(-y.research)] as [string, HTMLElement]] : []),
         ]),
       );
     } else content.append(section('Yesterday'), h('div', { class: 'hw-muted' }, 'Finances settle at midnight.'));
@@ -133,6 +134,7 @@ export function financePanel(app: App): Panel {
           ...(days.some((d) => d.valueCapture !== undefined) ? [['Value capture', signed(sum((d) => d.valueCapture ?? 0))] as [string, HTMLElement]] : []),
           ['Operating costs', signed(-sum((d) => d.operating + d.staffing + d.maintenance))],
           ['Capital spending', signed(-sum((d) => d.construction + d.trains - d.refunds))],
+          ...(days.some((d) => d.research) ? [['Research', signed(-sum((d) => d.research ?? 0))] as [string, HTMLElement]] : []),
         ]),
       );
     }

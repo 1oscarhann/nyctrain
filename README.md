@@ -282,6 +282,33 @@ The route panel uses the same controls (train type, length, and peak / midday / 
 frequency), and its Operations settings (holding, threshold, recovery, timepoints) apply at once
 too: there is no Apply button anywhere.
 
+## Research and train upgrades (U)
+
+The flask button (or **U**) opens Research, full screen: 20 projects in four branches. A project
+is paid for when it starts (a share of the city's starting cash, so London's Metro Mk II is £150M),
+takes weekdays of work, and applies the moment it finishes. One design team works on one project
+at a time; the *Second design team* project adds another. Stopping a project refunds half. In
+Sandbox research is instant and free. Finished and running projects are saved (older saves have
+none).
+
+| Branch | Projects |
+|---|---|
+| Trains | Metro Mk II (110 km/h) and Mk III (130 km/h); Light metro Mk II (120 km/h, +15% capacity); Commuter Mk II (200 km/h); Intercity Mk II (250 km/h); High-speed Mk II (320 km/h) and Mk III (360 km/h, needs the 360 km/h line); tilting trains (commuter, intercity and high-speed take curves 20% faster); lightweight carbodies (+8% acceleration, −10% running cost) |
+| Track & signalling | upgraded main lines (heavy track 230 km/h); 360 km/h high-speed line; moving-block signalling (90-second headways, a 40 m safety margin instead of 100 m, 40% fewer signal failures); automatic train operation (5 s shorter dwells); driverless trains (−15% running cost) |
+| Stations | platform screen doors (boarding 15% faster, 40% fewer police incidents); contactless gates (every station holds 20% more) |
+| Costs & the lab | regenerative braking (−20% running cost per car-km); better tunnel boring (deep and cut-and-cover track −20%, their stations −15%, 25% quicker); precast viaducts (elevated −20%, stations −15%, 30% quicker); a second design team |
+
+**Train marks.** Each train type has marks (`TRAIN_MARKS`): new routes and new cars come at the
+newest researched mark (a little dearer per car); existing routes keep theirs until refitted, for
+35% of the new cars' price (*Refit* in the route panel, Routes & stations, or *Refit all* on the
+research card). Names follow the mark ("Metro Mk II").
+
+**How it works.** `src/core/tech.ts` applies finished research to the shared numbers on the thread
+it runs on, like `applyCity`: the main thread for a new game, a load or a project finishing, and
+the sim worker from the list every compiled network carries. `applyCity` resets the city's numbers
+and the research with them, and `applyTech([])` restores them exactly. Route marks are read through
+`stockSpec(stock, mark)` (timetables, the sim's trains, prices).
+
 ## Station upgrades
 
 Each station's platforms hold a comfortable number of people waiting: 12 per metre of platform at
@@ -314,6 +341,7 @@ Upgraded stations cost more to staff and draw a little bigger on the map.
 | 1 – 4 | Speed 1×, 5×, 20×, 60× (1× = one game minute per second) |
 | ⏩ button | Skip to 6 am |
 | L / T / S / R / B | Line / Track / Station / Route / Bulldoze tool |
+| U | Research (projects, train marks and refits) |
 | N | Routes & stations screen (toggle): every route's frequency, train length and type, every station's upgrades and car park |
 | V | Flat ⇄ tilted 3D (buildings grow while the camera tilts) |
 | Esc | Back to Select, or cancel the current draft |

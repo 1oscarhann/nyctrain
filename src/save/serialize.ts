@@ -1,4 +1,6 @@
 /** Game state ⇄ save file. */
+import { sanitizeResearch } from '../core/research';
+import { applyTech } from '../core/tech';
 import { CHAOS, GROWTH, type ChaosLevel, type GrowthPace } from '../balance';
 import { city } from '../cities';
 import type { ChaosSettings, Game } from '../core/game';
@@ -120,6 +122,7 @@ export function buildSave(
       growthPace: game.growthPace,
       timelapse: game.timelapseData(),
       ...(game.company ? { company: JSON.parse(JSON.stringify(game.company)) } : {}),
+      ...(game.research.done.length || game.research.active.length ? { research: JSON.parse(JSON.stringify(game.research)) } : {}),
     },
     settings: { ...extra.settings },
     modeState: ms ? { key: ms.key, shares: f32ToB64(ms.shares), obsTime: f32ToB64(ms.obsTime), obsCrowd: f32ToB64(ms.obsCrowd) } : null,
@@ -134,6 +137,9 @@ export function applySave(game: Game, save: SaveFile): { goals: GoalState; lastR
   game.sandbox = g.sandbox;
   game.growthPace = isGrowthPace(g.growthPace) ? g.growthPace : 'steady';
   game.fares = normalizeFares(g.fares);
+  // Research first: route marks and the network's numbers follow it.
+  game.research = sanitizeResearch(g.research);
+  applyTech(game.research.done);
   game.network.load(g.network);
   game.routes.load(g.routes);
   game.finance = Finance.fromData(g.finance);

@@ -4,6 +4,7 @@
  * new or growing routes draw on first. Idle cars (beyond a route's plan) and spare cars can be sold
  * for FLEET.resaleFraction of their new price (v2); they leave the maintenance base.
  */
+import { stockSpec } from '../core/tech';
 import { FLEET, TRAINS, type StockId } from '../balance';
 import type { Game } from '../core/game';
 import { recoveryPerTerminal, roundTripTime, routeTimetable, trainsNeeded } from './compile';
@@ -37,7 +38,7 @@ export function fleetPlan(game: Game, r: Route): FleetPlan {
     carsNeeded,
     fromSpare,
     carsToBuy,
-    cost: carsToBuy * TRAINS[r.stock].costPerCar,
+    cost: carsToBuy * stockSpec(r.stock, r.mark).costPerCar,
     runTimes: tt.runTimes,
     roundTrip: roundTripTime(r, tt.runTimes),
     recovery: recoveryPerTerminal(r, tt.runTimes),

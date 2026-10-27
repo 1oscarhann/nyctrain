@@ -3,6 +3,8 @@
  * goals, saving and keyboard shortcuts together. The main thread only renders and handles input;
  * the simulation lives in the worker.
  */
+import { researchDef, TRAIN_MARKS_BY_RESEARCH } from '../core/research';
+import { researchPanel } from './panels/researchPanel';
 import { ArcLayer, ScatterplotLayer, TextLayer, PathLayer } from '@deck.gl/layers';
 import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
 import type { Layer } from '@deck.gl/core';
@@ -308,6 +310,12 @@ export class App implements AppContext {
       if (this.game.selection?.kind === 'finance') this.refreshPanel();
     });
     g.events.on('toast', (t) => this.toast(t.title, t.body, t.tone));
+    // Research in force changes speeds, dwells and costs: re-time the network and redraw panels.
+    g.events.on('research', () => {
+      this.scheduleRecompile();
+      this.topbar.update();
+      if (this.game.selection) this.refreshPanel();
+    });
     g.events.on('select', (sel) => this.onSelect(sel));
     g.events.on('chaos', () => {
       this.feed.touch();
@@ -629,6 +637,16 @@ export class App implements AppContext {
         this.toasts.show(`${st.name} is overcrowded`, body, worst.turned ? 'red' : 'amber', 9000, () => g.select({ kind: 'station', id: st.id }));
       }
     }
+    // Research: a weekday's work; finished projects are in force now (re-time the network).
+    const finished = g.advanceResearch();
+    if (finished.length) {
+      for (const id of finished) {
+        const d = researchDef(id);
+        const refit = TRAIN_MARKS_BY_RESEARCH.get(id);
+        this.toasts.show(`Research done: ${d.name}`, refit ? `${d.blurb}. Refit routes to it in Routes & stations (N); new trains come as it.` : d.blurb, 'green', 10000, () => this.openResearch());
+      }
+      this.scheduleRecompile();
+    }
     this.panel?.dayEnd?.();
     this.applyStationStats();
     this.stations.update(this.view.is3D, this.network.quadOffsets);
@@ -777,6 +795,8 @@ export class App implements AppContext {
         return this.showPanel(networkPanel(this, sel.tab));
       case 'alerts':
         return this.showPanel(alertsPanel(this, sel.focus, sel.event));
+      case 'research':
+        return this.showPanel(researchPanel(this));
     }
   }
 
@@ -1141,6 +1161,16 @@ export class App implements AppContext {
   }
 
   /** Routes & stations manager (N). */
+  /** Research (full screen). */
+  openResearch(): void {
+    this.game.select({ kind: 'research' });
+  }
+
+  toggleResearch(): void {
+    if (this.game.selection?.kind === 'research') this.game.select(null);
+    else this.openResearch();
+  }
+
   toggleNetwork(tab?: 'routes' | 'stations'): void {
     if (this.game.selection?.kind === 'routes' && (!tab || this.game.selection.tab === tab)) this.game.select(null);
     else this.game.select({ kind: 'routes', tab: tab ?? 'routes' });
@@ -1496,6 +1526,10 @@ export class App implements AppContext {
       case 'n':
       case 'N':
         this.toggleNetwork();
+        break;
+      case 'u':
+      case 'U':
+        this.toggleResearch();
         break;
       case 'g':
       case 'G':

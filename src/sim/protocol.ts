@@ -77,6 +77,8 @@ export interface CRoute {
   shape?: import('../routes/types').BulletShape;
   /** Train type (UI only; the sim uses the numbers below). */
   stock?: StockId;
+  /** Train mark (research): absent = Mk I. */
+  mark?: number;
   cls: TrackClass;
   cars: number;
   trainLength: number;
@@ -107,6 +109,8 @@ export interface CompiledNetwork {
   lockCount: number;
   /** Stations to staff, counting a cross-platform pair as QUAD.pairStaffing (v2); absent = stations.length. */
   staffedStations?: number;
+  /** Finished research (core/tech.ts): the worker applies its effects. Absent = none. */
+  research?: string[];
 }
 
 /**

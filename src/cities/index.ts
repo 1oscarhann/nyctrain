@@ -6,6 +6,7 @@
  */
 import { CITY_BALANCE, COMMUTERS, CREDIT, ECONOMY, GOALS, GROWTH, MAP, SCHOOLS, STATION, TRACK, VALUE_CAPTURE, type CityBalance, type CityId, type ZoneRule } from '../balance';
 import { setOrigin } from '../core/geo';
+import { resetTech } from '../core/tech';
 import { setCurrency } from '../core/units';
 import { LONDON } from './london';
 import { NYC } from './nyc';
@@ -56,6 +57,8 @@ export function applyCity(id: CityId): CityConfig {
   setCurrency(current.currency);
   // The look follows the city (CSS custom properties under [data-theme]); no DOM in the worker.
   if (typeof document !== 'undefined') document.documentElement.dataset.theme = current.theme;
+  // Research effects are on top of the city's numbers: none until a game applies its own.
+  resetTech();
   return current;
 }
 
