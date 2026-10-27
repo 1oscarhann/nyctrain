@@ -1828,6 +1828,44 @@ table.fleet td {
 :root[data-theme='tfl'] .hw-panel {
   border-radius: 4px;
 }
+/* ======================================================================================
+   The national high-speed map (html[data-theme="hsr"]): deep indigo panels, a vermilion primary
+   action, line bars for routes. In the spirit of railway signage at night; no operator's livery.
+   ====================================================================================== */
+:root[data-theme='hsr'] {
+  --panel: rgba(12, 16, 32, 0.95);
+  --panel-solid: #0c1020;
+  --panel-raised: #18203a;
+  --panel-line: rgba(220, 228, 255, 0.09);
+  --panel-line-strong: rgba(220, 228, 255, 0.2);
+  --ink: #eef1fa;
+  --muted: #9aa3c0;
+  --dim: #626b8a;
+  --hsr-red: #e8452c;
+  --hsr-red-hi: #f25a42;
+}
+:root[data-theme='hsr'] body {
+  background: #0e1426;
+}
+:root[data-theme='hsr'] .hw-btn {
+  border-radius: 4px;
+}
+:root[data-theme='hsr'] .hw-btn:hover {
+  background: #222b4a;
+}
+:root[data-theme='hsr'] .hw-btn.primary {
+  background: var(--hsr-red);
+  border-color: var(--hsr-red);
+  color: #fff;
+}
+:root[data-theme='hsr'] .hw-btn.primary:hover {
+  background: var(--hsr-red-hi);
+  border-color: var(--hsr-red-hi);
+}
+:root[data-theme='hsr'] .hw-panel {
+  border-radius: 6px;
+}
+
 /* Line bar: a squared-off rounded rectangle carrying the line's code. */
 .bullet.bar {
   border-radius: 3px;

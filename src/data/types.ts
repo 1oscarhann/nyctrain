@@ -38,6 +38,11 @@ export interface TractRecord {
   residents: number;
   /** City-resident commuters working here. */
   jobs: number;
+  /**
+   * Population (Japan, where residents and jobs count travellers, not commuters): the density that
+   * prices building through town and colours the residents overlay. Absent: residents + jobs.
+   */
+  pop?: number;
 }
 
 export interface TractsFile {

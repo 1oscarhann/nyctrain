@@ -94,9 +94,28 @@ export const ROUTE_COLORS_TFL = [
   '#0019A8', // deep blue
 ];
 
-/** The palette for a theme ('tfl' London style; anything else New York style). */
+/**
+ * The national high-speed map (theme 'hsr'): clear, saturated line colours that read on a
+ * country-sized map at low zoom, in the spirit of railway route maps (no operator's livery).
+ */
+export const ROUTE_COLORS_HSR = [
+  '#2F7FE0', // sky blue
+  '#E8452C', // vermilion
+  '#3FB68B', // jade
+  '#F2B035', // gold
+  '#A77BDB', // wisteria
+  '#E85A9B', // azalea
+  '#1FA3A3', // teal
+  '#8BC34A', // leaf
+  '#F28C28', // persimmon
+  '#5C6BC0', // indigo
+  '#C0392B', // crimson
+  '#9AA5B1', // silver
+];
+
+/** The palette for a theme ('tfl' London style, 'hsr' the high-speed map; else New York style). */
 export function routePalette(theme: string): string[] {
-  return theme === 'tfl' ? ROUTE_COLORS_TFL : ROUTE_COLORS;
+  return theme === 'tfl' ? ROUTE_COLORS_TFL : theme === 'hsr' ? ROUTE_COLORS_HSR : ROUTE_COLORS;
 }
 
 export const ROUTE_COLORS = [

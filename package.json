@@ -14,6 +14,7 @@
     "data:london": "tsx scripts/build-data-london.ts",
     "data:southeast": "tsx scripts/build-data-southeast.ts",
     "data:uk": "tsx scripts/build-data-ukmetro.ts",
+    "data:japan": "tsx scripts/build-data-japan.ts",
     "data:schools": "tsx scripts/build-schools.ts",
     "test": "vitest run",
     "test:unit": "vitest run --exclude 'tests/*headless*.test.ts'",

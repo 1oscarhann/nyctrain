@@ -5,10 +5,11 @@ A metro builder set in real cities where nobody ever built one. Pick a mode on t
 city regions: **Manchester**, **Birmingham**, **Leeds** and **Bristol**, see
 [More cities](#more-cities-manchester-birmingham-leeds-bristol)) or **Intertown**
 (**South East**: London and the whole ONS South East region, a railway builder at regional
-scale; see [Intertown](#intertown-the-south-east)). You get the actual streets,
-shoreline and buildings, real commuting data and a few billion dollars or pounds. You design
-track, stations and routes. Then about 2.9 million simulated commuters decide each morning
-whether your network beats walking or driving.
+scale; see [Intertown](#intertown-the-south-east)) or **High-speed** (**Japan**: the four main
+islands and a national Shinkansen network; see [High-speed: Japan](#high-speed-japan)). You get
+the actual streets, shoreline and buildings, real commuting (or travel) data and a few billion
+dollars or pounds (or trillions of yen). You design track, stations and routes. Then about 2.9
+million simulated commuters decide each morning whether your network beats walking or driving.
 
 Everything runs in the browser: Vite + TypeScript (strict), MapLibre GL JS with deck.gl in
 interleaved mode, Turf and uPlot. The simulation runs in a Web Worker; the main thread only
@@ -139,6 +140,89 @@ so London-bound commuters from the coast count). Every game starts with one free
 * **Naming**: stations take the nearest town or village label, else the district name.
 * **Agents**: at least 1 : 20 (about 318,000 agents, New York's count at 1 : 10).
 * **Goals**: London to the sea; reach the big towns (stretch); Victoria to Brighton in under an hour.
+
+## High-speed: Japan
+
+A national map and a different game: Japan from Kagoshima to Wakkanai, 2,000 km of it, but the
+Shinkansen was never built. Nobody commutes on this map: **2.06 million journeys a weekday**
+between 1,657 towns and cities (there and back in a day, so about 4 million trips) choose between
+your high-speed trains and the expressway. One free, built terminal at **Tokyo** (16 cars, on a
+viaduct, pointing south-west and north), a high-speed station at each of 16 airports, and
+**¥5 trillion**: about one Tokaido-length line through the mountains, with its trains.
+
+* **Data**: `npm run data:japan` (`scripts/build-data-japan.ts`; zone table `scripts/japanZones.ts`;
+  needs `mapshaper`, run through npx). Travel is MLIT's 2015 inter-regional passenger survey
+  (全国幹線旅客純流動調査): trips a weekday between its 207 living areas by purpose, home area to
+  destination, every trip that leaves a prefecture (3.47 million; Okinawa and the outlying islands
+  dropped). The survey has no trips inside a prefecture or a metropolitan area, so area pairs there
+  get modelled trips from a Poisson gravity model fitted to the survey's own pairs (trips ∝
+  P<sub>a</sub><sup>0.86</sup> P<sub>b</sub><sup>0.56</sup> d<sup>−2.34</sup>): inside a prefecture from 40 km
+  apart, inside the Tokyo, Chukyo and Kinki metro areas from 60 km (their commuter railways already
+  cover the shorter hops). That adds 0.7 million trips: Fukuoka–Kitakyushu, Shizuoka–Hamamatsu,
+  Tokyo–Odawara, Osaka–Himeji. Each area's trips are spread over its municipalities (designated-city
+  wards merged; Tokyo's 23 special wards kept) by 2020 Census 500 m mesh population at both ends,
+  in lumps of 10, and placed at the residents' centroid; a journey there and back is one agent.
+  Earnings bands are trip purposes: private and other (36%), sightseeing (30%), business (33%).
+  Boundaries and land are MLIT's 国土数値情報 N03 (2024), dissolved and simplified with mapshaper;
+  names are romanised from the MIC municipality code list's kana.
+* **The map is a Lambert conformal conic projection** (`CityBalance.projection`, standard parallels
+  33° and 44° N), so distances stay within 1% from Kyushu to Hokkaido; long straights are drawn
+  with a point every 2 km so the map's Mercator lines follow the track. The land mask uses 500 m
+  cells and closes the hairline gaps between prefecture outlines (straits stay open).
+* **Mountains** (`relief.bin`, `src/data/relief.ts`): MLIT's 1 km mesh of mean slope and elevation.
+  A square's steepness runs from 0 at 2° to 1 at 15° (`TRACK.mountainSlope`); building there costs
+  ×(1 + k·m): at grade ×6, cut-and-cover ×6, viaduct ×3, deep tunnel only ×1.4 (`TRACK.mountainK`),
+  and takes longer. So the lines tunnel through the ranges or follow the coast, as the real ones
+  do. **Overlays → Terrain** shows it (a hillshade, brown up the slopes); the track tooltip shows
+  the mountain premium.
+* **Rules**: high-speed line only (`CityConfig.trackClasses`), Shinkansen trains only
+  (`stocks`, `stockNames`), new track elevated, 16-car platforms, full-length trains from the Line
+  tool, timetables every 15–60 min (none at night). Base costs ×1.8 for high-speed: viaduct ≈ ¥5B a
+  km, embankment ¥2.5B, mountain tunnel ¥6.5B, cut-and-cover ¥12B, dearer through towns (deep
+  tunnels too) and in the mountains; long lines are built by many contractors at once, so days per
+  km are a tenth of a metro's.
+* **Money is kept in hundreds of yen** (`currencyScale: 100`), so every shared number still means
+  what it does elsewhere: a high-speed car is 4.5M (¥450M), a day's staff at a station 20,000
+  (¥2M). Displays multiply by 100 and count in T for trillions. Fares: ¥1,500 × (1 + km ÷ 45),
+  straight line, one fare all day: Tokyo–Osaka ≈ ¥14,800. Values of time ¥1,500 an hour (private),
+  ¥2,200 (sightseeing), ¥4,500 (business). Event-goers and airport passengers now pay distance fares
+  too (on every intertown map).
+* **Getting to the station** is a local train, a bus or a lift: 25 km/h over 1.3× the straight
+  line, up to 40 km (`walkSpeed`, `maxAccessWalk`; the walk mode is off). Driving runs 75 km/h on
+  the expressways beyond the first 15 km, ¥22 a km in tolls and fuel. Trips go out from 6 am,
+  mostly mid-morning, and back about six hours after arriving; the logit is gentler (0.025 a
+  minute) for long trips.
+* **Airports are where a lot of people come and go**: Haneda 216,000 passengers a day, Narita
+  91,000, Kansai 71,000, Fukuoka, New Chitose, Itami, Chubu and nine more, each with a station
+  under the terminal from day one. Their passengers come from the whole region (60 km decay).
+* **Earthquakes** (`CityChaos.quakes`): about eight a year at Normal, mostly off the Pacific coast of
+  Tohoku and Kanto, under the Tokai and Nankai coasts, in Kyushu and eastern Hokkaido. Every line
+  within 60–160 km of the epicentre crawls at 30 km/h for 15–50 min while it is inspected (a red
+  ring on the map, a severity-3 alert). Two Japan-only research projects: **Earthquake early
+  warning** halves the stops; **Snow sprinklers and heated points** halves the weather's slowdown.
+  Weather is one forecast for the whole country, so its effects are scaled to the third of the map
+  a snow or storm day touches (`ClimateDef.reach`). Incidents are rarer than a metro's (dedicated
+  lines, no level crossings).
+* **Events that move the country**: the grand sumo tournaments (Tokyo in January, May and
+  September; Osaka, Nagoya, Fukuoka), the summer and spring high-school baseball at Koshien, the
+  Aomori lantern festival, Sendai's star festival, Kyoto's summer festival, the Tokushima dance
+  festival, the Sapporo snow festival, trade fairs on Tokyo Bay and night baseball (named by place).
+  Festival-goers come from 250–300 km (per-kind `originDecay`) and reach the venue from a station
+  up to 15 km away.
+* **Look**: `theme: 'hsr'`: deep indigo panels, a vermilion primary action, line bars, a palette
+  of clear line colours. Municipalities show travellers from them and visitors to them.
+* **Goals**: Tokyo to Osaka; under the strait to Hokkaido; all four islands (stretch); Tokyo
+  station to Umeda in under 2½ hours. Rider milestones 100k to 1M a day.
+* **Balance** (headless, `npx tsx scripts/japan-tokaido.ts`, agent scale 20): a Tokaido-style line
+  from Tokyo to Shin-Osaka (485 km, 14 stations, mostly viaduct, tunnels at Hakone, Shizuoka and
+  Sekigahara) costs ¥4.2T in track. An all-stations train every 30 min and a fast one every
+  10–15 min carry 216,000 riders on day 3 and 292,000 by day 28 (¥2.7B of fares a day against
+  ¥0.75B to run and ¥0.19B of upkeep): two-thirds of the 200–600 km journeys between its stations
+  ride, a sixth of those under 100 km. The first month's value capture is ¥230M.
+* **Simplifications**: there is no air mode (the user's call: airports are where people come and
+  go, not rivals), so the expressway is the only other way and long journeys favour the train more
+  than in reality; the survey leaves out regular commuting, so Shinkansen commuters are missing.
+  `tests/japan.test.ts` covers the data, projection, relief, rules, a Tokaido line and earthquakes.
 
 ## Train types and high-speed line
 

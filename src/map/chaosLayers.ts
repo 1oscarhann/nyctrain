@@ -49,6 +49,7 @@ export class ChaosLayers {
   private venues: VenueMarker[] = [];
   private todayCache: { version: number; list: VenueMarker[] } | null = null;
   private incidents: IncidentMarker[] = [];
+  private quakes: { pos: [number, number]; r: number }[] = [];
   private signals: SignalSeg[] = [];
   private ring: { pos: [number, number] } | null = null;
   private version = 0;
@@ -82,6 +83,7 @@ export class ChaosLayers {
   setAlerts(active: Alert[]): void {
     this.incidents = active.filter((a) => a.pos).map((a) => ({ id: a.id, pos: toLonLat(a.pos![0], a.pos![1]), severity: a.severity }));
     this.signals = active.filter((a) => a.kind === 'signal' && a.path && a.path.length > 1).map((a) => ({ id: a.id, path: a.path!.map((p) => toLonLat(p[0], p[1])) }));
+    this.quakes = active.filter((a) => a.kind === 'quake' && a.pos && a.radius).map((a) => ({ pos: toLonLat(a.pos![0], a.pos![1]), r: a.radius! }));
     this.version++;
   }
 
@@ -93,6 +95,25 @@ export class ChaosLayers {
   venueLayers(glow = 0): Layer[] {
     const v = this.version;
     const out: Layer[] = [];
+    if (this.quakes.length) {
+      // Earthquakes: the reach of the shaking, where every train stops and then crawls.
+      out.push(
+        new ScatterplotLayer<{ pos: [number, number]; r: number }>({
+          id: 'chaos-quakes',
+          data: this.quakes,
+          getPosition: (d) => d.pos,
+          getRadius: (d) => d.r,
+          radiusUnits: 'meters',
+          getFillColor: [255, 93, 93, 26],
+          stroked: true,
+          getLineColor: [255, 93, 93, 170],
+          getLineWidth: 2,
+          lineWidthUnits: 'pixels',
+          parameters: DEPTH,
+          updateTriggers: { getPosition: v, getRadius: v },
+        }),
+      );
+    }
     if (this.signals.length) {
       out.push(
         new PathLayer<SignalSeg, PathStyleExtensionProps<SignalSeg>>({

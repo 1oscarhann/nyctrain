@@ -42,30 +42,49 @@ export function fmtPerDistance(dollarsPerM: number): string {
 }
 
 let CUR = '$';
+let SCALE = 1;
 
-/** Currency symbol of the current city (set by cities/applyCity). */
-export function setCurrency(symbol: string): void {
+/**
+ * Currency of the current city (set by cities/applyCity): its symbol and how many of it one unit of
+ * game money is. Dollars and pounds are 1; Japan keeps the game's numbers by counting money in
+ * hundreds of yen (a metro car is ≈ 2.5M units in every city), so its displays multiply by 100.
+ */
+export function setCurrency(symbol: string, scale = 1): void {
   CUR = symbol;
+  SCALE = scale;
 }
 
 export function currency(): string {
   return CUR;
 }
 
+/** Display currency per unit of game money (100 in Japan: amounts are kept in hundreds of yen). */
+export function currencyScale(): number {
+  return SCALE;
+}
+
 export function fmtMoney(d: number, opts: { sign?: boolean; precise?: boolean } = {}): string {
   const sign = d < 0 ? '−' : opts.sign ? '+' : '';
-  const a = Math.abs(d);
+  const a = Math.abs(d) * SCALE;
   let s: string;
-  if (a >= 1e9) s = `${CUR}${(a / 1e9).toFixed(a >= 1e10 ? 1 : 2)}B`;
+  if (a >= 1e12) s = `${CUR}${(a / 1e12).toFixed(a >= 1e13 ? 1 : 2)}T`;
+  else if (a >= 1e9) s = `${CUR}${(a / 1e9).toFixed(a >= 1e10 ? 1 : 2)}B`;
   else if (a >= 1e6) s = `${CUR}${(a / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M`;
   else if (a >= 1e4 && !opts.precise) s = `${CUR}${(a / 1e3).toFixed(0)}k`;
+  else if (SCALE !== 1) s = `${CUR}${Math.round(a).toLocaleString('en-GB')}`;
   else s = `${CUR}${a.toLocaleString(undefined, { maximumFractionDigits: a < 10 ? 2 : 0, minimumFractionDigits: a < 10 && a % 1 ? 2 : 0 })}`;
   return sign + s;
 }
 
-/** A fare-sized amount with pence/cents, e.g. "$3.00", "£2.80". */
+/** A fare-sized amount with pence/cents, e.g. "$3.00", "£2.80"; whole yen ("¥14,700"). */
 export function fmtFare(v: number): string {
+  if (SCALE !== 1) return `${CUR}${Math.round(v * SCALE).toLocaleString('en-GB')}`;
   return `${CUR}${v.toFixed(2)}`;
+}
+
+/** A chart axis amount: "$1.2B", "£40M", "¥3.5T" (compact, no decimals beyond one). */
+export function fmtMoneyAxis(v: number, compact: (x: number) => string): string {
+  return CUR + compact(v * SCALE);
 }
 
 export function fmtCount(n: number): string {

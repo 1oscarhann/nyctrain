@@ -16,6 +16,7 @@ export const SALT_WEATHER = 0x57544852;
 export const SALT_FORECAST = 0x46435354;
 export const SALT_INCIDENTS = 0x494e4344;
 export const SALT_TRIPS = 0x54524950;
+export const SALT_QUAKE = 0x51554b45;
 
 /** Venues per city are limited so event ids (day·16 + venue) stay unique. */
 export const MAX_VENUES = 16;
@@ -233,7 +234,8 @@ export function forecastFor(seed: number, day: number, level: ChaosLevel, cc?: C
 export function weatherMods(w: DayWeather): FullWeatherMods {
   if (w.kind === 'clear' || !(w.severity > 0)) return CLEAR_MODS;
   const e = WEATHER.effects[w.kind];
-  const s = w.severity;
+  // A national map's weather (Japan) only touches part of the country on any day.
+  const s = w.severity * (cityBalance().chaos.climate.reach ?? 1);
   const f = (x: number) => 1 - s * (1 - x);
   return {
     walkSpeed: f(e.walkSpeed),

@@ -2,7 +2,7 @@
  * What makes a city a city: names, regions, copy and goals. Numbers (origin, map view, driving,
  * parking, money) live in src/balance.ts CITY_BALANCE.
  */
-import type { CityId, StockId } from '../balance';
+import type { CityId, ResearchId, StockId, TrackClass, TrackLevel } from '../balance';
 import type { UnitSystem } from '../core/units';
 import type { TimeZone } from '../cinematic/solar';
 
@@ -81,6 +81,27 @@ export interface CityConfig {
   intertown?: boolean;
   /** Trains a new route on heavy track gets ('heavy' metro in the cities, 'commuter' intertown). */
   defaultHeavyStock?: StockId;
+  /** Track classes the player can build (all three unless set; Japan: high-speed line only). */
+  trackClasses?: TrackClass[];
+  /** The level new track starts at (deep in the metro cities, at grade intertown, elevated in Japan). */
+  defaultLevel?: TrackLevel;
+  /** Platform length a new station starts at, in cars, where it differs from STATION.cars defaults. */
+  platformCars?: Partial<Record<TrackClass, number>>;
+  /** Train types the player can run (all unless set; Japan: high-speed trains only). */
+  stocks?: StockId[];
+  /** Train type names that differ from TRAINS ("Shinkansen" for the high-speed train in Japan). */
+  stockNames?: Partial<Record<StockId, string>>;
+  /** Research projects on offer (all unless set: Japan has no metro or main-line projects). */
+  research?: ResearchId[];
+  /** Display currency per unit of game money (Japan: 100, money is kept in hundreds of yen). */
+  currencyScale?: number;
+  /** The map has relief.bin (src/data/relief.ts): mountains make surface track dear; a terrain overlay. */
+  relief?: boolean;
+  /** What a tract's residents and jobs are, when not commuters (Japan: travellers from it, visitors to it). */
+  tractWords?: { residents: string; jobs: string };
+  /** Residents and jobs overlay ramps (per km²) and the least drawn, where they differ from the cities'. */
+  overlayDensity?: { residents: [number, number]; jobs: [number, number]; min: number };
 }
 
-export type CityTheme = 'mta' | 'tfl';
+/** 'hsr': the national high-speed map (indigo panels, vermilion actions, line bars). */
+export type CityTheme = 'mta' | 'tfl' | 'hsr';

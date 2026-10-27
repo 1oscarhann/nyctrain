@@ -11,7 +11,7 @@ import type { Layer } from '@deck.gl/core';
 import { PathStyleExtension, type PathStyleExtensionProps } from '@deck.gl/extensions';
 import { PLATFORM_CAR_M, QUAD, STATION, TRACK, type TrackClass } from '../balance';
 import { trackClassName } from '../core/trackNames';
-import { city } from '../cities';
+import { city, trackClasses } from '../cities';
 import { toLonLat } from '../core/geo';
 import { fmtDistance, fmtMoney } from '../core/units';
 import type { AppContext } from '../ui/context';
@@ -46,7 +46,11 @@ export class StationTool implements Tool {
   readonly id = 'station' as const;
   readonly xray = true;
   /** Platform length per class (intertown: long main-line platforms by default, 12 commuter cars). */
-  cars: Record<TrackClass, number> = { heavy: city().intertown ? 14 : STATION.cars.heavy.default, light: STATION.cars.light.default, highspeed: STATION.cars.highspeed.default };
+  cars: Record<TrackClass, number> = {
+    heavy: city().platformCars?.heavy ?? (city().intertown ? 14 : STATION.cars.heavy.default),
+    light: city().platformCars?.light ?? STATION.cars.light.default,
+    highspeed: city().platformCars?.highspeed ?? STATION.cars.highspeed.default,
+  };
   private hover: Hover | null = null;
   private pointer: Pointer | null = null;
 
@@ -235,12 +239,10 @@ export class StationTool implements Tool {
       'div',
       null,
       h('div', { class: 'opt-label', style: 'margin-bottom:6px' }, 'Platform length'),
-      row('heavy'),
-      h('div', { style: 'height:6px' }),
-      row('light'),
-      h('div', { style: 'height:6px' }),
-      row('highspeed'),
-      h('div', { class: 'opt-hint', style: 'margin-top:6px' }, 'Main-line trains have longer cars: a 12-car commuter train (20 m cars) needs a 14-car heavy platform; high-speed platforms are counted in high-speed cars.'),
+      ...trackClasses().flatMap((c, i) => (i ? [h('div', { style: 'height:6px' }), row(c)] : [row(c)])),
+      trackClasses().includes('heavy')
+        ? h('div', { class: 'opt-hint', style: 'margin-top:6px' }, 'Main-line trains have longer cars: a 12-car commuter train (20 m cars) needs a 14-car heavy platform; high-speed platforms are counted in high-speed cars.')
+        : h('div', { class: 'opt-hint', style: 'margin-top:6px' }, `Counted in ${PLATFORM_CAR_M.highspeed} m high-speed cars: a full-length 16-car train needs a 16-car platform.`),
       h('div', { class: 'opt-hint', style: 'margin-top:8px' }, `Stations need nearly straight, level track and ${fmtDistance(STATION.minSpacing, true)} between them. Stations within ${fmtDistance(STATION.interchangeRadius, true)} of each other become interchanges. Circle shows the ${fmtDistance(STATION.catchment, true)} walking catchment.`),
       h('div', { class: 'opt-hint', style: 'margin-top:6px' }, `Four tracks: a click places a cross-platform station (a platform on each pair, ${Math.round(QUAD.pairPlatformCostShare * 100)}% each); Shift-click places one platform on the pair under the cursor (a local-only stop).`),
     );

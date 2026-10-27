@@ -22,6 +22,7 @@ const MAPS: { id: CityId; mode: string }[] = [
   { id: 'leeds', mode: 'Metro' },
   { id: 'bristol', mode: 'Metro' },
   { id: 'southeast', mode: 'Regional rail' },
+  { id: 'japan', mode: 'High-speed' },
 ];
 
 const MUSIC_KEY = 'headway-title-music';
@@ -209,7 +210,8 @@ export class TitleScreen {
   private millions(id: string): string {
     const c = this.scenes?.[id]?.commuters;
     if (!c) return '';
-    return c >= 1e6 ? `${(c / 1e6).toFixed(2)} million commuters` : `${Math.round(c / 1e3).toLocaleString('en-GB')},000 commuters`;
+    const who = CITIES[id as CityId]?.people === 'travellers' ? 'journeys a day' : 'commuters';
+    return c >= 1e6 ? `${(c / 1e6).toFixed(2)} million ${who}` : `${Math.round(c / 1e3).toLocaleString('en-GB')},000 ${who}`;
   }
 
   private items(): Item[] {

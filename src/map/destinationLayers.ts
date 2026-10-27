@@ -52,7 +52,8 @@ export class DestinationLayers {
       }),
       new TextLayer<Mark>({
         id: 'destination-labels',
-        data: shown.filter((m) => m.airport || zoom >= 12.5),
+        // The national map's small airports wait until you're looking at their region.
+        data: shown.filter((m) => (m.airport && (m.size >= 50_000 || zoom >= 7.5)) || zoom >= 12.5),
         getPosition: (m) => m.pos,
         getText: (m) => (m.airport ? `${m.name} · ${Math.round(m.size / 1000)}k passengers/day` : `${m.name} · ${Math.round(m.size / 1000)}k students`),
         getSize: (m) => (m.airport ? 12.5 : 11),

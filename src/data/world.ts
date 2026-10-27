@@ -6,6 +6,7 @@ import { toLocal } from '../core/geo';
 import { decodeOD, type ODTable } from './odFormat';
 import { regionArea } from '../cities';
 import type { TractRecord, TractsFile } from './types';
+import { decodeRelief, type Relief } from './relief';
 import type { FeatureCollection, MultiPolygon, Polygon } from 'geojson';
 
 export interface Tract extends TractRecord {
@@ -24,6 +25,8 @@ export interface World {
   meta: Omit<TractsFile, 'tracts'>;
   tracts: Tract[];
   od: ODTable;
+  /** Mean slope and elevation (maps with relief.bin: Japan), loaded on the main thread only. */
+  relief?: Relief | null;
 }
 
 export type LandCollection = FeatureCollection<Polygon | MultiPolygon, { code: number; borough: string }>;
@@ -39,7 +42,7 @@ export function buildWorld(file: TractsFile, odBuffer: ArrayBuffer): World {
       y,
       areaIndex: regionArea(t.borough),
       areaKm2,
-      density: (t.residents + t.jobs) / Math.max(areaKm2, 0.01),
+      density: (t.pop ?? t.residents + t.jobs) / Math.max(areaKm2, 0.01),
     };
   });
   const { tracts: _omit, ...meta } = file;
@@ -59,6 +62,12 @@ export async function fetchWorld(base: string): Promise<World> {
     }),
   ]);
   return buildWorld(tractsFile, odBuf);
+}
+
+export async function fetchRelief(base: string): Promise<Relief> {
+  const r = await fetch(base + 'relief.bin');
+  if (!r.ok) throw new Error('relief.bin: HTTP ' + r.status);
+  return decodeRelief(await r.arrayBuffer());
 }
 
 export async function fetchLand(base: string): Promise<LandCollection> {

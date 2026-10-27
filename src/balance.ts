@@ -6,6 +6,8 @@
  * the bottom; src/cities/index.ts applyCity() restores these defaults and applies them.
  */
 
+import type { Projection } from './core/geo';
+
 const KMH = 1 / 3.6;
 const MIN = 60;
 const HOUR = 3600;
@@ -68,6 +70,8 @@ export const MAP = {
   growthColumnMaxMetres: 500,
   /** Land mask cell, m (the regional intertown map uses coarser cells). */
   landCell: 20,
+  /** Fill hairline gaps between region outlines in the land mask (coarse national maps). */
+  landClose: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -184,6 +188,12 @@ export const TRACK = {
   filletMaxTangent: { heavy: 250, light: 250, highspeed: 3000 } as Record<TrackClass, number>,
   /** Preferred radius for auto-placed lead curves where a branch leaves existing track. */
   leadPreferredRadius: { heavy: 350, light: 220, highspeed: 1500 } as Record<TrackClass, number>,
+  /**
+   * The Line tool leaves room at each station for the curves on either side to turn at least this
+   * sharply (a longer straight through the platform where the line bends there). High-speed lines
+   * bend gently: 4 km is ≈ 270 km/h through the curve.
+   */
+  lineStationRadius: { heavy: 350, light: 220, highspeed: 4000 } as Record<TrackClass, number>,
   leadMinLength: 40,
   /** Deflections below this (radians) need no curve. */
   straightEpsilon: 0.0035,
@@ -199,6 +209,15 @@ export const TRACK = {
   maxJunctionDegree: 4,
   /** Sampling interval for water / cost integration along track, metres. */
   sampleStep: 20,
+  /**
+   * Mountains (maps with relief data: Japan). A square's steepness m runs from 0 at a mean slope of
+   * mountainSlope[0]° to 1 at mountainSlope[1]° and steeper; building there costs ×(1 + k·m) by
+   * level, and takes ×(1 + k·m / 2) as long. Surface track in the mountains is all cuttings,
+   * embankments and tall viaducts, so it costs several times a tunnel's premium: the real lines
+   * tunnel through (half of the Tohoku Shinkansen north of Morioka is in tunnel).
+   */
+  mountainSlope: [2, 15] as [number, number],
+  mountainK: { elevated: 2, 'at-grade': 5, 'cut-and-cover': 5, deep: 0.4 } as Record<TrackLevel, number>,
 };
 
 // ---------------------------------------------------------------------------
@@ -470,8 +489,8 @@ export const OPERATIONS = {
     { id: 'evening', label: 'Evening', start: 20, end: 24 },
   ] as const,
   /** Default headways in minutes for a new route (0 = no service). */
-  defaultHeadways: { night: 20, am: 4, midday: 8, pm: 4, evening: 10 },
-  headwayChoices: [2, 2.5, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30],
+  defaultHeadways: { night: 20, am: 4, midday: 8, pm: 4, evening: 10 } as Record<'night' | 'am' | 'midday' | 'pm' | 'evening', number>,
+  headwayChoices: [2, 2.5, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30] as number[],
   spareTrains: 1,
   /** Peak hour used for load profiles. */
   peakHour: 8,
@@ -695,7 +714,8 @@ export type ResearchId =
   | 'cbtc' | 'ato' | 'driverless'
   | 'psd' | 'gates'
   | 'regen' | 'tbm' | 'viaducts'
-  | 'labs-2';
+  | 'labs-2'
+  | 'eew' | 'snowproof';
 
 export type ResearchBranch = 'trains' | 'track' | 'stations' | 'costs';
 
@@ -710,6 +730,8 @@ export interface ResearchDef {
   /** Weekdays of work. */
   days: number;
   requires?: ResearchId[];
+  /** Only on these maps (earthquake warning is Japan's). */
+  only?: CityId[];
 }
 
 export const RESEARCH_BRANCHES: { id: ResearchBranch; name: string }[] = [
@@ -740,6 +762,8 @@ export const RESEARCH: ResearchDef[] = [
   { id: 'tbm', branch: 'costs', name: 'Better tunnel boring', blurb: 'Deep and cut-and-cover track 20% cheaper, their stations 15% cheaper, 25% quicker to dig', cost: 0.04, days: 50 },
   { id: 'viaducts', branch: 'costs', name: 'Precast viaducts', blurb: 'Elevated track 20% cheaper, its stations 15% cheaper, 30% quicker to build', cost: 0.03, days: 40 },
   { id: 'labs-2', branch: 'costs', name: 'Second design team', blurb: 'Run two research projects at once', cost: 0.02, days: 20 },
+  { id: 'eew', branch: 'track', name: 'Earthquake early warning', blurb: 'Seismometers along the coast cut the power before the shaking arrives: earthquake stops are half as long', cost: 0.03, days: 40, only: ['japan'] },
+  { id: 'snowproof', branch: 'track', name: 'Snow sprinklers and heated points', blurb: 'Snow and storms slow your trains half as much', cost: 0.03, days: 40, only: ['japan'] },
 ];
 
 export const RESEARCH_TUNING = {
@@ -815,6 +839,10 @@ export const TECH_EFFECTS = {
   viaductCost: 0.8,
   viaductStationCost: 0.85,
   viaductDays: 0.7,
+  /** Earthquake early warning: quake restrictions last this share as long. */
+  eewDuration: 0.5,
+  /** Snow sprinklers: weather slows trains this share as much. */
+  snowproofSlowdown: 0.5,
 };
 
 // ---------------------------------------------------------------------------
@@ -1067,6 +1095,8 @@ export interface EventKindDef {
   weekdays?: number[];
   /** Days of notice (default EVENTS.announceDays). */
   announce?: number;
+  /** How far people come from: origin weight ∝ exp(−d / originDecay) (default EVENTS.originDecay). */
+  originDecay?: number;
 }
 
 /** Chance of each weather kind per weekday, by month (Jan…Dec). */
@@ -1074,12 +1104,32 @@ export interface ClimateDef {
   snow: number[];
   rain: number[];
   heat: number[];
+  /** Share of the map a weather day touches, scaling its effects (national maps: well under 1). */
+  reach?: number;
+}
+
+/**
+ * Earthquakes (Japan): on a strong enough tremor every train within reach of the epicentre stops,
+ * then runs at a crawl while the line is inspected.
+ */
+export interface QuakeDef {
+  /** Chance per weekday at the Normal level (the level's incident rate scales it). */
+  chance: number;
+  /** Where they strike: [lon, lat, weight]. */
+  zones: [number, number, number][];
+  /** Epicentres scatter this far (degrees) around a zone's point. */
+  scatter: number;
+  /** Trains within this radius of the epicentre stop (uniform in the range), m. */
+  radius: [number, number];
+  /** How long the lines are restricted, s. */
+  duration: [number, number];
 }
 
 export interface CityChaos {
   venues: VenueDef[];
   kinds: EventKindDef[];
   climate: ClimateDef;
+  quakes?: QuakeDef;
 }
 
 export const CHAOS = {
@@ -1110,6 +1160,8 @@ export const CHAOS = {
   police: { perStationDay: 0.02, duration: [10 * MIN, 40 * MIN] as [number, number], waitOutside: 15 * MIN, busyWeight: 20_000 },
   /** Points sampled along a signal problem's segment for the map. */
   signalPathPoints: 17,
+  /** Earthquakes (maps with CityChaos.quakes): the crawl while the line is inspected, and the sampling along track. */
+  quake: { crawl: 30 * KMH, sampleStep: 1000 },
   /** Incident toasts only at 1×/5× (TIME.speeds index ≤ 1) unless severity 3; ticker always. */
   toastMaxSpeedIndex: 1,
   toastMinGapMs: 20_000,
@@ -1261,7 +1313,7 @@ const LONDON_CHAOS: CityChaos = {
 
 // ---------------------------------------------------------------------------
 // Cities
-export type CityId = 'nyc' | 'london' | 'southeast' | 'manchester' | 'birmingham' | 'leeds' | 'bristol';
+export type CityId = 'nyc' | 'london' | 'southeast' | 'manchester' | 'birmingham' | 'leeds' | 'bristol' | 'japan';
 type LL = [number, number];
 
 /** Where a job counts as being in the CBD (parking penalty). */
@@ -1272,14 +1324,22 @@ export type ZoneRule =
 export interface CityBalance {
   /** Local projection origin (lon, lat). */
   origin: LL;
-  map: { startCenter: LL; startZoom: number; bounds: [number, number, number, number]; minZoom?: number; landCell?: number };
+  /** The local plane (core/geo.ts): equirectangular unless set (Japan: Lambert conformal conic). */
+  projection?: Projection;
+  map: { startCenter: LL; startZoom: number; bounds: [number, number, number, number]; minZoom?: number; landCell?: number; landClose?: boolean; trainMinZoom?: number };
   /** Camera behind the title screen (slow 3D orbit). */
   titleCamera: { center: LL; zoom: number; bearing: number };
   /** Regions (boroughs) with slow, congested driving. */
   coreRegions: string[];
   cbd: ZoneRule;
-  commuters: Partial<Pick<typeof COMMUTERS, 'driveSpeedCore' | 'driveSpeedOther' | 'driveLongAfter' | 'driveSpeedLong' | 'maxAccessWalk' | 'parkingCbdTime' | 'parkingCbdCost' | 'parkingOtherTime' | 'valueOfTime' | 'driveCostPerKm' | 'modeConstant'>>;
-  economy: Partial<Pick<typeof ECONOMY, 'startingCash' | 'fareDefault' | 'fareMin' | 'fareMax' | 'fareStep' | 'fareDistanceKm' | 'fareFreeKm' | 'staffingPerStationDay'>>;
+  commuters: Partial<
+    Pick<
+      typeof COMMUTERS,
+      | 'driveSpeedCore' | 'driveSpeedOther' | 'driveLongAfter' | 'driveSpeedLong' | 'maxAccessWalk' | 'parkingCbdTime' | 'parkingCbdCost' | 'parkingOtherTime' | 'valueOfTime' | 'driveCostPerKm' | 'modeConstant'
+      | 'walkSpeed' | 'walkDetour' | 'walkMaxDistance' | 'accessRadiusTractShare' | 'departMean' | 'departSd' | 'departMin' | 'departMax' | 'workDuration' | 'returnJitter' | 'logitScale' | 'waitCap' | 'transferPenalty'
+    >
+  >;
+  economy: Partial<Pick<typeof ECONOMY, 'startingCash' | 'fareDefault' | 'fareMin' | 'fareMax' | 'fareStep' | 'fareDistanceKm' | 'fareFreeKm' | 'staffingPerStationDay' | 'operatingPerCarKm' | 'bondChunk' | 'bondMax'>>;
   /**
    * The fare policy of a new game (v2): peak (FARES.peakPeriods) and off-peak fares, and the
    * low-income multiplier for FARES.lowIncomeBand (1 = full fare). `ECONOMY.fareDefault` stays the
@@ -1296,9 +1356,17 @@ export interface CityBalance {
   /** Event venues and kinds, and the climate (CHAOS_BY_CITY). */
   chaos: CityChaos;
   /** Track numbers that differ from TRACK (intertown: wider main-line curves). */
-  track?: Partial<Pick<typeof TRACK, 'filletMaxTangent' | 'costPerM'>>;
+  track?: Partial<Pick<typeof TRACK, 'filletMaxTangent' | 'costPerM' | 'daysPerKm' | 'densityK' | 'densityAffects' | 'mountainK' | 'bridgeMultiplier'>>;
   /** Station numbers that differ from STATION (cheaper building outside London). */
-  station?: Partial<Pick<typeof STATION, 'costByLevel'>>;
+  station?: Partial<Pick<typeof STATION, 'costByLevel' | 'buildDays' | 'costPerCar'>>;
+  /** A new route's headways and the choices offered, where they differ from OPERATIONS (Japan: every 15–60 min). */
+  operations?: { defaultHeadways?: Partial<typeof OPERATIONS.defaultHeadways>; headwayChoices?: number[] };
+  /** Airport and university numbers that differ from SPECIAL (Japan: passengers come from further). */
+  special?: Partial<typeof SPECIAL>;
+  /** Event numbers that differ from EVENTS. */
+  events?: Partial<Pick<typeof EVENTS, 'originDecay' | 'venueAccess' | 'maxPeoplePerDay'>>;
+  /** Incident rates that differ from CHAOS (per track-km, train-km or station a day). */
+  incidents?: { signal?: number; breakdown?: number; sick?: number; police?: number };
   /** The school run: values that differ from SCHOOLS, and the term calendar ('uk' or 'us'). */
   schools?: Partial<Pick<typeof SCHOOLS, 'originDecay' | 'childFare'>> & { terms?: 'uk' | 'us' };
   /**
@@ -1452,6 +1520,80 @@ const BRISTOL_CHAOS: CityChaos = {
   climate: { ...LONDON_CHAOS.climate, rain: [0.17, 0.14, 0.14, 0.12, 0.12, 0.11, 0.11, 0.13, 0.13, 0.17, 0.18, 0.17] },
 };
 
+/**
+ * Japan (the high-speed map): weekday crowds that cross the country. The grand sumo tournaments
+ * (Tokyo in January, May and September; Osaka, Nagoya and Fukuoka once a year), the summer
+ * high-school baseball tournament, the great summer festivals of Tohoku and Shikoku, the Sapporo
+ * snow festival and the trade fairs on Tokyo Bay draw people from hundreds of kilometres away.
+ * Weather is one forecast for the whole map: the rainy season in June and July, September's
+ * typhoons, deep-winter snow in the north and on the Sea of Japan coast, and summer heat.
+ */
+const JAPAN_CHAOS: CityChaos = {
+  venues: [
+    { key: 'suidobashi-dome', name: 'Suidobashi dome', lon: 139.7519, lat: 35.7056, region: 'Tokyo', parkingTime: 30 * MIN, parkingCost: 30 },
+    { key: 'ryogoku', name: 'Ryogoku sumo hall', lon: 139.7933, lat: 35.6969, region: 'Tokyo', parkingTime: 30 * MIN, parkingCost: 30 },
+    { key: 'ariake', name: 'Ariake exhibition centre', lon: 139.7946, lat: 35.6299, region: 'Tokyo', parkingTime: 25 * MIN, parkingCost: 25 },
+    { key: 'koshien', name: 'Koshien ballpark', lon: 135.3616, lat: 34.7212, region: 'Hyogo', parkingTime: 35 * MIN, parkingCost: 20 },
+    { key: 'namba-sumo', name: 'Namba sumo arena', lon: 135.4995, lat: 34.6618, region: 'Osaka', parkingTime: 30 * MIN, parkingCost: 25 },
+    { key: 'nagoya-sumo', name: 'Meijo sumo arena', lon: 136.8997, lat: 35.1878, region: 'Aichi', parkingTime: 25 * MIN, parkingCost: 20 },
+    { key: 'hakata-sumo', name: 'Hakata sumo arena', lon: 130.404, lat: 33.6034, region: 'Fukuoka', parkingTime: 25 * MIN, parkingCost: 20 },
+    { key: 'nebuta', name: 'Aomori waterfront', lon: 140.7466, lat: 40.8296, region: 'Aomori', parkingTime: 45 * MIN, parkingCost: 20 },
+    { key: 'tanabata', name: 'Sendai city centre', lon: 140.881, lat: 38.2603, region: 'Miyagi', parkingTime: 40 * MIN, parkingCost: 20 },
+    { key: 'gion', name: 'Kyoto old town', lon: 135.7631, lat: 35.0036, region: 'Kyoto', parkingTime: 45 * MIN, parkingCost: 25 },
+    { key: 'awa-odori', name: 'Tokushima city centre', lon: 134.5509, lat: 34.0703, region: 'Tokushima', parkingTime: 40 * MIN, parkingCost: 15 },
+    { key: 'snow-festival', name: 'Odori park, Sapporo', lon: 141.3518, lat: 43.0577, region: 'Hokkaido', parkingTime: 40 * MIN, parkingCost: 20 },
+  ],
+  kinds: [
+    { venue: 'suidobashi-dome', label: 'Suidobashi night baseball', months: [2, 3, 4, 5, 6, 7, 8], weekdays: [2, 3, 4, 5], chance: 0.45, attendance: [36_000, 43_000],
+      starts: [[18, 1]], duration: 3.25 * HOUR, arrive: [-80 * MIN, 0], leave: [-10 * MIN, 30 * MIN], originDecay: 40_000 },
+    { venue: 'ryogoku', label: 'Grand sumo tournament', months: [0, 4, 8], chance: 0.7, attendance: [8_000, 11_000],
+      starts: [[13, 1]], duration: 5 * HOUR, arrive: [-60 * MIN, 120 * MIN], leave: [-15 * MIN, 30 * MIN], originDecay: 150_000 },
+    { venue: 'ariake', label: 'Trade fair', months: [1, 2, 3, 4, 5, 6, 8, 9, 10, 11], chance: 0.3, attendance: [30_000, 60_000],
+      starts: [[10, 1]], duration: 7 * HOUR, arrive: [-30 * MIN, 150 * MIN], leave: [-150 * MIN, 30 * MIN], originDecay: 250_000 },
+    { venue: 'koshien', label: 'Summer high-school baseball', months: [7], window: [7, 6, 7, 23], chance: 0.6, attendance: [30_000, 45_000],
+      starts: [[8, 1]], duration: 9 * HOUR, arrive: [-60 * MIN, 180 * MIN], leave: [-180 * MIN, 30 * MIN], originDecay: 200_000 },
+    { venue: 'koshien', label: 'Spring high-school baseball', months: [2], window: [2, 18, 2, 31], chance: 0.2, attendance: [15_000, 30_000],
+      starts: [[9, 1]], duration: 8 * HOUR, arrive: [-60 * MIN, 180 * MIN], leave: [-180 * MIN, 30 * MIN], originDecay: 200_000 },
+    { venue: 'namba-sumo', label: 'Osaka sumo tournament', months: [2], chance: 0.7, attendance: [6_000, 7_500],
+      starts: [[13, 1]], duration: 5 * HOUR, arrive: [-60 * MIN, 120 * MIN], leave: [-15 * MIN, 30 * MIN], originDecay: 150_000 },
+    { venue: 'nagoya-sumo', label: 'Nagoya sumo tournament', months: [6], chance: 0.7, attendance: [6_000, 7_500],
+      starts: [[13, 1]], duration: 5 * HOUR, arrive: [-60 * MIN, 120 * MIN], leave: [-15 * MIN, 30 * MIN], originDecay: 150_000 },
+    { venue: 'hakata-sumo', label: 'Kyushu sumo tournament', months: [10], chance: 0.7, attendance: [5_000, 7_000],
+      starts: [[13, 1]], duration: 5 * HOUR, arrive: [-60 * MIN, 120 * MIN], leave: [-15 * MIN, 30 * MIN], originDecay: 150_000 },
+    { venue: 'nebuta', label: 'Aomori lantern festival', months: [7], window: [7, 2, 7, 7], chance: 0.8, attendance: [150_000, 250_000],
+      starts: [[19, 1]], duration: 2 * HOUR, arrive: [-4 * HOUR, 0], leave: [0, 40 * MIN], originDecay: 300_000, announce: 30 },
+    { venue: 'tanabata', label: 'Sendai star festival', months: [7], window: [7, 6, 7, 8], chance: 0.8, attendance: [150_000, 250_000],
+      starts: [[10, 1]], duration: 10 * HOUR, arrive: [-60 * MIN, 5 * HOUR], leave: [-5 * HOUR, 0], originDecay: 250_000, announce: 30 },
+    { venue: 'gion', label: 'Kyoto summer festival', months: [6], window: [6, 14, 6, 17], chance: 0.8, attendance: [100_000, 200_000],
+      starts: [[18, 0.75], [9, 0.25]], duration: 4 * HOUR, arrive: [-2 * HOUR, 30 * MIN], leave: [-30 * MIN, 40 * MIN], originDecay: 250_000, announce: 30 },
+    { venue: 'awa-odori', label: 'Tokushima dance festival', months: [7], window: [7, 12, 7, 15], chance: 0.8, attendance: [150_000, 250_000],
+      starts: [[18, 1]], duration: 4.5 * HOUR, arrive: [-3 * HOUR, 30 * MIN], leave: [-30 * MIN, 40 * MIN], originDecay: 250_000, announce: 30 },
+    { venue: 'snow-festival', label: 'Sapporo snow festival', months: [1], window: [1, 4, 1, 11], chance: 0.8, attendance: [150_000, 250_000],
+      starts: [[11, 1]], duration: 10 * HOUR, arrive: [-60 * MIN, 6 * HOUR], leave: [-6 * HOUR, 0], originDecay: 300_000, announce: 30 },
+  ],
+  climate: {
+    snow: [0.06, 0.05, 0.02, 0, 0, 0, 0, 0, 0, 0, 0.01, 0.04],
+    rain: [0.03, 0.03, 0.04, 0.04, 0.05, 0.12, 0.1, 0.06, 0.1, 0.05, 0.03, 0.02],
+    heat: [0, 0, 0, 0, 0.01, 0.03, 0.08, 0.1, 0.04, 0, 0, 0],
+    /** A snow day buries the north and the Sea of Japan coast, not Kyushu: a third of the effect. */
+    reach: 0.35,
+  },
+  /**
+   * About eight tremors a year strong enough to stop the trains near them, mostly off the Pacific
+   * coast of Tohoku and Kanto, under the Tokai and Nankai coasts, in Kyushu and eastern Hokkaido.
+   */
+  quakes: {
+    chance: 0.03,
+    zones: [
+      [141.9, 38.4, 4], [141.5, 36.9, 2], [140.1, 35.7, 3], [138.6, 34.8, 2], [136.4, 33.9, 2], [135.4, 34.7, 1],
+      [130.8, 32.8, 2], [131.6, 31.9, 1], [144.2, 42.7, 2], [137.2, 37.2, 1], [138.9, 37.4, 1], [133.3, 35.3, 1],
+    ],
+    scatter: 0.4,
+    radius: [60_000, 160_000],
+    duration: [15 * MIN, 50 * MIN],
+  },
+};
+
 /** Each city's events and weather (the shared chaos tunables are CHAOS, WEATHER and EVENTS above). */
 export const CHAOS_BY_CITY: Record<CityId, CityChaos> = {
   nyc: NYC_CHAOS,
@@ -1461,6 +1603,7 @@ export const CHAOS_BY_CITY: Record<CityId, CityChaos> = {
   birmingham: BIRMINGHAM_CHAOS,
   leeds: LEEDS_CHAOS,
   bristol: BRISTOL_CHAOS,
+  japan: JAPAN_CHAOS,
 };
 
 /** Central London: roughly the congestion-charge zone, inside the inner ring road (London and the South East). */
@@ -1768,4 +1911,132 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
     startingCash: 2.5e9,
     small: true,
   }),
+  /**
+   * Japan, the high-speed map: the four main islands, 2,000 km of them. Money is counted in hundreds
+   * of yen (src/cities/japan.ts currencyScale), so the game's metro-scale numbers stay meaningful:
+   * a high-speed car is 4.5M units (¥450M), and the defaults below are in those units too.
+   */
+  japan: {
+    origin: [137.5, 37.5],
+    projection: { kind: 'lcc', lat1: 33, lat2: 44 },
+    map: { startCenter: [138.6, 35.7], startZoom: 6.7, bounds: [126.5, 29.0, 149.0, 46.8], minZoom: 4.4, landCell: 500, landClose: true, trainMinZoom: 6 },
+    titleCamera: { center: [139.7671, 35.6812], zoom: 14.3, bearing: 15 }, // Tokyo station and Marunouchi
+    /** Slow, congested driving at either end of the trip in the two great cities. */
+    coreRegions: ['Tokyo', 'Osaka'],
+    /** Inside the Yamanote loop: parking is dear and slow. */
+    cbd: {
+      kind: 'polygon',
+      ring: [[139.7, 35.658], [139.715, 35.629], [139.739, 35.628], [139.762, 35.645], [139.778, 35.672], [139.78, 35.7], [139.775, 35.727], [139.746, 35.736], [139.708, 35.731], [139.69, 35.705], [139.693, 35.678]],
+    },
+    commuters: {
+      /**
+       * Getting to the station is a local train, a bus or a lift (no city transit is modelled here):
+       * door to platform at ≈ 25 km/h over 1.3× the straight line, up to 40 km. Nobody walks between
+       * cities, so the walk mode is off.
+       */
+      walkSpeed: 7,
+      walkDetour: 1.3,
+      walkMaxDistance: 0,
+      maxAccessWalk: 40_000,
+      accessRadiusTractShare: 0.5,
+      /** Expressways: ≈ 75 km/h door to door beyond the first 15 km, with tolls (Japan's are steep). */
+      driveSpeedCore: 18 * KMH,
+      driveSpeedOther: 35 * KMH,
+      driveLongAfter: 15_000,
+      driveSpeedLong: 75 * KMH,
+      parkingCbdTime: 20 * MIN,
+      parkingCbdCost: 30,
+      parkingOtherTime: 5 * MIN,
+      /** Hundreds of yen an hour by purpose: private trips ¥1,500, sightseeing ¥2,200, business ¥4,500. */
+      valueOfTime: [15, 22, 45],
+      /** Tolls (≈ ¥25/km) and fuel per traveller (≈ 1.6 to a car): ¥22 a kilometre. */
+      driveCostPerKm: 0.22,
+      modeConstant: { walk: 0, drive: 10, transit: 0 },
+      /** Trips there and back in a day: out from 6 am, mostly mid-morning; back about six hours after arriving. */
+      departMean: 9.5 * HOUR,
+      departSd: 2.5 * HOUR,
+      departMin: 6 * HOUR,
+      departMax: 16 * HOUR,
+      workDuration: 6 * HOUR,
+      returnJitter: 2.5 * HOUR,
+      /** Long trips: people weigh a few minutes less sharply than on a commute. */
+      logitScale: 0.025,
+      waitCap: 30 * MIN,
+      transferPenalty: 10 * MIN,
+    },
+    economy: {
+      /** ¥5 trillion: about one Tokaido-length line through the mountains, with trains. */
+      startingCash: 50e9,
+      /** Base fare ¥1,500, +1 fare per 45 km (straight line): Tokyo–Osaka ≈ ¥14,800. */
+      fareDefault: 15,
+      fareMin: 0,
+      fareMax: 50,
+      fareStep: 0.5,
+      fareDistanceKm: 45,
+      fareFreeKm: 0,
+      /** A big high-speed station's staff, ≈ ¥2M a day. */
+      staffingPerStationDay: 20_000,
+      /** Bonds in ¥500 billion lots, up to ¥10 trillion. */
+      bondChunk: 5e9,
+      bondMax: 100e9,
+    },
+    /** One fare all day (no peak pricing on Japan's high-speed lines). */
+    fares: { peak: 15, offPeak: 15, lowIncome: 1 },
+    credit: {
+      farebox: { x: [0.8, 1.4, 2.0, 2.8], y: [0, 50, 80, 100] },
+      coverage: { x: [0, 0.5, 1.0, 1.5, 3.0], y: [0, 30, 55, 75, 100] },
+    },
+    goals: {
+      riderMilestones: [100_000, 250_000, 500_000, 1_000_000],
+      clockworkMinRiders: 100_000,
+      ratingGoalMinDebt: 20e9,
+      /** Tokyo station to Umeda, Osaka, door to door, in under 2½ hours. */
+      tripMinutes: 150,
+      tripFrom: [139.7671, 35.6812],
+      tripTo: [135.4959, 34.7025],
+      valueCaptureMonth: 50e6,
+    },
+    chaos: CHAOS_BY_CITY.japan,
+    /**
+     * High-speed line (base costs; ×1.8 for high-speed): viaduct ≈ ¥5B/km, embankment ¥2.5B/km,
+     * mountain tunnel ¥6.5B/km, cut-and-cover ¥12B/km, all dearer through towns (deep tunnels too:
+     * under Tokyo they cost several times a mountain bore) and in the mountains (TRACK.mountainK).
+     * Long lines are built by many contractors at once: days per km are a tenth of a metro's.
+     */
+    track: {
+      costPerM: { elevated: 27_800, 'at-grade': 13_900, 'cut-and-cover': 66_700, deep: 36_100 },
+      daysPerKm: { elevated: 0.6, 'at-grade': 0.4, 'cut-and-cover': 1.5, deep: 1.0 },
+      densityAffects: { elevated: true, 'at-grade': true, 'cut-and-cover': true, deep: true },
+      filletMaxTangent: { heavy: 1200, light: 250, highspeed: 4000 },
+    },
+    /** High-speed stations (×1.8): at grade ≈ ¥8B, viaduct ¥15B, cut-and-cover ¥40B, deep ¥60B. */
+    station: {
+      costByLevel: { 'at-grade': 44e6, elevated: 83e6, 'cut-and-cover': 220e6, deep: 330e6 },
+      buildDays: { 'at-grade': 20, elevated: 30, 'cut-and-cover': 40, deep: 60 },
+    },
+    /** Long-distance timetables: a new route runs every 15 min at the peaks, 20 at midday, none at night. */
+    operations: { defaultHeadways: { night: 0, am: 15, midday: 20, pm: 15, evening: 30 }, headwayChoices: [2, 2.5, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30, 40, 60] },
+    /** Airport passengers come from a whole region; the station is under the terminal. */
+    special: { airportDecay: 60_000, access: 3000 },
+    /** Festival-goers reach the venue from a station up to 15 km away (local trains, buses). */
+    events: { venueAccess: 15_000, originDecay: 100_000, maxPeoplePerDay: 300_000 },
+    /** Dedicated high-speed lines with no level crossings: a fraction of a metro's incidents. */
+    incidents: { signal: 1 / 1000, breakdown: 1 / 150_000, sick: 1 / 60_000, police: 0.01 },
+    /** Tokyo: a 16-car terminal on a viaduct beside the old station, pointing south-west and north. */
+    hubs: [{ name: 'Tokyo', from: [139.7655, 35.6768], to: [139.7686, 35.6858], level: 'elevated', cls: 'highspeed', cars: 16, at: 500 }],
+    /** Japan's population is shrinking; travel is about level. */
+    growth: { cityGrowthPerYear: 0.002 },
+    valueCapture: {
+      /** The station-area district: Japan's big municipalities count only their station side. */
+      districtRadius: 3000,
+      /** Hundreds of yen of property per daily traveller (≈ 60 residents each, ¥30M of homes and land a head). */
+      valuePerResident: 20e6,
+      valuePerJob: 10e6,
+      /** Fixed asset (1.4%) and city planning (0.3%) taxes on assessed values (≈ 70–80% of market). */
+      taxRateHomes: 0.014,
+      taxRateJobs: 0.014,
+      /** Station-area development: a quarter of the tax increment (the Tsukuba Express precedent). */
+      captureShare: 0.25,
+    },
+  },
 };

@@ -107,6 +107,8 @@ interface EventGroup {
   from: GroupPath;
   /** Drive time (s) for a cab fallback. */
   drive: number;
+  /** Distance-fare multiplier for the trip (intertown maps: tract to venue, airport or campus). */
+  fareMult?: number;
 }
 
 /** Per event, real people. */
@@ -2585,7 +2587,7 @@ export class Commuters implements PassengerHooks {
         }
         graph.run(vAcc);
       }
-      const cdf = originCdf(tracts, vx, vy, EVENTS.originDecay, this.originWeights);
+      const cdf = originCdf(tracts, vx, vy, kind.originDecay ?? EVENTS.originDecay, this.originWeights);
       // Fare periods of a fan's two trips: arriving around the start, leaving at the end.
       const evPeakTrips = (isPeakTod(ev.start + kind.arrive[0]) ? 1 : 0) + (isPeakTod(ev.end) ? 1 : 0);
       const n = stochasticRound(rng, ev.attendance / scale);
@@ -2603,7 +2605,8 @@ export class Commuters implements PassengerHooks {
         }
         let p = shareCache.get(tract * 3 + band);
         if (!p) {
-          p = logitShares(eventCosts(geomOf(tract), band, path, venue, wx, tripFare(this.fares, band, evPeakTrips)));
+          const g = geomOf(tract);
+          p = logitShares(eventCosts(g, band, path, venue, wx, tripFare(this.fares, band, evPeakTrips) * distanceFareMult(g.distance)));
           shareCache.set(tract * 3 + band, p);
         }
         const u = rng.next();
@@ -2622,7 +2625,8 @@ export class Commuters implements PassengerHooks {
         if (gi === undefined) {
           gi = this.evGroups.length;
           groupOf.set(tract, gi);
-          this.evGroups.push({ ev: ei, tract, from: path, to: reverseLegs(path), drive: driveTripTime(geomOf(tract), wx) });
+          const g = geomOf(tract);
+          this.evGroups.push({ ev: ei, tract, from: path, to: reverseLegs(path), drive: driveTripTime(g, wx), fareMult: distanceFareMult(g.distance) });
         }
         this.aGroup[a] = gi;
         this.aBand[a] = band;
@@ -2751,11 +2755,26 @@ export class Commuters implements PassengerHooks {
     return a >= this.A && (this.evGroups[this.aGroup[a]]?.ev ?? 0) < 0;
   }
 
+  /** The tract nearest a point (local metres): its name (or id) and region; for alerts. */
+  tractNear(x: number, y: number): { name: string; region: string } | null {
+    let best: { name: string; region: string } | null = null;
+    let bd = Infinity;
+    for (const t of this.world.tracts) {
+      const d = Math.hypot(t.x - x, t.y - y);
+      if (d < bd) {
+        bd = d;
+        best = { name: t.name ?? t.id, region: t.borough };
+      }
+    }
+    return best;
+  }
+
   /** Fare multiplier for an agent: distance fares for commuters, child or student fares for pupils and students. */
   private fareMultOf(a: number): number {
     if (a < this.A) return this.gFareMult[this.aGroup[a]];
-    const ev = this.evGroups[this.aGroup[a]]?.ev ?? 0;
-    return ev === -1 ? SCHOOLS.childFare : ev === -3 ? SPECIAL.studentFare : 1;
+    const eg = this.evGroups[this.aGroup[a]];
+    const ev = eg?.ev ?? 0;
+    return (ev === -1 ? SCHOOLS.childFare : ev === -3 ? SPECIAL.studentFare : 1) * (eg?.fareMult ?? 1);
   }
 
   /** School days (pupils) and every weekday (airports, universities), after the events. */
@@ -2883,7 +2902,7 @@ export class Commuters implements PassengerHooks {
         let p = shareCache.get(tract);
         if (!p) {
           const geom = venueGeometry(tracts[tract], pl.x, pl.y, core.has(tracts[tract].borough), false);
-          const c = generalisedCosts(geom, o.band, path ? { time: path.time, transfers: path.transfers, crowdMinutes: 2, fare: fareBase } : null, wx);
+          const c = generalisedCosts(geom, o.band, path ? { time: path.time, transfers: path.transfers, crowdMinutes: 2, fare: fareBase * distanceFareMult(geom.distance) } : null, wx);
           c[1] += o.driveExtra;
           p = logitShares(c);
           shareCache.set(tract, p);
@@ -2900,7 +2919,8 @@ export class Commuters implements PassengerHooks {
         if (gi === undefined) {
           gi = this.evGroups.length;
           groupOf.set(tract, gi);
-          this.evGroups.push({ ev, school: pi, tract, from: path, to: reverseLegs(path), drive: driveTripTime(venueGeometry(tracts[tract], pl.x, pl.y, core.has(tracts[tract].borough), false), wx) });
+          const geom = venueGeometry(tracts[tract], pl.x, pl.y, core.has(tracts[tract].borough), false);
+          this.evGroups.push({ ev, school: pi, tract, from: path, to: reverseLegs(path), drive: driveTripTime(geom, wx), fareMult: distanceFareMult(geom.distance) });
         }
         this.aGroup[a] = gi;
         this.aBand[a] = o.band;

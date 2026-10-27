@@ -3,7 +3,7 @@ import { stockName } from '../../core/tech';
 import { city } from '../../cities';
 import { edgeTooltip } from '../../construction/describe';
 import { fmtDate, isNewMonth, monthLabel } from '../../core/calendar';
-import { fmtClock, fmtCount, fmtDensity, fmtSpeed } from '../../core/units';
+import { fmtClock, fmtCount, fmtDensity, fmtSpeed, fmtMinutes } from '../../core/units';
 import { formalTractName } from '../../map/placeNames';
 import type { App } from '../app';
 import { indexChart } from '../charts';
@@ -103,13 +103,14 @@ export function tractPanel(app: App, index: number): Panel {
   // London MSOAs carry names ("Camden 028"); NYC tracts are numbered within the borough. The
   // name the toasts and the month report use (a map label or "around <station>", §2.4) is the
   // title when there is one, with the formal name below it.
-  const head = tractPanelTitle(app.tractName(index), formalTractName(t), t.name ? 'Neighbourhood area' : 'Census tract', t.id, t.borough);
+  const words = city().tractWords;
+  const head = tractPanelTitle(app.tractName(index), formalTractName(t), words ? 'Municipality' : t.name ? 'Neighbourhood area' : 'Census tract', t.id, t.borough);
   const sh = shell(head.sub, head.title, () => app.game.select(null));
   const body = sh.body;
   const stats = h('div', { class: 'stat-grid' });
   const shares = h('div');
   const growthWrap = h('div');
-  body.append(stats, section('How residents commute'), shares, section(`Growth since ${startMonth()}`), growthWrap);
+  body.append(stats, section(words ? 'How its travellers go' : 'How residents commute'), shares, section(`Growth since ${startMonth()}`), growthWrap);
   let d: TractDetail | null = null;
   let tg: TractGrowth | null = null;
   let loaded = false;
@@ -117,10 +118,10 @@ export function tractPanel(app: App, index: number): Panel {
   const renderStats = () => {
     stats.replaceChildren(
       // Residents and jobs as they are now (the start until the growth query answers).
-      statCard('Residents', fmtCount(tg ? tg.residents : t.residents)),
-      statCard('Jobs', fmtCount(tg ? tg.jobs : t.jobs)),
-      statCard('Average commute', d ? `${d.avgCommute.toFixed(1)} min` : '—', undefined, 'door to door, by any mode'),
-      statCard('No good option', d ? fmtCount(d.unserved) : '—', d && d.unserved > 0 ? 'amber' : undefined, 'commuters your trains don\'t help yet'),
+      statCard(words ? words.residents : 'Residents', fmtCount(tg ? tg.residents : t.residents), undefined, words ? 'a weekday, there and back' : undefined),
+      statCard(words ? words.jobs : 'Jobs', fmtCount(tg ? tg.jobs : t.jobs), undefined, words ? 'a weekday' : undefined),
+      statCard(words ? 'Average trip' : 'Average commute', d ? (words ? fmtMinutes(d.avgCommute * 60) : `${d.avgCommute.toFixed(1)} min`) : '—', undefined, 'door to door, by any mode'),
+      statCard('No good option', d ? fmtCount(d.unserved) : '—', d && d.unserved > 0 ? 'amber' : undefined, words ? 'travellers your trains don\'t help yet' : 'commuters your trains don\'t help yet'),
     );
   };
   const render = () => {
@@ -133,7 +134,13 @@ export function tractPanel(app: App, index: number): Panel {
             { label: 'Walk', value: d.share[0], color: SHARE_COLORS.walk },
           ])
         : h('div', { class: 'hw-muted' }, 'Loading…'),
-      h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:8px' }, `Density ${fmtDensity(t.density)} (residents + jobs). Residents and jobs count commuters who live and work in ${city().name}.`),
+      h(
+        'div',
+        { class: 'hw-muted', style: 'font-size:11.5px;margin-top:8px' },
+        words && t.pop !== undefined
+          ? `${fmtCount(t.pop)} people (${fmtDensity(t.density)}). Travellers are people from here making a trip to another part of ${city().name} and back in a day; visitors come here from elsewhere.`
+          : `Density ${fmtDensity(t.density)} (residents + jobs). Residents and jobs count commuters who live and work in ${city().name}.`,
+      ),
     );
   };
   const tone = (u: number) => (u > 0.0005 ? 'green' : u < -0.0005 ? 'red' : undefined);

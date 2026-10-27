@@ -7,7 +7,8 @@
 import { PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
 import { gaugeOf, LEVELS, STATION, TRAINS, type TrackClass, type TrackLevel } from '../balance';
-import { city } from '../cities';
+import { PLATFORM_CLEAR, stationStroke } from './lineStroke';
+import { city, trackClasses } from '../cities';
 import { toLonLat } from '../core/geo';
 import { trackClassName } from '../core/trackNames';
 import { fmtDistance, fmtMoney } from '../core/units';
@@ -23,7 +24,6 @@ import type { Snap, StrokePoint } from './types';
 import { edgeReport, LEVEL_NAMES, stationReport } from './validate';
 
 /** Clearance beyond each end of a platform before the track may curve, m. */
-const PLATFORM_CLEAR = 60;
 
 interface Stop {
   x: number;
@@ -52,7 +52,7 @@ export class LineTool implements Tool {
   readonly id = 'line' as const;
   readonly xray = true;
   level: TrackLevel;
-  cls: TrackClass = 'heavy';
+  cls: TrackClass = trackClasses()[0];
   makeRoute = true;
   private stops: Stop[] = [];
   private startSnap: Snap = { kind: 'none' };
@@ -62,7 +62,7 @@ export class LineTool implements Tool {
   private pointer: Pointer | null = null;
 
   constructor(private ctx: LineHost) {
-    this.level = city().intertown ? 'at-grade' : 'deep';
+    this.level = city().defaultLevel ?? (city().intertown ? 'at-grade' : 'deep');
   }
 
   activate(): void {
@@ -112,39 +112,16 @@ export class LineTool implements Tool {
     if (all.length < 2) return null;
     const cars = this.cars();
     const half = platformLength(cars, this.cls) / 2 + PLATFORM_CLEAR;
-    const pts: StrokePoint[] = [];
     const lv = this.level;
-    for (let i = 0; i < all.length; i++) {
-      const p = all[i];
-      if (!p.isNew) {
-        pts.push({ x: p.x, y: p.y, level: net.nodes.get((this.startSnap as { node: number }).node)?.level ?? lv });
-        continue;
-      }
-      const prev = all[i - 1], next = all[i + 1];
-      let dx = 0, dy = 0;
-      if (prev) {
-        const l = Math.hypot(p.x - prev.x, p.y - prev.y) || 1;
-        dx += (p.x - prev.x) / l;
-        dy += (p.y - prev.y) / l;
-      }
-      if (next) {
-        const l = Math.hypot(next.x - p.x, next.y - p.y) || 1;
-        dx += (next.x - p.x) / l;
-        dy += (next.y - p.y) / l;
-      }
-      const dl = Math.hypot(dx, dy) || 1;
-      dx /= dl;
-      dy /= dl;
-      if (prev) {
-        const gap = Math.hypot(p.x - prev.x, p.y - prev.y);
-        const need = (prev && all[i - 1].isNew ? half : 0) + half + 80;
-        if (gap < Math.max(STATION.minSpacing, need)) errors.push(`Stations ${fmtDistance(gap, true)} apart: these platforms need at least ${fmtDistance(Math.max(STATION.minSpacing, need), true)}`);
-      }
-      // Platform section: in on the line from the previous stop, out towards the next one.
-      if (i > 0) pts.push({ x: p.x - dx * half, y: p.y - dy * half, level: lv });
-      else pts.push({ x: p.x - dx * half, y: p.y - dy * half, level: lv });
-      pts.push({ x: p.x + dx * half, y: p.y + dy * half, level: lv });
+    for (let i = 1; i < all.length; i++) {
+      const p = all[i], prev = all[i - 1];
+      if (!p.isNew) continue;
+      const gap = Math.hypot(p.x - prev.x, p.y - prev.y);
+      const need = (prev.isNew ? half : 0) + half + 80;
+      if (gap < Math.max(STATION.minSpacing, need)) errors.push(`Stations ${fmtDistance(gap, true)} apart: these platforms need at least ${fmtDistance(Math.max(STATION.minSpacing, need), true)}`);
     }
+    const startLevel = this.startSnap.kind === 'node' ? net.nodes.get(this.startSnap.node)?.level : undefined;
+    const pts = stationStroke(all, this.cls, cars, lv, startLevel);
     let edges: number[] = [];
     try {
       edges = net.addStroke(pts, this.cls, this.startSnap, { kind: 'none' });
@@ -307,7 +284,9 @@ export class LineTool implements Tool {
       const stock = validStock(city().defaultHeavyStock ?? 'heavy', gauge);
       const fit = Math.min(...routeStops.map((id) => carsFitting(net, net.stations.get(id)!, stock)));
       const first = net.stations.get(routeStops[0])!.name, lastN = net.stations.get(routeStops[routeStops.length - 1])!.name;
-      Object.assign(d, { cls: gauge, stock, stops: routeStops, cars: Math.max(TRAINS[stock].minCars, Math.min(fit, TRAINS[stock].maxCars, 8)), name: `${first.split(' – ')[0]} – ${lastN.split(' – ')[0]}` });
+      // A metro starts at 8 cars; a map with its own platform length (Japan: 16) runs full-length trains.
+      const want = city().platformCars?.[this.cls] ?? 8;
+      Object.assign(d, { cls: gauge, stock, stops: routeStops, cars: Math.max(TRAINS[stock].minCars, Math.min(fit, TRAINS[stock].maxCars, want)), name: `${first.split(' – ')[0]} – ${lastN.split(' – ')[0]}` });
       rt.recompute();
       ctx.setTool('route');
       ctx.toast('Line planned', `${routeStops.length} stations. Press Build at the bottom to start construction; the route runs once it opens.`, 'green');
@@ -319,31 +298,8 @@ export class LineTool implements Tool {
     const newStops = stops.filter((s) => s.existing === undefined);
     const first = this.startPt;
     const all = [...(first ? [{ ...first, isNew: false }] : []), ...newStops.map((s) => ({ x: s.x, y: s.y, isNew: true }))];
-    const half = platformLength(cars, this.cls) / 2 + PLATFORM_CLEAR;
-    const lv = this.level;
-    const pts: StrokePoint[] = [];
-    all.forEach((p, i) => {
-      if (!p.isNew) {
-        pts.push({ x: p.x, y: p.y, level: this.ctx.game.network.nodes.get((this.startSnap as { node: number }).node)?.level ?? lv });
-        return;
-      }
-      const prev = all[i - 1], next = all[i + 1];
-      let dx = 0, dy = 0;
-      if (prev) {
-        const l = Math.hypot(p.x - prev.x, p.y - prev.y) || 1;
-        dx += (p.x - prev.x) / l;
-        dy += (p.y - prev.y) / l;
-      }
-      if (next) {
-        const l = Math.hypot(next.x - p.x, next.y - p.y) || 1;
-        dx += (next.x - p.x) / l;
-        dy += (next.y - p.y) / l;
-      }
-      const dl = Math.hypot(dx, dy) || 1;
-      pts.push({ x: p.x - (dx / dl) * half, y: p.y - (dy / dl) * half, level: lv });
-      pts.push({ x: p.x + (dx / dl) * half, y: p.y + (dy / dl) * half, level: lv });
-    });
-    return pts;
+    const startLevel = this.startSnap.kind === 'node' ? this.ctx.game.network.nodes.get(this.startSnap.node)?.level : undefined;
+    return stationStroke(all, this.cls, cars, this.level, startLevel);
   }
 
   layers(): Layer[] {
@@ -411,8 +367,8 @@ export class LineTool implements Tool {
     return h(
       'div',
       null,
-      h('div', { class: 'opt-row' }, h('span', { class: 'opt-label' }, 'Class'), h('div', { class: 'seg' }, cl('heavy'), cl('light'), cl('highspeed'))),
-      h('div', { class: 'opt-row', style: 'margin-top:8px' }, h('span', { class: 'opt-label' }, 'Level'), h('div', { class: 'seg' }, ...LEVELS.map(lv))),
+      trackClasses().length > 1 ? h('div', { class: 'opt-row', style: 'margin-bottom:8px' }, h('span', { class: 'opt-label' }, 'Class'), h('div', { class: 'seg' }, ...trackClasses().map(cl))) : null,
+      h('div', { class: 'opt-row' }, h('span', { class: 'opt-label' }, 'Level'), h('div', { class: 'seg' }, ...LEVELS.map(lv))),
       h(
         'label',
         { class: 'opt-row', style: 'margin-top:8px;gap:8px;cursor:pointer' },

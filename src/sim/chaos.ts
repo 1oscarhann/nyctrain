@@ -4,9 +4,13 @@
  * walk and drive times), so it shows up in observed times and crowding and in tomorrow's choices.
  * With the level Off nothing here draws a random number or changes a value: the sim is v1.
  */
-import { CHAOS, EVENTS, OPERATIONS, type ChaosLevel, type IncidentKind } from '../balance';
+import { CHAOS, EVENTS, OPERATIONS, TECH_EFFECTS, type ChaosLevel, type IncidentKind } from '../balance';
+import { cityBalance } from '../cities';
+import { toLocal } from '../core/geo';
+import { hashSeed, Rng } from '../core/rng';
+import { hasTech } from '../core/tech';
 import { dayIndex, SECONDS_PER_DAY } from '../core/calendar';
-import { CLEAR, CLEAR_MODS, eventsForDay, venueOf, venueXY, weatherForDay, weatherMods, type CityEvent, type DayWeather, type FullWeatherMods } from '../core/cityCalendar';
+import { CLEAR, CLEAR_MODS, eventsForDay, SALT_QUAKE, venueOf, venueXY, weatherForDay, weatherMods, type CityEvent, type DayWeather, type FullWeatherMods } from '../core/cityCalendar';
 import type { Commuters } from './commuters';
 import { cdfIndex, measureExposure, planIncidents, trackSpans, type Exposure, type PlannedIncident, type TrackSpan } from './incidents';
 import type { Alert, ChaosInit, ChaosState, CompiledNetwork, CRouteDir, DayChaos, DayChaosInfo, DayExposure, EventDayInfo, EventOutcome, ServiceOverride } from './protocol';
@@ -30,10 +34,45 @@ export type ForcedIncident =
 
 interface Active {
   alert: Alert;
-  kind: IncidentKind;
+  kind: IncidentKind | 'quake';
   until: number;
   restr?: TrackRestriction;
+  /** An earthquake restricts every line near it. */
+  restrs?: TrackRestriction[];
   trainId?: number;
+}
+
+/** A day's earthquake (CityChaos.quakes): when, where (local metres), how far it reaches and for how long. */
+export interface QuakePlan {
+  t: number;
+  x: number;
+  y: number;
+  lon: number;
+  lat: number;
+  r: number;
+  dur: number;
+}
+
+/**
+ * The day's earthquake, if any: a pure function of (seed, day, level), drawn whether or not it is
+ * in the past so a mid-day load sees the same day. Early warning (research 'eew') shortens it.
+ */
+export function planQuake(seed: number, day: number, level: ChaosLevel, after: number): QuakePlan | null {
+  const q = cityBalance().chaos.quakes;
+  const mult = CHAOS.rate[level];
+  if (!q || !(mult > 0)) return null;
+  const rng = new Rng(hashSeed(seed, day, 0, SALT_QUAKE));
+  const hit = rng.next() < Math.min(0.5, q.chance * mult);
+  const tod = CHAOS.serviceStart + rng.next() * (CHAOS.serviceEnd - CHAOS.serviceStart);
+  let u = rng.next() * q.zones.reduce((a, z) => a + z[2], 0);
+  const z = q.zones.find((zz) => (u -= zz[2]) < 0) ?? q.zones[q.zones.length - 1];
+  const lon = z[0] + (rng.next() * 2 - 1) * q.scatter, lat = z[1] + (rng.next() * 2 - 1) * q.scatter;
+  const r = q.radius[0] + rng.next() * (q.radius[1] - q.radius[0]);
+  const dur = (q.duration[0] + rng.next() * (q.duration[1] - q.duration[0])) * (hasTech('eew') ? TECH_EFFECTS.eewDuration : 1);
+  const t = day * SECONDS_PER_DAY + tod;
+  if (!hit || t < after) return null;
+  const [x, y] = toLocal(lon, lat);
+  return { t, x, y, lon, lat, r, dur };
 }
 
 const SEVERITY: Record<IncidentKind, 1 | 2 | 3> = { signal: 2, breakdown: 3, sick: 1, police: 3 };
@@ -74,6 +113,7 @@ export class ChaosController {
   private forcedEvents = new Map<number, CityEvent[]>();
   private service: ServiceOverride[] = [];
   private now = 0;
+  private quake: QuakePlan | null = null;
 
   constructor(
     opts: ChaosInit,
@@ -135,6 +175,7 @@ export class ChaosController {
     this.planExposure = !fresh && saved && saved.day === day ? saved.exposure : this.exposure;
     this.plan = planIncidents(this.seed, day, this.planExposure, CHAOS.rate[this.level], this.mods.rates, now);
     this.planIdx = 0;
+    this.quake = planQuake(this.seed, day, this.level, now);
     this.weatherAlert = null;
     if (this.weather.kind !== 'clear') {
       this.weatherAlert = { id: day * 1000, kind: 'weather', status: 'info', day, start: now, until: (day + 1) * DAY, severity: 1, place: '', routes: [], weather: { ...this.weather } };
@@ -145,7 +186,9 @@ export class ChaosController {
 
   private applyWeather(): void {
     this.mods = weatherMods(this.weather);
-    this.trains.setWeather(this.mods.outdoorSpeed, this.mods.dwell);
+    // Snow sprinklers and heated points (research): the weather slows the trains less.
+    const outdoor = hasTech('snowproof') ? 1 - (1 - this.mods.outdoorSpeed) * TECH_EFFECTS.snowproofSlowdown : this.mods.outdoorSpeed;
+    this.trains.setWeather(outdoor, this.mods.dwell);
     this.commuters?.setWeather(this.weather);
   }
 
@@ -200,6 +243,11 @@ export class ChaosController {
   step(t: number): void {
     this.now = t;
     while (this.planIdx < this.plan.length && this.plan[this.planIdx].t <= t) this.fire(this.plan[this.planIdx++], t);
+    if (this.quake && this.quake.t <= t) {
+      const q = this.quake;
+      this.quake = null;
+      this.fireQuake(q, t);
+    }
     if (this.active.length) this.clearExpired(t);
     while (this.wrapups.length && this.wrapups[0].at <= t) this.postWrapup(this.wrapups.shift()!, t);
   }
@@ -328,6 +376,66 @@ export class ChaosController {
     return id;
   }
 
+  /** Tests and scripts: an earthquake at a lon/lat now (radius m, duration s). Returns its alert id, or −1 if no line is near. */
+  forceQuake(lon: number, lat: number, radius: number, duration: number, t = this.now): number {
+    const [x, y] = toLocal(lon, lat);
+    return this.fireQuake({ t, x, y, lon, lat, r: radius, dur: duration * (hasTech('eew') ? TECH_EFFECTS.eewDuration : 1) }, t);
+  }
+
+  /** Earthquake: every line within reach of the epicentre crawls while it is inspected. */
+  private fireQuake(q: QuakePlan, t: number): number {
+    const net = this.net;
+    if (!net) return -1;
+    const id = this.newId(t);
+    const until = t + q.dur;
+    const step = CHAOS.quake.sampleStep;
+    // The stretch of each directed track (in its own coordinates) within the radius, and the routes on it.
+    const reach = new Map<number, { lo: number; hi: number }>();
+    const routes = new Set<number>();
+    for (const r of net.routes)
+      for (const dir of r.dirs)
+        for (const el of dir.elems) {
+          const len = el.s1 - el.s0;
+          const n = Math.max(1, Math.ceil(len / step));
+          for (let i = 0; i <= n; i++) {
+            const ds = (len * i) / n;
+            const [px, py] = pointAt(dir, el.s0 + ds);
+            if (Math.hypot(px - q.x, py - q.y) > q.r) continue;
+            const cur = reach.get(el.track) ?? { lo: Infinity, hi: -Infinity };
+            cur.lo = Math.min(cur.lo, el.u0 + ds);
+            cur.hi = Math.max(cur.hi, el.u0 + ds);
+            reach.set(el.track, cur);
+            routes.add(r.id);
+          }
+        }
+    if (!reach.size) return -1;
+    const restrs: TrackRestriction[] = [];
+    for (const sp of this.spans) {
+      const m = reach.get(sp.track);
+      if (!m) continue;
+      restrs.push({ id, edge: sp.edge, edgeDir: sp.edgeDir, u0: Math.max(sp.u0, m.lo - step), u1: Math.min(sp.u1, m.hi + step), v: CHAOS.quake.crawl, until, track: sp.track });
+    }
+    this.restrs.push(...restrs);
+    this.trains.setRestrictions(this.restrs.slice());
+    const near = this.commuters?.tractNear(q.x, q.y);
+    const alert: Alert = {
+      id,
+      kind: 'quake',
+      status: 'active',
+      day: dayIndex(t),
+      start: t,
+      until,
+      severity: 3,
+      place: near ? near.region : this.nearestStationName(q.x, q.y),
+      routes: [...routes],
+      crawl: CHAOS.quake.crawl,
+      pos: [q.x, q.y],
+      radius: q.r,
+    };
+    this.started({ alert, kind: 'quake', until, restrs }, q.dur);
+    return id;
+  }
+
   /** Train breakdown: it brakes hard and stalls where it stops. */
   private fireBreakdown(tr: Train, dur: number, t: number): number {
     const net = this.net!;
@@ -429,7 +537,7 @@ export class ChaosController {
   private started(a: Active, dur: number, graceRoutes: readonly number[] = a.alert.routes): void {
     // Trains queued behind an incident aren't deadlocked: on its routes and those sharing their track.
     this.trains.extendGrace(graceRoutes, a.until);
-    this.counts[a.kind]++;
+    if (a.kind !== 'quake') this.counts[a.kind]++;
     this.minutes += dur / 60;
     this.active.push(a);
     this.post(a.alert);
@@ -444,8 +552,10 @@ export class ChaosController {
 
   /** End an incident (expired, or its target vanished) and post the cleared alert. */
   private finish(a: Active, t: number, reason?: string): void {
-    if (a.restr) {
-      this.restrs = this.restrs.filter((q) => q !== a.restr);
+    if (a.restr || a.restrs) {
+      const gone = new Set<TrackRestriction>(a.restrs ?? []);
+      if (a.restr) gone.add(a.restr);
+      this.restrs = this.restrs.filter((q) => !gone.has(q));
       this.trains.setRestrictions(this.restrs.slice());
     }
     if (a.trainId !== undefined) {
@@ -518,6 +628,7 @@ export class ChaosController {
       this.active = this.active.filter((a) => {
         let why: string | null = null;
         if (a.restr && a.restr.track < 0) why = 'track removed';
+        else if (a.restrs && a.restrs.every((q) => q.track < 0)) why = 'track removed';
         else if (a.trainId !== undefined && byId.get(a.trainId)?.incident !== a.alert.id) why = 'train withdrawn';
         else if (a.kind === 'police' && !stationIds.has(a.alert.stationId ?? -1)) why = 'station removed';
         if (why) gone.push([a, why]);

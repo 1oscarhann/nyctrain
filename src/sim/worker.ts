@@ -117,6 +117,9 @@ function handle(msg: ToWorker) {
     case 'storiesDaily':
       engine.setStoriesDaily(msg.on);
       break;
+    case 'quake':
+      engine.chaos.forceQuake(msg.lon, msg.lat, msg.radius, msg.duration);
+      break;
   }
 }
 

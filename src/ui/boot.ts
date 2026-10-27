@@ -7,7 +7,7 @@ import { MAP, COMMUTERS, type ChaosLevel, type CityId } from '../balance';
 import { applyCity, CITIES, city } from '../cities';
 import { toLonLat } from '../core/geo';
 import { fmtCount, setUnits } from '../core/units';
-import { fetchLand, fetchWorld, type LandCollection, type World } from '../data/world';
+import { fetchLand, fetchRelief, fetchWorld, type LandCollection, type World } from '../data/world';
 import { foundCompany } from './founding';
 import type { Company } from '../core/company';
 import { MapView } from '../map/mapView';
@@ -37,7 +37,8 @@ async function useCity(root: HTMLElement, id: CityId): Promise<void> {
     root.append(loading);
     try {
       const base = new URL(city().dataPath, document.baseURI).href;
-      const [w, l] = await Promise.all([fetchWorld(base), fetchLand(base)]);
+      const [w, l, r] = await Promise.all([fetchWorld(base), fetchLand(base), city().relief ? fetchRelief(base) : null]);
+      w.relief = r;
       d = { world: w, land: l };
       cache.set(id, d);
     } catch (e) {

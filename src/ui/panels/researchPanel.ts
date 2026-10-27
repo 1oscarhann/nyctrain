@@ -3,7 +3,8 @@
  * costs & the lab), what's being worked on with its progress, and one-click refits to the newest
  * trains once a mark is researched.
  */
-import { RESEARCH, RESEARCH_BRANCHES, RESEARCH_TUNING, TRAINS, type ResearchDef } from '../../balance';
+import { cityResearch } from '../../cities';
+import { RESEARCH_BRANCHES, RESEARCH_TUNING, TRAINS, type ResearchDef } from '../../balance';
 import { cantStart, researchCost, researchDef, researchSlots, researchStatus, TRAIN_MARKS_BY_RESEARCH } from '../../core/research';
 import { stockSpec, validMark } from '../../core/tech';
 import { fmtCount, fmtMoney } from '../../core/units';
@@ -97,7 +98,7 @@ export function researchPanel(app: App): Panel {
     const spent = game.finance.history.reduce((t, d) => t + (d.research ?? 0), 0) + (game.finance.today.research ?? 0);
     const fastest = Math.max(...game.routes.list().map((r) => stockSpec(r.stock, r.mark).topSpeed), 0);
     summary.replaceChildren(
-      statCard('Researched', `${s.done.length} of ${RESEARCH.length}`, undefined, 'projects finished'),
+      statCard('Researched', `${s.done.length} of ${cityResearch().length}`, undefined, 'projects finished'),
       statCard(
         'Design teams',
         game.sandbox ? '—' : `${s.active.length} of ${slots} busy`,
@@ -114,7 +115,7 @@ export function researchPanel(app: App): Panel {
     content.replaceChildren();
     const grid = h('div', { class: 'rs-grid' });
     for (const b of RESEARCH_BRANCHES) {
-      grid.append(h('div', { class: 'rs-col' }, h('div', { class: 'rs-section' }, b.name), ...RESEARCH.filter((d) => d.branch === b.id).map(card)));
+      grid.append(h('div', { class: 'rs-col' }, h('div', { class: 'rs-section' }, b.name), ...cityResearch().filter((d) => d.branch === b.id).map(card)));
     }
     content.append(grid);
     content.append(

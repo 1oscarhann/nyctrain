@@ -2,7 +2,7 @@
  * Hubs (intertown): stations a new game starts with, built and free. The South East begins with a
  * terminal at Victoria and a short stub of track the player extends (CITY_BALANCE[city].hubs).
  */
-import { city, cityBalance } from '../cities';
+import { city, cityBalance, trackClasses } from '../cities';
 import { AIRPORTS } from '../cities/destinations';
 import { STATION } from '../balance';
 import { platformLength } from '../construction/network';
@@ -46,17 +46,19 @@ export function placeHubs(game: Game): void {
  */
 export function placeAirportStations(game: Game): void {
   const net = game.network;
-  const cars = city().intertown ? 12 : STATION.cars.heavy.default;
+  // The city's own track: high-speed line in Japan (16-car platforms), else heavy.
+  const cls = trackClasses().includes('heavy') ? 'heavy' : trackClasses()[0];
+  const cars = city().platformCars?.[cls] ?? (city().intertown ? 12 : STATION.cars.heavy.default);
   let placed = 0;
   for (const ap of AIRPORTS[city().id] ?? []) {
     const s = ap.stub;
     if (!s) continue;
     const [ax, ay] = toLocal(s.a[0], s.a[1]);
     const [bx, by] = toLocal(s.b[0], s.b[1]);
-    const edges = net.addStroke([{ x: ax, y: ay, level: s.level }, { x: bx, y: by, level: s.level }], 'heavy', { kind: 'none' }, { kind: 'none' });
+    const edges = net.addStroke([{ x: ax, y: ay, level: s.level }, { x: bx, y: by, level: s.level }], cls, { kind: 'none' }, { kind: 'none' });
     if (!edges.length) continue;
     const L = net.geom(edges[0]).length;
-    if (L < platformLength(cars, 'heavy') + 40) continue;
+    if (L < platformLength(cars, cls) + 40) continue;
     const st = net.addStation(edges[0], L / 2, cars, s.station, 'built');
     st.nameAuto = false;
     st.cost = 0;

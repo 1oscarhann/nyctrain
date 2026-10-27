@@ -21,7 +21,7 @@ const TOOLS: { id: ToolId; icon: string; title: string; key: string; body: strin
   { id: 'bulldoze', icon: ICONS.bulldoze, title: 'Bulldoze', key: 'B', body: 'Remove blueprints free, demolish built items for a 20% refund' },
 ];
 
-const OVERLAYS: OverlayMode[] = ['none', 'demand', 'demandWork', 'residents', 'jobs', 'growth', 'unserved', 'crowding', 'flows'];
+const OVERLAYS: OverlayMode[] = ['none', 'demand', 'demandWork', 'residents', 'jobs', 'growth', 'unserved', 'crowding', 'flows', 'terrain'];
 
 export class Toolbar {
   readonly el: HTMLElement;
@@ -69,6 +69,7 @@ export class Toolbar {
     attachTip(help, app.tooltip, 'Tutorial', undefined, 'A quick walkthrough of the basics');
     this.overlayMenu = h('div', { class: 'hw-panel', style: 'position:absolute;left:66px;display:none;flex-direction:column;padding:6px;gap:2px;z-index:25;min-width:200px' });
     for (const m of OVERLAYS) {
+      if (m === 'terrain' && !app.world.relief) continue;
       this.overlayMenu.append(
         h(
           'button',

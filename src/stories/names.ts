@@ -76,7 +76,20 @@ const LONDON: readonly Pool[] = [
   },
 ];
 
-const POOLS: Record<CityId, readonly Pool[]> = { nyc: NYC, london: LONDON, southeast: LONDON, manchester: LONDON, birmingham: LONDON, leeds: LONDON, bristol: LONDON };
+const JAPAN: readonly Pool[] = [
+  {
+    w: 0.97,
+    names: ['Haruto', 'Yui', 'Sota', 'Hina', 'Ren', 'Aoi', 'Yuto', 'Sakura', 'Takumi', 'Mio', 'Kenta', 'Yuka', 'Daiki', 'Ayaka', 'Shota', 'Misaki', 'Hiroshi', 'Keiko', 'Takeshi', 'Yoko', 'Kazuya', 'Naomi', 'Ryo', 'Emi', 'Satoshi', 'Tomoko', 'Kenji', 'Akiko'],
+    initials: 'SSTTKKWWIINNYYMMHAO',
+  },
+  {
+    w: 0.03,
+    names: ['Min-jun', 'Ji-woo', 'Wei', 'Mei', 'Minh', 'Linh', 'Maria', 'Jose', 'Ana', 'Rizal'],
+    initials: 'KLPCNSTRG',
+  },
+];
+
+const POOLS: Record<CityId, readonly Pool[]> = { nyc: NYC, london: LONDON, southeast: LONDON, manchester: LONDON, birmingham: LONDON, leeds: LONDON, bristol: LONDON, japan: JAPAN };
 
 /** Uniform in [0, 1) from a seed and a salt. */
 const u01 = (seed: number, salt: number) => hash32x4(seed, salt, 0x6e61, 0x6d65) / 4294967296;

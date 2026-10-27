@@ -32,10 +32,7 @@ const FIXED_BASE = {
   dwellBase: OPERATIONS.dwellBase,
   scheduledDwell: OPERATIONS.scheduledDwell,
   dwellPerPassenger: OPERATIONS.dwellPerPassenger,
-  headwayChoices: [...OPERATIONS.headwayChoices],
   peoplePerMetre: STATION_CROWD.peoplePerMetre,
-  signalRate: CHAOS.signal.perTrackKmDay,
-  policeRate: CHAOS.police.perStationDay,
 };
 
 /** The city's own values of what research changes (taken when a city is applied). */
@@ -46,6 +43,11 @@ interface CityBase {
   stationCost: Record<TrackLevel, number>;
   stationDays: Record<TrackLevel, number>;
   operatingPerCarKm: number;
+  /** Headway choices (per city: Japan offers 40 and 60 min). */
+  headwayChoices: number[];
+  /** Incident rates research lowers (per city: Japan's dedicated lines fail far less). */
+  signalRate: number;
+  policeRate: number;
 }
 
 let cityBase: CityBase | null = null;
@@ -59,6 +61,9 @@ function takeCityBase(): CityBase {
     stationCost: { ...STATION.costByLevel },
     stationDays: { ...STATION.buildDays },
     operatingPerCarKm: ECONOMY.operatingPerCarKm,
+    headwayChoices: [...OPERATIONS.headwayChoices],
+    signalRate: CHAOS.signal.perTrackKmDay,
+    policeRate: CHAOS.police.perStationDay,
   };
 }
 
@@ -98,14 +103,14 @@ function writeGlobals(): void {
   ECONOMY.operatingPerCarKm =
     b.operatingPerCarKm * (done.has('regen') ? e.regenOperating : 1) * (done.has('lightweight') ? e.lightweightOperating : 1) * (done.has('driverless') ? e.driverlessOperating : 1);
   OPERATIONS.safetyMargin = done.has('cbtc') ? e.cbtcSafetyMargin : FIXED_BASE.safetyMargin;
-  OPERATIONS.headwayChoices = done.has('cbtc') ? [...new Set([e.cbtcHeadway, ...FIXED_BASE.headwayChoices])].sort((x, y) => x - y) : [...FIXED_BASE.headwayChoices];
+  OPERATIONS.headwayChoices = done.has('cbtc') ? [...new Set([e.cbtcHeadway, ...b.headwayChoices])].sort((x, y) => x - y) : [...b.headwayChoices];
   OPERATIONS.dwellBase = FIXED_BASE.dwellBase - (done.has('ato') ? e.atoDwellCut : 0);
   OPERATIONS.scheduledDwell = FIXED_BASE.scheduledDwell - (done.has('ato') ? e.atoDwellCut : 0);
   OPERATIONS.dwellPerPassenger = FIXED_BASE.dwellPerPassenger * (done.has('psd') ? e.psdBoarding : 1);
   // Stations and incidents.
   STATION_CROWD.peoplePerMetre = FIXED_BASE.peoplePerMetre * (done.has('gates') ? e.gatesCapacity : 1);
-  CHAOS.signal.perTrackKmDay = FIXED_BASE.signalRate * (done.has('cbtc') ? e.cbtcSignalFailures : 1);
-  CHAOS.police.perStationDay = FIXED_BASE.policeRate * (done.has('psd') ? e.psdPolice : 1);
+  CHAOS.signal.perTrackKmDay = b.signalRate * (done.has('cbtc') ? e.cbtcSignalFailures : 1);
+  CHAOS.police.perStationDay = b.policeRate * (done.has('psd') ? e.psdPolice : 1);
 }
 
 // ------------------------------------------------------------------------------------ trains

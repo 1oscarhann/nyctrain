@@ -205,7 +205,7 @@ export class App implements AppContext {
     this.settings = { ...opts.settings };
     setUnits(this.settings.units);
     this.tractIndex = new TractIndex(world.tracts);
-    this.terrain = new WorldTerrain(new LandMask(land, MAP.landCell), this.tractIndex);
+    this.terrain = new WorldTerrain(new LandMask(land, MAP.landCell, MAP.landClose), this.tractIndex, world.relief ?? null);
     this.game = new Game(world, this.terrain, { sandbox: opts.sandbox, fares: defaultFares() });
     this.goals = emptyGoals();
     this.tutorialDone = !opts.tutorial;
@@ -251,6 +251,7 @@ export class App implements AppContext {
     this.schools.load(new URL(city().dataPath, document.baseURI).href).then(() => { this.toolbar?.update(); this.refreshPanel(); });
     this.elevated = new Elevated3D(view.map);
     this.overlays = new Overlays(world.tracts, fmtDensity);
+    this.overlays.setRelief(world.relief ?? null);
     this.overlays.districtWord = districtWord;
     this.overlays.growthOff = () => this.game.growthPace === 'off';
     this.places = new PlaceNames(view.map, (x, y) => !this.terrain.isWater(x, y), (x, y) => this.terrain.borough(x, y));

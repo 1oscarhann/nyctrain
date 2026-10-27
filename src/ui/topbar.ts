@@ -8,7 +8,7 @@ import { TIME } from '../balance';
 import { city } from '../cities';
 import { dayIndex, fmtDate, timeOfDay } from '../core/calendar';
 import { weatherLabel } from '../core/cityCalendar';
-import { fmtClock, fmtCount, fmtMoney, fmtPct } from '../core/units';
+import { fmtClock, fmtCount, fmtMinutes, fmtMoney, fmtPct } from '../core/units';
 import { forecastText, LEVEL_LABEL, weatherEffects } from './alertFeed';
 import type { App } from './app';
 import { h, svgIcon } from './dom';
@@ -87,6 +87,7 @@ export class TopBar {
       if (e.key === 'Enter') app.openAlerts({ focus: app.feed.day * 1000 });
     });
     this.ticker = new NewsTicker((item) => app.openAlerts({ focus: item.focus, event: item.event }));
+    const trips = !!city().tractWords;
     this.el = h(
       'div',
       { id: 'topbar', class: 'hw-panel' },
@@ -103,9 +104,9 @@ export class TopBar {
       h('div', { class: 'tb-sep' }),
       stat('Riders yesterday', this.riders, this.ridersSub, undefined, 'Trips taken on your network yesterday (each journey counts once, however many changes). The line below counts today live.'),
       h('div', { class: 'tb-sep' }),
-      stat(`Go by ${city().transitWord === 'railway' ? 'rail' : city().transitWord}`, this.share, this.shareSub, undefined, `Share of all commutes that use your ${city().transitWord}. The rest walk or drive. Higher is better.`),
+      stat(`Go by ${city().transitWord === 'railway' ? 'rail' : city().transitWord}`, this.share, this.shareSub, undefined, trips ? `Share of all journeys between towns that use your ${city().transitWord}. The rest drive (or fly, bus or take the old lines: "drive" here). Higher is better.` : `Share of all commutes that use your ${city().transitWord}. The rest walk or drive. Higher is better.`),
       h('div', { class: 'tb-sep' }),
-      stat('Average commute', this.commute, this.commuteSub, undefined, 'Average door-to-door commute across the whole map, by any mode, compared with no trains at all. Lower is better.'),
+      stat(trips ? 'Average trip' : 'Average commute', this.commute, this.commuteSub, undefined, trips ? 'Average door-to-door trip across the whole map, by any mode, compared with no trains at all. Lower is better.' : 'Average door-to-door commute across the whole map, by any mode, compared with no trains at all. Lower is better.'),
       h('div', { class: 'tb-sep' }),
       sound,
       menu,
@@ -139,14 +140,16 @@ export class TopBar {
     this.riders.textContent = r ? fmtCount(r.riders) : '—';
     this.ridersSub.textContent = live ? `${fmtCount(live.ridersToday)} so far today` : 'first count after a day of service';
     this.share.textContent = r ? fmtPct(r.transitShare) : '—';
-    this.shareSub.textContent = r ? `of ${fmtCount(r.commuters)} commuters` : 'of all commutes';
+    const trips = !!city().tractWords;
+    this.shareSub.textContent = r ? `of ${fmtCount(r.commuters)} ${trips ? 'journeys' : 'commuters'}` : trips ? 'of all journeys' : 'of all commutes';
+    const mins = (m: number) => (trips && m >= 60 ? fmtMinutes(m * 60) : `${m.toFixed(1)} min`);
     if (r) {
       const d = r.avgCommute - r.baselineCommute;
-      this.commute.textContent = `${r.avgCommute.toFixed(1)} min`;
+      this.commute.textContent = mins(r.avgCommute);
       this.commuteSub.textContent = Math.abs(d) < 0.05 ? 'same as with no trains' : `${Math.abs(d).toFixed(1)} min ${d < 0 ? 'faster' : 'slower'} than no trains`;
       this.commuteSub.className = 'sub num ' + (d < -0.05 ? 'hw-green' : d > 0.05 ? 'hw-red' : '');
     } else {
-      this.commute.textContent = app.baseline ? `${app.baseline.toFixed(1)} min` : '—';
+      this.commute.textContent = app.baseline ? mins(app.baseline) : '—';
       this.commuteSub.textContent = 'with no trains yet';
       this.commuteSub.className = 'sub num';
     }

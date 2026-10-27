@@ -19,8 +19,11 @@ const load = (): SchoolsFile => JSON.parse(readFileSync(join(__dirname, '..', 'p
 /** Fewest schools each map should have (England's census, NYC DOE buildings). */
 const MIN: Record<string, number> = { nyc: 1500, london: 2500, southeast: 6000, manchester: 900, birmingham: 900, leeds: 800, bristol: 350 };
 
+/** Maps without a school run: Japan's high-speed map (pupils don't take the Shinkansen to school). */
+const NO_SCHOOLS = new Set<string>(['japan']);
+
 describe('schools data', () => {
-  for (const id of CITY_IDS) {
+  for (const id of CITY_IDS.filter((c) => !NO_SCHOOLS.has(c))) {
     it(`${id}: real, named schools inside the map, with pupils`, () => {
       applyCity(id);
       const f = load();

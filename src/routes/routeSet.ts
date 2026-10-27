@@ -7,7 +7,7 @@ import { platformLength, type Network } from '../construction/network';
 import type { Station } from '../construction/types';
 import { defaultControl, legacyControl, normalizeControl } from './control';
 import { findRoutePath, pathEdges } from './pathfind';
-import { city } from '../cities';
+import { city, availableStocks } from '../cities';
 import { isBulletShape, PERIOD_IDS, routePalette, type PeriodId, type Route, type RouteControl, type RoutePath } from './types';
 
 export class RouteSet {
@@ -203,7 +203,14 @@ function emptySpares(): Record<StockId, number> {
 /** A train type that can run on the route's track family (else that family's metro trains). */
 export function validStock(s: unknown, cls: Route['cls']): StockId {
   const g = gaugeOf(cls);
-  return typeof s === 'string' && s in TRAINS && TRAINS[s as StockId].gauge === g ? (s as StockId) : defaultStock(g);
+  if (typeof s === 'string' && s in TRAINS && TRAINS[s as StockId].gauge === g) return s as StockId;
+  // A map that runs only some train types (Japan: Shinkansen) defaults to its own.
+  const only = city().stocks;
+  if (only && !only.includes(defaultStock(g))) {
+    const want = city().defaultHeavyStock;
+    return want && only.includes(want) && TRAINS[want].gauge === g ? want : (availableStocks(g)[0] ?? defaultStock(g));
+  }
+  return defaultStock(g);
 }
 
 /** Usable platform length at a station, m (what a train may occupy). */

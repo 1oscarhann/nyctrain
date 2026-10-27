@@ -15,6 +15,8 @@ export interface Terrain {
   isWater(x: number, y: number): boolean;
   /** Residents + jobs per km² of the tract underneath. */
   density(x: number, y: number): number;
+  /** Steepness 0–1 of the ground (maps with relief data; TRACK.mountainSlope), else absent. */
+  mountain?(x: number, y: number): number;
 }
 
 export const LEVEL_NAMES: Record<TrackLevel, string> = {
@@ -40,6 +42,8 @@ export interface EdgeReport {
   minRadius: number;
   /** Average density multiplier applied (for tooltips). */
   densityMult: number;
+  /** Average mountain multiplier applied (1 off the mountains; for tooltips). */
+  mountainMult: number;
 }
 
 export function classMult(cls: TrackClass): number {
@@ -168,6 +172,7 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
   let days = 0;
   let waterLength = 0;
   let multSum = 0;
+  let mountSum = 0;
   let badWaterLevel: TrackLevel | null = null;
   let surfaceInZone = false;
   const steps = Math.max(1, Math.ceil(L / TRACK.sampleStep));
@@ -185,17 +190,21 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
     const water = terrain.isWater(x, y);
     if (!surfaceInZone && h > -1 && inTunnelZone(x, y)) surfaceInZone = true;
     let mult = 1;
+    let mount = 1;
     if (water) {
       waterLength += ds;
       if (h > TUNNEL_MAX_HEIGHT && h < BRIDGE_MIN_HEIGHT) badWaterLevel ??= level;
       if (level === 'elevated') mult = TRACK.bridgeMultiplier;
       else if (level === 'deep') mult = TRACK.underwaterTunnelMultiplier;
-    } else if (TRACK.densityAffects[level]) {
-      mult = 1 + TRACK.densityK * terrain.density(x, y);
+    } else {
+      if (TRACK.densityAffects[level]) mult = 1 + TRACK.densityK * terrain.density(x, y);
+      const m = terrain.mountain ? terrain.mountain(x, y) : 0;
+      if (m > 0) mount = 1 + TRACK.mountainK[level] * m;
     }
     multSum += mult;
-    cost += TRACK.costPerM[level] * mult * ds;
-    days += (TRACK.daysPerKm[level] / 1000) * ds;
+    mountSum += mount;
+    cost += TRACK.costPerM[level] * mult * mount * ds;
+    days += (TRACK.daysPerKm[level] / 1000) * ds * (1 + (mount - 1) / 2);
   }
   if (badWaterLevel) {
     const what = badWaterLevel === 'elevated' || badWaterLevel === 'deep' ? 'This ramp' : `${cap(LEVEL_NAMES[badWaterLevel])} track`;
@@ -213,6 +222,7 @@ export function edgeReport(net: Network, edgeId: number, terrain: Terrain): Edge
     speedLimit: Math.min(curveSpeed(minRadius, e.cls), TRACK.lineSpeed[e.cls]),
     minRadius,
     densityMult: multSum / steps,
+    mountainMult: mountSum / steps,
   };
 }
 

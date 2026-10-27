@@ -4,6 +4,7 @@
  * apply at once (core/tech.ts). One project at a time, two with the second design team; Sandbox
  * finishes them at once and free.
  */
+import { cityResearch } from '../cities';
 import { ECONOMY, RESEARCH, RESEARCH_TUNING, STOCK_IDS, TRAIN_MARKS, type ResearchDef, type ResearchId, type StockId } from '../balance';
 import { applyTech } from './tech';
 
@@ -52,6 +53,7 @@ export function researchStatus(s: ResearchState, id: ResearchId): ResearchStatus
 
 /** Why a project can't start now (null: it can). */
 export function cantStart(s: ResearchState, id: ResearchId, cash: number, sandbox: boolean): string | null {
+  if (!cityResearch().some((r) => r.id === id)) return 'Not offered on this map';
   const st = researchStatus(s, id);
   if (st === 'done') return 'Already researched';
   if (st === 'active') return 'Already being researched';

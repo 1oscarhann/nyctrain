@@ -3,7 +3,8 @@
  * train type, applied at once with the fleet bought (or freed) to match. A preview prices any change
  * first, so each button can say what it costs.
  */
-import { gaugeOf, OPERATIONS, RESEARCH_TUNING, stocksFor, TRAINS, type StockId } from '../balance';
+import { availableStocks } from '../cities';
+import { gaugeOf, OPERATIONS, RESEARCH_TUNING, TRAINS, type StockId } from '../balance';
 import { bestMark, stockName, stockSpec, validMark } from '../core/tech';
 import { fmtMoney } from '../core/units';
 import type { Game } from '../core/game';
@@ -128,7 +129,7 @@ export function stepHeadway(cur: number, dir: -1 | 1, allowOff: boolean): number
 
 /** Train types a route can switch to (its track family). */
 export function stockChoices(r: Route): StockId[] {
-  return stocksFor(gaugeOf(r.cls));
+  return availableStocks(gaugeOf(r.cls));
 }
 
 /** "every 4 min" / "4–5 min" / "off". */

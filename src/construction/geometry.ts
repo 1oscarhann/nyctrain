@@ -143,6 +143,12 @@ export function nodeFillet(n: TrackNode, prev: TrackNode, next: TrackNode): Fill
 
 const ARC_STEP_ANGLE = (4 * Math.PI) / 180;
 const ARC_STEP_LEN = 8;
+/**
+ * Long straights get a point every this many metres. The map draws straight lines between points
+ * in its own (Mercator) projection, so on the national map a 300 km straight drawn from its two
+ * ends alone would bow away from where the trains run by over a kilometre.
+ */
+const STRAIGHT_STEP = 2000;
 
 export function computeEdgeGeom(g: GraphView, e: TrackEdge): EdgeGeom {
   const a = g.node(e.a)!;
@@ -189,6 +195,10 @@ export function computeEdgeGeom(g: GraphView, e: TrackEdge): EdgeGeom {
   const straight = overlap ? 0 : Math.max(0, chord - ta - tb);
   if (straight > 0) pieces.push({ s0: s, s1: s + straight, r: Infinity });
   s += straight;
+  if (straight > STRAIGHT_STEP) {
+    const k = Math.ceil(straight / STRAIGHT_STEP);
+    for (let i = 1; i < k; i++) push(sx + ((ex - sx) * i) / k, sy + ((ey - sy) * i) / k);
+  }
   push(ex, ey);
   if (fb) arcHalf(fb, 0, 0.5);
   else push(b.x, b.y);

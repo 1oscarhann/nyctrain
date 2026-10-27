@@ -5,7 +5,7 @@
  */
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
-import { currency } from '../core/units';
+import { fmtMoneyAxis } from '../core/units';
 
 export const CHART_TEAL = '#00A3B0';
 export const CHART_ORANGE = '#D8731C';
@@ -21,6 +21,7 @@ const bars = uPlot.paths.bars!({ size: [0.72, 24], radius: 0.25 });
 
 export function compact(v: number): string {
   const a = Math.abs(v);
+  if (a >= 1e12) return (v / 1e12).toFixed(1) + 'T';
   if (a >= 1e9) return (v / 1e9).toFixed(1) + 'B';
   if (a >= 1e6) return (v / 1e6).toFixed(1) + 'M';
   if (a >= 1e3) return (v / 1e3).toFixed(a >= 1e4 ? 0 : 1) + 'k';
@@ -79,7 +80,7 @@ export function loadChart(el: HTMLElement, load: number[], capacity: number[], c
 /** Monthly revenue vs operating costs (two lines, legend + hover readout). */
 export function financeChart(el: HTMLElement, labels: string[], revenue: number[], costs: number[], width = 330, height = 170, revenueLabel = 'Revenue'): uPlot {
   const xs = labels.map((_, i) => i);
-  const fmt = (v: number | null) => (v == null ? '—' : currency() + compact(v));
+  const fmt = (v: number | null) => (v == null ? '—' : fmtMoneyAxis(v, compact));
   return new uPlot(
     {
       width,
@@ -88,7 +89,7 @@ export function financeChart(el: HTMLElement, labels: string[], revenue: number[
       legend: { show: true, live: true },
       cursor: { points: { size: 8 }, drag: { x: false, y: false } },
       scales: { x: { time: false, range: () => [-0.3, xs.length - 1 + 0.3] }, y: { range: (_u, _a, b) => [0, Math.max(1, b) * 1.12] } },
-      axes: [axis({ splits: () => xs.filter((i) => i % Math.max(1, Math.ceil(xs.length / 8)) === 0), values: (_u, vals) => vals.map((v) => labels[v]?.slice(0, 3) ?? ''), size: 22 }), axis({ values: (_u, vals) => vals.map((v) => currency() + compact(v)), size: 46 })],
+      axes: [axis({ splits: () => xs.filter((i) => i % Math.max(1, Math.ceil(xs.length / 8)) === 0), values: (_u, vals) => vals.map((v) => labels[v]?.slice(0, 3) ?? ''), size: 22 }), axis({ values: (_u, vals) => vals.map((v) => fmtMoneyAxis(v, compact)), size: 46 })],
       series: [
         { label: 'Month', value: (_u, v) => (v == null ? '—' : labels[v] ?? '') },
         { label: revenueLabel, stroke: CHART_TEAL, width: 2, points: { show: labels.length < 3, size: 8, fill: CHART_TEAL }, value: (_u, v) => fmt(v) },

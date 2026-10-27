@@ -63,7 +63,8 @@ export function bullet(color: string, text: string, size = 22, express = false, 
   }
   // London style: a line bar (a rounded rectangle in the line colour) instead of a disc; express
   // services keep the lozenge so they still read as different at a glance.
-  if (!express && shape !== 'circle' && (shape === 'bar' || document.documentElement.dataset.theme === 'tfl')) {
+  const barTheme = document.documentElement.dataset.theme === 'tfl' || document.documentElement.dataset.theme === 'hsr';
+  if (!express && shape !== 'circle' && (shape === 'bar' || barTheme)) {
     return h(
       'span',
       { class: 'bullet bar', style: { background: color, width: Math.round(size * 1.55) + 'px', height: Math.round(size * 0.78) + 'px', fontSize: Math.round(size * 0.5) + 'px', color: barInk(color) } },

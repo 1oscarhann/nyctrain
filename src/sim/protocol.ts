@@ -210,7 +210,9 @@ export type ToWorker =
   /** Living City pace; applies from the next month close. */
   | { type: 'growthPace'; pace: GrowthPace }
   /** Commuter stories (v2): look for the commuter of the day (candidate checks at boarding and arrival; off by default). */
-  | { type: 'storiesDaily'; on: boolean };
+  | { type: 'storiesDaily'; on: boolean }
+  /** Debug and browser tests: an earthquake now at lon/lat (maps with quakes). */
+  | { type: 'quake'; lon: number; lat: number; radius: number; duration: number };
 
 export type Query =
   /** Reply: SimState (mode shares and the growth they belong to, captured together). */
@@ -359,7 +361,7 @@ export interface ServiceOverride {
 export interface Alert {
   /** day·1000 + seq (0 = weather, 1–899 incidents, 900 + i event wrap-ups). */
   id: number;
-  kind: IncidentKind | 'weather' | 'event';
+  kind: IncidentKind | 'weather' | 'event' | 'quake';
   status: 'active' | 'cleared' | 'info';
   day: number;
   /** Game time it started (or was posted). */
@@ -385,6 +387,8 @@ export interface Alert {
   pos?: [number, number];
   /** Signal problem segment, local metres. */
   path?: [number, number][];
+  /** Earthquake: the radius around pos (the epicentre) where trains stop, m. */
+  radius?: number;
   weather?: DayWeather;
   outcome?: EventOutcome;
   /** Why a cleared alert ended early ("track removed", "train withdrawn"). */

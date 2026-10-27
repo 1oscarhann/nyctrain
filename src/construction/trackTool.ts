@@ -8,6 +8,7 @@
  * fans off through turnouts where the stroke attaches to other track, gets scissors crossovers
  * near free ends, and continues an existing four-track free end. X places scissors crossovers.
  */
+import { city, trackClasses } from '../cities';
 import { trackClassName } from '../core/trackNames';
 import { PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import type { Layer } from '@deck.gl/core';
@@ -66,8 +67,8 @@ interface CrossoverHover {
 export class TrackTool implements Tool {
   readonly id = 'track' as const;
   readonly xray = true;
-  cls: TrackClass = 'heavy';
-  level: TrackLevel = 'deep';
+  cls: TrackClass = trackClasses()[0];
+  level: TrackLevel = city().defaultLevel ?? 'deep';
   private pts: StrokePoint[] = [];
   private startSnap: Snap = { kind: 'none' };
   private hover: SnapResult | null = null;
@@ -603,8 +604,8 @@ export class TrackTool implements Tool {
     return h(
       'div',
       null,
-      h('div', { class: 'opt-row' }, h('span', { class: 'opt-label' }, 'Class'), h('div', { class: 'seg' }, clsBtn('heavy'), clsBtn('light'), clsBtn('highspeed'))),
-      h('div', { class: 'opt-row', style: 'margin-top:8px' }, h('span', { class: 'opt-label' }, 'Tracks'), h('div', { class: 'seg', title: 'Q — two or four tracks' }, tracksBtn(2), tracksBtn(4))),
+      trackClasses().length > 1 ? h('div', { class: 'opt-row', style: 'margin-bottom:8px' }, h('span', { class: 'opt-label' }, 'Class'), h('div', { class: 'seg' }, ...trackClasses().map(clsBtn))) : null,
+      h('div', { class: 'opt-row' }, h('span', { class: 'opt-label' }, 'Tracks'), h('div', { class: 'seg', title: 'Q — two or four tracks' }, tracksBtn(2), tracksBtn(4))),
       quad ? h('div', { class: 'opt-row', style: 'margin-top:8px' }, h('span', { class: 'opt-label' }, 'Express'), h('div', { class: 'seg' }, sideBtn(-1), sideBtn(1))) : null,
       h('div', { class: 'opt-row', style: 'margin-top:8px' }, h('span', { class: 'opt-label' }, 'Level'), h('div', { class: 'seg' }, ...LEVELS.map(levelBtn))),
       quad

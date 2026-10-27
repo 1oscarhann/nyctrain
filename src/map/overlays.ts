@@ -5,9 +5,11 @@
  * since the start. The growth overlay adds the value-capture district's rings and, tilted, 3D
  * "new development" columns.
  */
-import { ScatterplotLayer, ArcLayer, ColumnLayer } from '@deck.gl/layers';
-import type { Layer } from '@deck.gl/core';
-import { VALUE_CAPTURE } from '../balance';
+import { ScatterplotLayer, ArcLayer, ColumnLayer, BitmapLayer } from '@deck.gl/layers';
+import { COORDINATE_SYSTEM, type Layer } from '@deck.gl/core';
+import { city } from '../cities';
+import type { Relief } from '../data/relief';
+import { TRACK, VALUE_CAPTURE } from '../balance';
 import { monthLabel } from '../core/calendar';
 import type { Tract } from '../data/world';
 import type { GrowthView } from '../sim/protocol';
@@ -15,14 +17,18 @@ import { RAMP_COOL, RAMP_DIVERGE, RAMP_VIOLET, RAMP_WARM, logT, type RGBA } from
 import { columnHeight, columnRadiusClass, GROWTH_MIN_DRAWN, GROWTH_RAMP_SPAN, growthLegendEnds, growthSpan, growthT, tractGrowthSince, tractPeopleAdded } from './growthMath';
 import { Emitter } from '../core/emitter';
 
-export type OverlayMode = 'none' | 'demand' | 'demandWork' | 'residents' | 'jobs' | 'growth' | 'unserved' | 'crowding' | 'flows';
+export type OverlayMode = 'none' | 'demand' | 'demandWork' | 'residents' | 'jobs' | 'growth' | 'unserved' | 'crowding' | 'flows' | 'terrain';
 
 export const OVERLAY_LABELS: Record<OverlayMode, string> = {
   none: 'No overlay',
   demand: 'Demand: where people live',
   demandWork: 'Demand: where people work',
-  residents: 'Residents density',
-  jobs: 'Jobs density',
+  get residents() {
+    return city().tractWords ? `${city().tractWords!.residents}` : 'Residents density';
+  },
+  get jobs() {
+    return city().tractWords ? `${city().tractWords!.jobs}` : 'Jobs density';
+  },
   // The start year comes from TIME.startDate (read when the menu is built, after applyCity).
   get growth() {
     return `City growth since ${monthLabel(0).slice(-4)}`;
@@ -30,6 +36,7 @@ export const OVERLAY_LABELS: Record<OverlayMode, string> = {
   unserved: 'Unserved demand',
   crowding: 'Crowding',
   flows: 'Commuter flows',
+  terrain: 'Terrain: mountains',
 };
 
 export { GROWTH_MIN_DRAWN, GROWTH_RAMP_SPAN, growthT, tractGrowthSince, tractPeopleAdded } from './growthMath';
@@ -111,9 +118,17 @@ export class Overlays {
   private span = GROWTH_RAMP_SPAN;
   private data: OverlayData = {};
   private version = 0;
+  private relief: Relief | null = null;
+  private terrainImage: HTMLCanvasElement | null = null;
   /** Crowding is drawn by the network renderer; it just needs to know the mode. */
 
   constructor(private tracts: Tract[], private densityScale: (km2: number) => string) {}
+
+  /** The map's relief grid (Japan): the terrain overlay draws it. */
+  setRelief(relief: Relief | null): void {
+    this.relief = relief;
+    this.terrainImage = null;
+  }
 
   setMode(mode: OverlayMode): void {
     this.mode = mode;
@@ -146,10 +161,22 @@ export class Overlays {
           items: DEMAND_COLORS,
           note: this.data.modes ? `Each dot is about ${this.perDot.toLocaleString()} people. Updated each morning.` : 'Loading…',
         };
-      case 'residents':
-        return { title: 'Residents (commuters living here)', ramp: RAMP_COOL, lo: this.densityScale(1000), hi: this.densityScale(60000) };
-      case 'jobs':
-        return { title: 'Jobs', ramp: RAMP_WARM, lo: this.densityScale(1000), hi: this.densityScale(200000) };
+      case 'residents': {
+        const [lo, hi] = densityRange('residents');
+        return { title: city().tractWords ? `${city().tractWords!.residents} (a weekday)` : 'Residents (commuters living here)', ramp: RAMP_COOL, lo: this.densityScale(lo), hi: this.densityScale(hi) };
+      }
+      case 'jobs': {
+        const [lo, hi] = densityRange('jobs');
+        return { title: city().tractWords ? `${city().tractWords!.jobs} (a weekday)` : 'Jobs', ramp: RAMP_WARM, lo: this.densityScale(lo), hi: this.densityScale(hi) };
+      }
+      case 'terrain':
+        return {
+          title: 'Terrain',
+          ramp: (t) => terrainColor(t, 0.6),
+          lo: 'plains',
+          hi: 'mountains',
+          note: `Surface track costs up to ×${1 + TRACK.mountainK['at-grade']} at grade and ×${1 + TRACK.mountainK.elevated} on viaduct in the mountains; a deep tunnel only ×${1 + TRACK.mountainK.deep}.`,
+        };
       case 'growth': {
         const v = this.data.growth;
         const rings = `Rings: value-capture district (${this.districtWord()} of a served station).`;
@@ -248,10 +275,11 @@ export class Overlays {
       const jobs = this.mode === 'jobs';
       // Residents and jobs as they are now: the start × the tract's multiplier.
       const m = gv ? (jobs ? gv.mJobs : gv.mRes) : null;
+      const [lo, hi, min] = densityRange(jobs ? 'jobs' : 'residents');
       for (const t of tracts) {
         const v = ((jobs ? t.jobs : t.residents) * (m ? (m[t.index] ?? 1) : 1)) / Math.max(t.areaKm2, 0.02);
-        if (v < 50) continue;
-        discs.push({ pos: [t.lon, t.lat], r: t.radius * 1.12, t: logT(v, 1000, jobs ? 200000 : 60000), tract: t });
+        if (v < min) continue;
+        discs.push({ pos: [t.lon, t.lat], r: t.radius * 1.12, t: logT(v, lo, hi), tract: t });
       }
     } else if (this.mode === 'growth' && gv) {
       const drawn: { t: Tract; u: number }[] = [];
@@ -296,6 +324,22 @@ export class Overlays {
   /** Deck layers for the current mode; `is3D` adds the growth overlay's new-development columns. */
   layers(is3D = false): Layer[] {
     const out: Layer[] = [];
+    if (this.mode === 'terrain' && this.relief) {
+      const r = this.relief;
+      this.terrainImage ??= terrainCanvas(r);
+      out.push(
+        new BitmapLayer({
+          id: 'overlay-terrain',
+          image: this.terrainImage,
+          bounds: [r.lon0, r.lat0, r.lon0 + r.cols * r.dLon, r.lat0 + r.rows * r.dLat],
+          _imageCoordinateSystem: COORDINATE_SYSTEM.LNGLAT,
+          opacity: 0.85,
+          pickable: false,
+          parameters: { depthCompare: 'always', depthWriteEnabled: false },
+        }),
+      );
+      return out;
+    }
     if (this.mode === 'growth') {
       out.push(
         new ScatterplotLayer<Disc>({
@@ -437,4 +481,55 @@ export function flowColor(share: number, alpha = 0.85): RGBA {
   const b: [number, number, number] = [80, 220, 255];
   const s = Math.max(0, Math.min(1, share));
   return [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s, a[2] + (b[2] - a[2]) * s, alpha * 255];
+}
+
+/** Density ramp ends and the drawing threshold (per km²) of the residents and jobs overlays. */
+function densityRange(which: 'residents' | 'jobs'): [number, number, number] {
+  const o = city().overlayDensity;
+  if (o) return [...o[which], o.min];
+  return which === 'jobs' ? [1000, 200000, 50] : [1000, 60000, 50];
+}
+
+/** Terrain colour for steepness t (0 plains … 1 mountains): transparent on the plains, warm browns up the slopes. */
+export function terrainColor(t: number, alpha = 1): RGBA {
+  const u = Math.max(0, Math.min(1, t));
+  const lo = [150, 128, 96], hi = [214, 176, 120];
+  return [Math.round(lo[0] + (hi[0] - lo[0]) * u), Math.round(lo[1] + (hi[1] - lo[1]) * u), Math.round(lo[2] + (hi[2] - lo[2]) * u), Math.round(255 * alpha * (0.15 + 0.85 * u))];
+}
+
+/**
+ * The terrain overlay's image: one pixel per 1 km square, north up. Steepness (TRACK.mountainSlope)
+ * sets the tint and opacity; a hillshade from the elevations (light from the north-west) gives the
+ * ranges their shape. Flat land is nearly clear, the sea fully.
+ */
+function terrainCanvas(r: Relief): HTMLCanvasElement {
+  const { cols, rows, data } = r;
+  const canvas = document.createElement('canvas');
+  canvas.width = cols;
+  canvas.height = rows;
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(cols, rows);
+  const n = cols * rows;
+  const [s0, s1] = TRACK.mountainSlope;
+  const elev = (c: number, rr: number) => data[n + Math.max(0, Math.min(rows - 1, rr)) * cols + Math.max(0, Math.min(cols - 1, c))] * 16;
+  for (let rr = 0; rr < rows; rr++)
+    for (let c = 0; c < cols; c++) {
+      const i = rr * cols + c;
+      const b = data[i];
+      const o = ((rows - 1 - rr) * cols + c) * 4;
+      if (!b) continue;
+      const slope = (b - 1) / 8;
+      const m = Math.max(0, Math.min(1, (slope - s0) / (s1 - s0)));
+      // Hillshade: the slope facing north-west is lit (cells are ≈ 1 km).
+      const dzdx = (elev(c + 1, rr) - elev(c - 1, rr)) / 2000, dzdy = (elev(c, rr + 1) - elev(c, rr - 1)) / 2000;
+      const shade = Math.max(0, Math.min(1, 0.55 + 1.6 * (-dzdx * 0.7071 + dzdy * 0.7071)));
+      const col = terrainColor(m);
+      const k = 0.55 + 0.6 * shade;
+      img.data[o] = Math.min(255, col[0] * k);
+      img.data[o + 1] = Math.min(255, col[1] * k);
+      img.data[o + 2] = Math.min(255, col[2] * k);
+      img.data[o + 3] = m < 0.05 ? 0 : Math.round(40 + 200 * m);
+    }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
 }

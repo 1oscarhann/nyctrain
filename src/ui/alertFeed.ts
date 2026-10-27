@@ -19,7 +19,7 @@ import {
   type FullWeatherMods,
 } from '../core/cityCalendar';
 import type { Game } from '../core/game';
-import { fmtClock, fmtCount, fmtSpeed } from '../core/units';
+import { fmtClock, fmtCount, fmtSpeed, fmtDistance } from '../core/units';
 import { stationsNear } from '../routes/eventService';
 import type { Alert, CompiledNetwork, DayChaos, DayChaosInfo, EventDayInfo, EventOutcome, IncidentKind, ServiceOverride } from '../sim/protocol';
 
@@ -76,7 +76,7 @@ export const LEVEL_HINT: Record<ChaosLevel, string> = {
   normal: 'Incidents, weather and events at their usual rates',
   wild: '2.5× the incidents, more bad weather, more events',
 };
-const INCIDENTS: ReadonlySet<string> = new Set<IncidentKind>(['signal', 'breakdown', 'sick', 'police']);
+const INCIDENTS: ReadonlySet<string> = new Set<IncidentKind | 'quake'>(['signal', 'breakdown', 'sick', 'police', 'quake']);
 /** Cleared incidents and wrap-ups stay on the ticker this long (game seconds). */
 export const RECENT = 90 * 60;
 const MAX_ITEMS = 10;
@@ -176,6 +176,11 @@ export function describeAlert(a: Alert, routeRef: (id: number) => RouteRef | und
       title = `Sick passenger at ${a.place}`;
       detail = `train${towards} held about ${Math.max(1, Math.round((a.until - a.start) / 60))} min`;
       when = `~${fmtClock(a.until)}`;
+      break;
+    case 'quake':
+      title = `Earthquake${a.place ? ` in ${a.place}` : ''}`;
+      detail = `trains within ${fmtDistance(a.radius ?? 0)} stopped; they crawl at ${fmtSpeed(a.crawl ?? 0)} while the lines are inspected`;
+      when = `until ${fmtClock(a.until)}`;
       break;
     case 'police':
       title = `Police activity at ${a.place}`;

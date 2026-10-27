@@ -7,7 +7,7 @@ import { BONDS, CREDIT, ECONOMY, FARES, OPERATIONS, OPS_CONTROL, TRAINS, type St
 import { city } from '../cities';
 import { dateOfDay, monthKey } from '../core/calendar';
 import { goalTitle } from '../core/goals';
-import { currency, fmtCount, fmtFare, fmtMoney, fmtPct } from '../core/units';
+import { currency, currencyScale, fmtCount, fmtFare, fmtMoney, fmtPct } from '../core/units';
 import { nextNotchScore, ratingIndex, type CreditResult, type Rating } from '../economy/credit';
 import type { FarePolicy } from '../economy/fares';
 import { annuityMonthly, type Bond, type MarketData } from '../economy/finance';
@@ -28,6 +28,7 @@ export function fmtMoneyFine(v: number): string {
   const a = Math.abs(v);
   const sign = v < 0 ? '−' : '';
   const cur = currency();
+  if (currencyScale() !== 1) return fmtMoney(v);
   if (a >= 1e6 && a < 1e7) return `${sign}${cur}${(a / 1e6).toFixed(2).replace(/(\.\d)0$/, '$1')}M`;
   if (a >= 1e7 && a < 1e8) return `${sign}${cur}${(a / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
   return fmtMoney(v);

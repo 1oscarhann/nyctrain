@@ -139,6 +139,11 @@ export class SimClient {
     this.send({ type: 'storiesDaily', on });
   }
 
+  /** Debug and browser tests: an earthquake now (radius m, duration s). */
+  quake(lon: number, lat: number, radius: number, duration: number): void {
+    this.send({ type: 'quake', lon, lat, radius, duration });
+  }
+
   query<T>(q: Query): Promise<T> {
     const id = this.qid++;
     return new Promise((resolve) => {

@@ -7,7 +7,7 @@
  * Express pattern and All stops buttons), the Line list (every station along the line, served or
  * skipped, with Skip / Stop here) and the Overtakes card.
  */
-import { gaugeOf, OPERATIONS, OPS_CONTROL, stocksFor, TRAINS, type StockId } from '../../balance';
+import { gaugeOf, OPERATIONS, OPS_CONTROL, TRAINS, type StockId } from '../../balance';
 import { fmtClock, fmtCount, fmtDistance, fmtMinutes, fmtMoney, fmtSpeed } from '../../core/units';
 import { describeAlert, shortDate } from '../alertFeed';
 import { trainsNeeded } from '../../routes/compile';
@@ -18,7 +18,7 @@ import { allStopsPattern, expressPattern, serveStops, skipStops, stationsAlongRo
 import { lineRows, OVERTAKES_TIP, overtakesValue, pairWord, routeOnQuad, sameStopList, SERVICE_TIP, serviceEditNoop, skipsText, type LineRow } from '../express';
 import { carsFitting, validStock } from '../../routes/routeSet';
 import { BULLET_SHAPES, PERIOD_IDS, routePalette, type BulletShape, type PeriodId, type Route, type RouteControl } from '../../routes/types';
-import { city } from '../../cities';
+import { city, availableStocks } from '../../cities';
 import type { RouteRegularityDetail } from '../../sim/protocol';
 import type { App } from '../app';
 import { loadChart, regularityChart } from '../charts';
@@ -598,14 +598,14 @@ export function routeEditor(app: App, tool: RouteTool): Panel {
   const shapes = h('div', { class: 'shape-row' }, h('span', { class: 'hw-muted', style: 'font-size:12px;margin-right:4px' }, 'Shape'));
   const SHAPE_NAME: Record<BulletShape, string> = { circle: 'Disc', square: 'Square', diamond: 'Diamond', bar: 'Line bar' };
   for (const sh of BULLET_SHAPES)
-    shapes.append(h('button', { class: (d.shape ?? (city().theme === 'tfl' ? 'bar' : 'circle')) === sh ? 'on' : '', title: SHAPE_NAME[sh], onclick: () => { d.shape = sh; tool.recompute(); } }, bullet(d.color, d.bullet || '?', 22, false, sh)));
+    shapes.append(h('button', { class: (d.shape ?? (city().theme !== 'mta' ? 'bar' : 'circle')) === sh ? 'on' : '', title: SHAPE_NAME[sh], onclick: () => { d.shape = sh; tool.recompute(); } }, bullet(d.color, d.bullet || '?', 22, false, sh)));
   body.append(section('Name and bullet'), h('div', { style: 'display:flex;gap:6px' }, name, bul), section('Colour and shape'), colors, shapes);
   // Train length and frequency
   if (d.cls) {
     const cls = d.cls;
     const stock = validStock(d.stock, cls);
     const fits = (s: StockId) => Math.min(TRAINS[s].maxCars, ...d.stops.map((sid) => { const st = net.stations.get(sid); return st ? carsFitting(net, st, s) : 99; }));
-    const options = stocksFor(gaugeOf(cls));
+    const options = availableStocks(gaugeOf(cls));
     if (options.length > 1) {
       const pick = (s: StockId) => {
         d.stock = s;

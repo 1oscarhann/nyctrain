@@ -6,12 +6,13 @@ import { ECONOMY, EVENTS, MAP, OPERATIONS, STATION, TIME, TRAINS, type ChaosLeve
 import { cityBalance } from '../cities';
 import { MAX_VENUES, type CityEvent } from '../core/cityCalendar';
 import { Game } from '../core/game';
-import { toLocal } from '../core/geo';
+import { toLocal, toLonLat } from '../core/geo';
 import { LandMask } from '../data/landMask';
 import { TractIndex, type LandCollection, type World } from '../data/world';
 import { WorldTerrain } from '../construction/terrain';
 import { pickEdge, pickNode } from '../construction/pick';
-import { sampleAt } from '../construction/geometry';
+import { projectOnPolyline, sampleAt } from '../construction/geometry';
+import { stationStroke } from '../construction/lineStroke';
 import { addQuadStroke, partnerPoint, type QuadResult } from '../construction/quad';
 import { stationReport } from '../construction/validate';
 import { expressPattern } from '../routes/express';
@@ -57,7 +58,7 @@ export interface HeadlessGameOptions {
  * code before them).
  */
 export function createHeadlessGame(world: World, land: LandCollection, opts: HeadlessGameOptions = {}): Game {
-  const terrain = new WorldTerrain(new LandMask(land, MAP.landCell), new TractIndex(world.tracts));
+  const terrain = new WorldTerrain(new LandMask(land, MAP.landCell, MAP.landClose), new TractIndex(world.tracts), world.relief ?? null);
   const off = opts.ops === 'off';
   const fares = off ? flatFares(opts.fare ?? ECONOMY.fareDefault) : (opts.fares ?? (opts.fare !== undefined ? flatFares(opts.fare) : defaultFares()));
   const game = new Game(world, terrain, { sandbox: opts.sandbox ?? false, fares, chaos: opts.chaos ?? 'off', chaosSeed: opts.chaosSeed, marketSeed: opts.marketSeed, fixedRate: off, growthPace: opts.growthPace });
@@ -74,6 +75,52 @@ export function drawLine(game: Game, pts: LonLat[], level: TrackLevel | TrackLev
     return { x, y, level: Array.isArray(level) ? level[i] : level };
   });
   return game.editBlueprint(() => game.network.addStroke(stroke, cls, start, end));
+}
+
+/**
+ * A line with stations, as the Line tool lays one: a straight platform section at each stop
+ * (pointing from the previous point to the next), curves between. Points without a name are plain
+ * waypoints (a bend, no station). Returns the station ids in order; throws if the track or a
+ * station is refused. `start`: continue from a track end or station track.
+ */
+export function stationLine(game: Game, stops: { at: LonLat; name?: string; level: TrackLevel }[], cls: TrackClass, cars: number, start: Snap = { kind: 'none' }): number[] {
+  const xy = stops.map((s) => toLocal(s.at[0], s.at[1]));
+  const pts = stationStroke(
+    xy.map(([x, y], i) => ({ x, y, isNew: !!stops[i].name, level: stops[i].level })),
+    cls,
+    cars,
+    stops[0].level,
+  );
+  return game.editBlueprint(() => {
+    const net = game.network;
+    const edges = net.addStroke(pts, cls, start, { kind: 'none' });
+    if (!edges.length) throw new Error('line refused');
+    const bad: string[] = [];
+    for (const id of edges) {
+      const r = edgeReport(net, id, game.terrain);
+      if (r.ok) continue;
+      const g = net.geom(id);
+      const m = Math.floor(g.xs.length / 2);
+      const [lon, lat] = toLonLat(g.xs[m], g.ys[m]);
+      bad.push(`${r.errors[0]} (near ${lon.toFixed(3)}, ${lat.toFixed(3)})`);
+    }
+    if (bad.length) throw new Error(`track: ${bad.join('; ')}`);
+    const out: number[] = [];
+    stops.forEach((s, i) => {
+      if (!s.name) return;
+      const [x, y] = xy[i];
+      let best: { edge: number; u: number; d: number } | null = null;
+      for (const id of edges) {
+        const g = net.geom(id);
+        const pr = projectOnPolyline(g.xs, g.ys, g.cum, x, y);
+        if (!best || pr.d < best.d) best = { edge: id, u: pr.s, d: pr.d };
+      }
+      const rep = stationReport(net, best!.edge, best!.u, cars, game.terrain);
+      if (!rep.ok) throw new Error(`${s.name}: ${rep.errors[0]}`);
+      out.push(net.addStation(best!.edge, best!.u, cars, s.name).id);
+    });
+    return out;
+  });
 }
 
 /** Snap target on existing track nearest a lon/lat (for branching). */

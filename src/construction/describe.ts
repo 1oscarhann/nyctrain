@@ -56,6 +56,7 @@ export function edgeTooltip(game: Game, edgeId: number): string {
   if (quad) lines.splice(1, 0, `<div class="row"><span class="hw-muted">Four-track</span><span class="num">${quad}</span></div>`);
   if (r.waterLength > 0) lines.push(`<div class="row"><span class="hw-muted">Over water</span><span class="num">${fmtDistance(r.waterLength)}</span></div>`);
   if (r.densityMult > 1.05 && e.status === 'blueprint') lines.push(`<div class="row"><span class="hw-muted">Density premium</span><span class="num">×${r.densityMult.toFixed(1)}</span></div>`);
+  if (r.mountainMult > 1.05 && e.status === 'blueprint') lines.push(`<div class="row"><span class="hw-muted">Mountains</span><span class="num">×${r.mountainMult.toFixed(1)}</span></div>`);
   lines.push(`<div>${status}</div>`);
   if (!r.ok && e.status === 'blueprint') lines.push(`<div class="reason hw-red">${r.errors[0]}</div>`);
   return lines.join('');

@@ -14,7 +14,7 @@ export class LandMask {
   readonly h: number;
   readonly data: Uint8Array;
 
-  constructor(land: LandCollection, cell = 20) {
+  constructor(land: LandCollection, cell = 20, close = false) {
     this.cell = cell;
     // Collect rings in local metres.
     const polys: { code: number; rings: Float64Array[] }[] = [];
@@ -48,6 +48,33 @@ export class LandMask {
     this.data = new Uint8Array(this.w * this.h);
 
     for (const { code, rings } of polys) this.fill(code, rings);
+    if (close) this.closeGaps();
+  }
+
+  /**
+   * Coarse national masks (Japan) are drawn from prefecture outlines simplified one by one, so
+   * their shared borders leave hairline gaps that would read as lakes. A water cell with land on at
+   * least three of its four sides takes the commonest neighbouring code, until none is left (a few
+   * passes). Straits stay open: their cells have water at both ends.
+   */
+  private closeGaps(): void {
+    const { w, h, data } = this;
+    for (let pass = 0; pass < 6; pass++) {
+      const fill: number[] = [];
+      for (let r = 1; r < h - 1; r++)
+        for (let c = 1; c < w - 1; c++) {
+          const i = r * w + c;
+          if (data[i]) continue;
+          const n = [data[i - w], data[i + w], data[i - 1], data[i + 1]];
+          let land = 0;
+          for (const x of n) if (x) land++;
+          if (land < 3) continue;
+          const best = n.filter((x) => x).sort((a, b) => n.filter((y) => y === b).length - n.filter((y) => y === a).length)[0];
+          fill.push(i, best);
+        }
+      if (!fill.length) break;
+      for (let k = 0; k < fill.length; k += 2) data[fill[k]] = fill[k + 1];
+    }
   }
 
   /** Even–odd scanline fill of one polygon (outer ring + holes). */
