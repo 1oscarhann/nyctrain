@@ -282,6 +282,25 @@ The route panel uses the same controls (train type, length, and peak / midday / 
 frequency), and its Operations settings (holding, threshold, recovery, timepoints) apply at once
 too: there is no Apply button anywhere.
 
+## Junction tool (J)
+
+Premade junctions, laid in one click with curves wide enough for the track (`construction/junctions.ts`,
+`junctionTool.ts`): hover the line, see the junction in green (or red, with the reason) with its
+price, click to plan it as blueprint. Each ends in a stub with a free end to carry on from with the
+Track or Line tool.
+
+* **Branch**: a line leaving the main line at 30°, 45°, 60° or 90°; trains from one direction take it.
+* **Wye**: a right-angled triangle: two curves from either side meet on the branch, so trains from
+  both directions of the main line can take it (the turn rules that stop V-turns at a plain branch
+  are why a wye is needed).
+* **Fork**: a track end splits into two lines, symmetric about its axis.
+
+Curves aim for 350 m (metro), 220 m (light) and 2 km (high-speed), never tighter than the class
+minimum; **J** again cycles the kind, **F** flips the side, **D** the direction along the main
+line, **[** **]** change the angle. The junction is made of ordinary strokes (anchored junction
+nodes, leads, fillets), so validation, costs, building and routing are exactly as for drawn track;
+it is refused, with nothing changed, where the main line isn't straight long enough.
+
 ## Research and train upgrades (U)
 
 The flask button (or **U**) opens Research, full screen: 20 projects in four branches. A project
@@ -341,6 +360,7 @@ Upgraded stations cost more to staff and draw a little bigger on the map.
 | 1 – 4 | Speed 1×, 5×, 20×, 60× (1× = one game minute per second) |
 | ⏩ button | Skip to 6 am |
 | L / T / S / R / B | Line / Track / Station / Route / Bulldoze tool |
+| J | Junction tool: branch, wye or fork (J again cycles; F side, D direction, [ ] angle) |
 | U | Research (projects, train marks and refits) |
 | N | Routes & stations screen (toggle): every route's frequency, train length and type, every station's upgrades and car park |
 | V | Flat ⇄ tilted 3D (buildings grow while the camera tilts) |

@@ -15,6 +15,7 @@ const TOOLS: { id: ToolId; icon: string; title: string; key: string; body: strin
   { id: 'select', icon: ICONS.select, title: 'Inspect', key: 'Esc', body: 'Click stations, trains, track or neighbourhoods' },
   { id: 'line', icon: ICONS.line, title: 'Line', key: 'L', body: 'Build a whole line: click where each station goes; track, stations and the route follow' },
   { id: 'track', icon: ICONS.track, title: 'Track', key: 'T', body: 'Plan track: click points, double-click to finish' },
+  { id: 'junction', icon: ICONS.junction, title: 'Junction', key: 'J', body: 'Premade junctions: a branch, a wye (triangle) or a fork, with wide curves, placed in one click' },
   { id: 'station', icon: ICONS.station, title: 'Station', key: 'S', body: 'Place a station on straight, level track' },
   { id: 'route', icon: ICONS.route, title: 'Route', key: 'R', body: 'Click stations in order to make a route' },
   { id: 'bulldoze', icon: ICONS.bulldoze, title: 'Bulldoze', key: 'B', body: 'Remove blueprints free, demolish built items for a 20% refund' },

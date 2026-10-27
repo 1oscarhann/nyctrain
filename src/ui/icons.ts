@@ -34,6 +34,7 @@ export const ICONS = {
   follow: '<circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><path d="M12 2.5v3 M12 18.5v3 M2.5 12h3 M18.5 12h3"/>',
   moon: '<path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10Z"/>',
   camera: '<path d="M4 8.5h3.2L9 6h6l1.8 2.5H20V18H4Z"/><circle cx="12" cy="13" r="3.2"/>',
+  junction: '<path d="M12 21V12 M12 12C12 8 8 6 5 3 M12 12c0-4 4-6 7-9"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/>',
   flask: '<path d="M9.5 3.5h5 M10.5 3.5v6L5 19a1.3 1.3 0 0 0 1.1 2h11.8A1.3 1.3 0 0 0 19 19l-5.5-9.5v-6"/><path d="M7.5 15h9"/>',
   download: '<path d="M12 4v11 M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19.5h14"/>',
   ticket: '<path d="M4 8.5V6h16v2.5a2.5 2.5 0 0 0 0 5V18H4v-4.5a2.5 2.5 0 0 0 0-5Z"/><path d="M14 6.5v11" stroke-dasharray="2 2"/>',

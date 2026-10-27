@@ -21,6 +21,7 @@ import { carSaleValue, fleetPlan, sellIdleCars, sellSpareCars } from '../routes/
 import { checkGoals, emptyGoals, goalTitle, type GoalState } from '../core/goals';
 import { placeAirportStations, placeHubs } from '../core/hubs';
 import type { Company } from '../core/company';
+import { JunctionTool } from '../construction/junctionTool';
 import { LineTool } from '../construction/lineTool';
 import { SchoolLayers } from '../map/schoolLayers';
 import { DestinationLayers } from '../map/destinationLayers';
@@ -262,6 +263,7 @@ export class App implements AppContext {
     this.tools.register(new SelectTool(this));
     this.tools.register(new LineTool(this));
     this.tools.register(this.trackTool);
+    this.tools.register(new JunctionTool(this));
     this.tools.register(this.stationTool);
     this.tools.register(this.routeTool);
     this.tools.register(new BulldozeTool(this));
@@ -1502,6 +1504,10 @@ export class App implements AppContext {
       case 't':
       case 'T':
         this.setTool('track');
+        break;
+      case 'j':
+      case 'J':
+        this.setTool('junction');
         break;
       case 's':
       case 'S':
