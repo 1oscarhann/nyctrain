@@ -4,7 +4,7 @@
  * button priced on hover; and every station with how full it gets, its upgrade level and one-click
  * upgrades and car parks. "Map" opens the route or station panel beside the map.
  */
-import { PARK_RIDE, STATION_CROWD, STATION_TIERS, TRAINS, type StockId } from '../../balance';
+import { PARK_RIDE, STATION_CROWD, STATION_TIERS } from '../../balance';
 import { fmtDate } from '../../core/calendar';
 import { fmtCount, fmtDistance, fmtMoney } from '../../core/units';
 import { MAX_TIER, nextTier, stationCapacity, tierCost, tierInfo, tierOf } from '../../construction/stationTiers';
@@ -13,7 +13,8 @@ import type { PeriodId, Route } from '../../routes/types';
 import type { App } from '../app';
 import { bullet, h, svgIcon } from '../dom';
 import { ICONS } from '../icons';
-import { applyRouteChange, headwayText, perHour, previewRouteChange, quickPlan, stepHeadway, stockChoices, type RoutePatch } from '../routeOps';
+import { quickPlan } from '../routeOps';
+import { headwayStepper, lazyTip, trainLengthStepper, trainTypePicker } from '../routeControls';
 import { regularityTag } from '../opsMoney';
 import { shell, statCard, type Panel } from './common';
 
@@ -23,27 +24,6 @@ type StationFilter = 'all' | 'crowded' | 'upgrading';
 
 /** Per-viewer UI state for the session. */
 const ui: { stationSort: StationSort; stationFilter: StationFilter } = { stationSort: 'busiest', stationFilter: 'all' };
-
-/** A hover tip whose text is worked out when the pointer arrives (prices change as you play). */
-function lazyTip(app: App, el: HTMLElement, f: () => { title: string; body?: string }): void {
-  el.addEventListener('mouseenter', () => {
-    const t = f();
-    const r = el.getBoundingClientRect();
-    app.tooltip.show(`<div class="title">${t.title}</div>${t.body ? `<div class="hw-muted">${t.body}</div>` : ''}`, [r.right - 8, r.top - 6]);
-  });
-  el.addEventListener('mouseleave', () => app.tooltip.show(null));
-  el.addEventListener('mousedown', () => app.tooltip.show(null));
-}
-
-function priceText(app: App, r: Route, p: RoutePatch): { title: string; body?: string } {
-  const pv = previewRouteChange(app.game, r, p);
-  if (!pv.ok) return { title: "Can't", body: pv.reason };
-  const d = pv.trainsAfter - pv.trainsNow;
-  const trains = d === 0 ? 'Same number of trains' : d > 0 ? `+${d} train${d > 1 ? 's' : ''} (${pv.trainsAfter} in all)` : `${d} train${d < -1 ? 's' : ''} (${pv.trainsAfter} in all)`;
-  const money = pv.cost > 0 ? `Buys ${pv.carsToBuy} cars · ${fmtMoney(pv.cost)}` : pv.fromSpare > 0 ? `Uses ${pv.fromSpare} spare cars` : 'Nothing to buy';
-  const idle = pv.idleAfter > 0 ? ` · ${pv.idleAfter} cars left idle (sell them in Finances → Fleet)` : '';
-  return { title: trains, body: `${money}${idle}` };
-}
 
 export function networkPanel(app: App, tab: NetworkTab = 'routes'): Panel {
   const game = app.game;
@@ -80,61 +60,9 @@ export function networkPanel(app: App, tab: NetworkTab = 'routes'): Panel {
   };
 
   // ------------------------------------------------------------------ Routes
-  const stepper = (r: Route, label: string, periods: PeriodId[], allowOff: boolean) => {
-    const cur = Math.min(...periods.map((p) => r.headways[p] || Infinity));
-    const curV = isFinite(cur) ? cur : 0;
-    const patchFor = (dir: -1 | 1): RoutePatch | null => {
-      const v = stepHeadway(curV, dir, allowOff);
-      if (v === null) return null;
-      return { headways: Object.fromEntries(periods.map((p) => [p, v])) as Partial<Record<PeriodId, number>> };
-    };
-    const btn = (dir: -1 | 1, text: string, hint: string) => {
-      const p = patchFor(dir);
-      const b = h('button', { class: 'hw-btn small step', disabled: !p, onclick: () => p && applyRouteChange(app, r.id, p) && rerender() }, text) as HTMLButtonElement;
-      if (p) lazyTip(app, b, () => { const t = priceText(app, r, p); return { title: `${hint}: every ${headwayText(...Object.values(p.headways!))}`, body: `${t.title}. ${t.body ?? ''}` }; });
-      return b;
-    };
-    return h('div', { class: 'stepper' },
-      btn(-1, '−', 'More often'),
-      h('div', { class: 'step-val' }, h('b', null, headwayText(...periods.map((p) => r.headways[p]))), h('span', null, curV ? `${perHour(curV)}/h` : label)),
-      btn(1, '+', 'Less often'),
-    );
-  };
-
-  const carsStepper = (r: Route) => {
-    const btn = (d: -1 | 1) => {
-      const p: RoutePatch = { cars: r.cars + d };
-      const pv = previewRouteChange(game, r, p);
-      const b = h('button', { class: 'hw-btn small step', disabled: !pv.ok, onclick: () => applyRouteChange(app, r.id, p) && rerender() }, d < 0 ? '−' : '+') as HTMLButtonElement;
-      lazyTip(app, b, () => (pv.ok ? { title: `${r.cars + d}-car trains`, body: `${priceText(app, r, p).body} · ${fmtCount((r.cars + d) * TRAINS[r.stock].capacityComfort)} people a train` } : { title: "Can't", body: pv.reason }));
-      return b;
-    };
-    return h('div', { class: 'stepper' }, btn(-1), h('div', { class: 'step-val' }, h('b', null, `${r.cars} cars`), h('span', null, `${fmtCount(r.cars * TRAINS[r.stock].capacityComfort)} a train`)), btn(1));
-  };
-
-  const stockPicker = (r: Route) => {
-    const sel = h('select', { class: 'mgr-select' }) as HTMLSelectElement;
-    for (const s of stockChoices(r)) sel.append(h('option', { value: s }, `${TRAINS[s].name} · ${Math.round(TRAINS[s].topSpeed * 3.6)} km/h`));
-    sel.value = r.stock;
-    sel.addEventListener('change', async () => {
-      const s = sel.value as StockId;
-      const p: RoutePatch = { stock: s };
-      const pv = previewRouteChange(game, r, p);
-      if (!pv.ok) {
-        app.toast("Can't switch trains", pv.reason, 'red');
-        sel.value = r.stock;
-        return;
-      }
-      const ok = await app.confirm(
-        `Run ${TRAINS[s].name} trains on ${r.name}?`,
-        `${TRAINS[s].blurb}. ${pv.cost > 0 ? `Buys ${pv.carsToBuy} cars for ${fmtMoney(pv.cost)}` : 'Nothing to buy'}${pv.fromSpare ? ` (and uses ${pv.fromSpare} spare)` : ''}. The ${r.ownedCars} ${TRAINS[r.stock].name} cars go to the spare pool: reuse them on another route or sell them in Finances → Fleet.`,
-        'Switch trains',
-      );
-      if (ok && applyRouteChange(app, r.id, p)) rerender();
-      else sel.value = r.stock;
-    });
-    return sel;
-  };
+  const stepper = (r: Route, label: string, periods: PeriodId[], allowOff: boolean) => headwayStepper(app, r, label, periods, allowOff, rerender);
+  const carsStepper = (r: Route) => trainLengthStepper(app, r, rerender);
+  const stockPicker = (r: Route) => trainTypePicker(app, r, rerender);
 
   const routesTab = () => {
     const routes = game.routes.list();
@@ -310,7 +238,7 @@ export function networkPanel(app: App, tab: NetworkTab = 'routes'): Panel {
           ),
           h('div', null, pips, h('div', { class: 'sub' }, tierInfo(tier).name)),
           h('div', { class: 'load-cell' }, h('div', { class: 'mini-bar' }, waitFill), waitText),
-          h('div', { class: `num big ${rep && p > 0 ? `hw-${pTone}` : 'hw-muted'}` }, rep && p > 0 ? `${Math.round(p * 100)}%` : rep ? 'quiet' : '—'),
+          h('div', null, h('div', { class: `num big ${rep && p > 0 ? `hw-${pTone}` : 'hw-muted'}` }, rep && p > 0 ? `${Math.round(p * 100)}%` : rep ? 'quiet' : '—'), rep?.stationTurnedAway?.[s.id] ? h('div', { class: 'sub hw-red' }, `${fmtCount(rep.stationTurnedAway[s.id])} turned away`) : null),
           h('div', { class: 'num' }, rep ? fmtCount(boards(s)) : '—'),
           upgradeCell(s),
           h('div', null,

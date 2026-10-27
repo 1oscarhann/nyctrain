@@ -103,7 +103,7 @@ export function eventText(e: TraceEvent, ctx: StoryCtx, name: string, who?: Stor
     case 'giveup':
       return `Gives up at ${ctx.station(e.station)} after ${min(e.waited)}`;
     case 'cab': {
-      const why = e.why === 'giveup' || e.why === 'closed' ? '' : e.why === 'evacuated' ? ': the train was taken out of service' : `: the ${ctx.transitWord} no longer goes their way`;
+      const why = e.why === 'giveup' || e.why === 'closed' ? '' : e.why === 'evacuated' ? ': the train was taken out of service' : e.why === 'crowded' ? ': the station was too crowded to get in' : `: the ${ctx.transitWord} no longer goes their way`;
       return `Takes a ${cab}${why} (arrives ~${clock(e.t1)})`;
     }
     case 'arrive': {

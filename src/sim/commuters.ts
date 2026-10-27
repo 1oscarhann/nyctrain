@@ -496,6 +496,8 @@ export class Commuters implements PassengerHooks {
   private stationLeft = new Float32Array(0);
   /** Today's peak crowding per compiled station (waiting ÷ comfortable capacity). */
   private stationPeak = new Float32Array(0);
+  /** People turned away at the gates today, per compiled station (real people). */
+  private stationTurned = new Float32Array(0);
   unserved = new Float32Array(0);
   goalTrip: number | null = null;
   // ---- city chaos
@@ -1026,6 +1028,7 @@ export class Commuters implements PassengerHooks {
       this.stationHourly = new Float32Array(net.stations.length * 24);
       this.stationLeft = new Float32Array(net.stations.length);
       this.stationPeak = new Float32Array(net.stations.length);
+      this.stationTurned = new Float32Array(net.stations.length);
     }
     this.peakLoad = new Float32Array(P);
     this.peakTrains = new Int32Array(P);
@@ -1054,6 +1057,7 @@ export class Commuters implements PassengerHooks {
       }
     }
     this.recomputePaths();
+    this.replanNewTransit(t);
     this.last.netVersion = net.version;
     // Commuter stories: the traced commuter's plan on the new network.
     if (this.traceA >= 0) this.tracer!.setPlan(this.storyPlan(this.traceA, t));
@@ -1347,7 +1351,55 @@ export class Commuters implements PassengerHooks {
   }
 
   /** Everyone draws a mode from their pair's shares and their trips are scheduled. */
+  /** The day the trips were last planned (−1: not yet), and which groups had a transit option then. */
+  private plannedDay = -1;
+  private gHadTransit = new Uint8Array(0);
+
+  /**
+   * A new line opened during the day: groups that had no transit option when the day was planned
+   * get one now. Their mode shares take today's step towards the new choice at once (as if the
+   * line had been there at 3 am), and those still at home switch to the train at those odds, so a
+   * new line carries riders the day it opens instead of from tomorrow.
+   */
+  private replanNewTransit(now: number): void {
+    const dayStart = dayIndex(now) * SECONDS_PER_DAY;
+    if (this.plannedDay !== dayIndex(now) || this.gHadTransit.length !== this.G || !this.graph) return;
+    const d = this.day;
+    for (let g = 0; g < this.G; g++) {
+      if (this.gHadTransit[g] || !this.pathAM[g] || !this.pathPM[g]) continue;
+      this.gHadTransit[g] = 1;
+      const transit = this.transitInput(g);
+      if (!transit) continue;
+      const target = logitShares(generalisedCosts(this.gGeom[g], this.gBand[g], transit, this.wx));
+      const o = g * 3;
+      for (let m = 0; m < 3; m++) this.shares[o + m] += COMMUTERS.dailySmoothing * (target[m] - this.shares[o + m]);
+      const pt = this.shares[o + 2];
+      if (pt <= 0) continue;
+      const band = this.gBand[g];
+      for (let a = this.gStart[g]; a < this.gStart[g + 1]; a++) {
+        const old = this.aMode[a];
+        const dep = dayStart + this.aDepart[a];
+        // Only people who haven't set off yet (with a few minutes to change their plans).
+        if (old === MODE_TRANSIT || dep < now + 300 || this.rng.next() >= pt) continue;
+        const tAm = old === MODE_WALK ? this.walkTimeToday(g) : this.driveTime(g, false);
+        const tPm = old === MODE_WALK ? this.walkTimeToday(g) : this.driveTime(g, true);
+        d.tripTimeSum -= tAm + tPm;
+        d.trips -= 2;
+        d.modeCount[old]--;
+        d.bandMode[band * 3 + old]--;
+        this.aMode[a] = MODE_TRANSIT;
+        d.modeCount[MODE_TRANSIT]++;
+        d.bandMode[band * 3 + MODE_TRANSIT]++;
+        this.aState[a] = S_HOME;
+        this.push(dep, a, E_DEPART);
+      }
+    }
+  }
+
   private drawModesAndSchedule(dayStart: number, now: number): void {
+    this.plannedDay = dayIndex(now);
+    if (this.gHadTransit.length !== this.G) this.gHadTransit = new Uint8Array(this.G);
+    for (let g = 0; g < this.G; g++) this.gHadTransit[g] = this.pathAM[g] && this.pathPM[g] ? 1 : 0;
     // Anyone still out from yesterday is sent home (counted as stuck); yesterday's event-goers
     // are removed (the pool empties).
     this.day.stuck += this.resetTrips(now);
@@ -1574,6 +1626,17 @@ export class Commuters implements PassengerHooks {
       const until = cu[this.graph!.platStation[p]];
       if (until > t) {
         this.closedAt(a, until, t, this.graph!.platStation[p]);
+        return;
+      }
+    }
+    // Station crowding: past STATION_CROWD.closeAt × its capacity a station shuts its gates, and
+    // people coming in from the street (not changing trains) are turned away.
+    if (this.aLeg[a] === 0) {
+      const si = this.graph!.platStation[p];
+      const cap = this.net!.stations[si]?.capacity;
+      if (cap && this.stationWaiting(si) > cap * STATION_CROWD.closeAt) {
+        this.stationTurned[si] += this.scale;
+        this.finishByCab(a, t, 'crowded');
         return;
       }
     }
@@ -1995,6 +2058,15 @@ export class Commuters implements PassengerHooks {
     return Math.max(0, Math.min(STATION_CROWD.maxOver, ratio) - 1);
   }
 
+  /** People turned away at each station's gates today, by station id (null: nobody). */
+  private turnedReport(): Record<number, number> | null {
+    const net = this.net;
+    if (!net) return null;
+    let out: Record<number, number> | null = null;
+    for (let i = 0; i < net.stations.length; i++) if (this.stationTurned[i] > 0) (out ??= {})[net.stations[i].id] = Math.round(this.stationTurned[i]);
+    return out;
+  }
+
   /** Yesterday's peak crowding by station id (only stations that got at least a third full). */
   private stationPeakReport(): Record<number, number> {
     const out: Record<number, number> = {};
@@ -2083,6 +2155,7 @@ export class Commuters implements PassengerHooks {
       routeLateness: {},
       stationBoardings,
       stationPeak: this.stationPeakReport(),
+      ...(this.turnedReport() ? { stationTurnedAway: this.turnedReport()! } : {}),
       routePeakLoad,
       goalTrip: this.goalTrip,
       boroughsServed: [],
@@ -2111,6 +2184,7 @@ export class Commuters implements PassengerHooks {
     this.stationHourly.fill(0);
     this.stationLeft.fill(0);
     this.stationPeak.fill(0);
+    this.stationTurned.fill(0);
     this.peakLoad.fill(0);
     this.peakTrains.fill(0);
     this.day = newDayStats(day + 1);

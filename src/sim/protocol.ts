@@ -280,6 +280,8 @@ export interface DayReport {
   stationPeak?: Record<number, number>;
   /** Busiest peak-hour segment per route: average load per train ÷ comfortable capacity (absent: no peak service). */
   routePeakLoad?: Record<number, number>;
+  /** People turned away at the gates of overcrowded stations yesterday, by station id (absent: none). */
+  stationTurnedAway?: Record<number, number>;
   /** Transit door-to-door minutes for the timed-trip goal (GOALS.tripFrom → tripTo), or null. */
   goalTrip: number | null;
   boroughsServed: number[];
@@ -649,7 +651,7 @@ export interface StoryPlan {
 }
 
 /** Why a trip ended by cab. */
-export type CabWhy = 'giveup' | 'closed' | 'gone' | 'cantRide' | 'evacuated' | 'network';
+export type CabWhy = 'giveup' | 'closed' | 'gone' | 'cantRide' | 'evacuated' | 'network' | 'crowded';
 
 /**
  * One step of a traced trip (game seconds). `j` marks the event synthesised at a pick for where

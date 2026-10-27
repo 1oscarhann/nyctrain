@@ -57,7 +57,7 @@ export const LONDON: CityConfig = {
   ],
   tutorial: {
     jobs: 'Open Overlays (the layers button on the left) and choose Jobs density. The City, the West End and Canary Wharf light up — that’s where your trains need to go.',
-    track: 'Press T for the track tool. Deep tunnel is the sensible level under central London. Click points from the City towards the West End, then double-click to finish.',
+    line: 'Press L for the Line tool and click where each station goes, from the City towards the West End (keep stops at least 400 m apart). Inner London is tunnels only, so it starts in deep tunnel. Press Enter to finish: the track, stations and route are planned together.',
   },
   attribution: 'Commuting data: ONS / Nomis, Open Government Licence v3.0',
 };

@@ -10,7 +10,7 @@ import { cap } from '../../construction/describe';
 import { LEVEL_NAMES } from '../../construction/validate';
 import { progress } from '../../construction/blueprint';
 import { fmtClock, fmtCount, fmtDistance, fmtMoney } from '../../core/units';
-import { PARK_RIDE, SPECIAL, STATION, STATION_TIERS } from '../../balance';
+import { PARK_RIDE, SPECIAL, STATION, STATION_CROWD, STATION_TIERS } from '../../balance';
 import { SCHOOL_KIND_COLOR } from '../../data/schools';
 import { schoolKindLabel } from '../../map/schoolLayers';
 import { AIRPORTS, CAMPUSES } from '../../cities/destinations';
@@ -331,6 +331,7 @@ function stationUpgrades(app: App, s: Station): HTMLElement {
   const cap = stationCapacity(net, s);
   const waiting = app.waitingAt(s.id);
   const peak = app.report?.stationPeak?.[s.id];
+  const turned = app.report?.stationTurnedAway?.[s.id] ?? 0;
   wrap.append(section(`Station · level ${tier} of ${MAX_TIER}`));
   const fill = Math.min(1.5, cap ? waiting / cap : 0);
   const tone = fill > 1 ? 'var(--red, #ff5d5d)' : fill > 0.75 ? 'var(--amber, #ffc24a)' : 'var(--green, #4cd08a)';
@@ -339,7 +340,8 @@ function stationUpgrades(app: App, s: Station): HTMLElement {
       h('div', { class: 'tier-meter-row' }, h('b', null, tierInfo(tier).name), h('span', { class: 'num' }, `${fmtCount(waiting)} / ${fmtCount(cap)} waiting`)),
       h('div', { class: 'tier-bar' }, h('div', { style: { width: `${(Math.min(1, fill) * 100).toFixed(1)}%`, background: tone } }), fill > 1 ? h('div', { class: 'tier-over', style: { width: `${((fill - 1) * 200).toFixed(1)}%` } }) : null),
       h('div', { class: 'hw-muted', style: 'font-size:11.5px;margin-top:3px' },
-        peak !== undefined ? `Busiest moment yesterday: ${Math.round(peak * 100)}% full${peak > 1 ? ' — people stood in a crush, and some will drive instead' : ''}` : 'Comfortable capacity of the platforms; past it, waiting is miserable and trains board slowly.'),
+        peak !== undefined ? `Busiest moment yesterday: ${Math.round(peak * 100)}% full${peak > 1 ? '. People stood in a crush, and some will drive instead.' : '.'}` : `Comfortable capacity of the platforms. Past it waiting is miserable and trains board slowly; at ${STATION_CROWD.closeAt * 100}% the gates shut.`),
+      turned ? h('div', { class: 'err', style: 'margin-top:6px' }, `Gates shut: ${fmtCount(turned)} people were turned away yesterday. Upgrade the station (or run more and longer trains).`) : null,
     ),
   );
   if (s.tierTo !== undefined && s.tierEnd !== undefined && s.tierStart !== undefined) {

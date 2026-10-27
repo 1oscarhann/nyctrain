@@ -63,7 +63,7 @@ export interface CityConfig {
   /** Living City: what the value-capture district is called (finance panel heading). */
   valueCaptureDistrict: string;
   goals: CityGoal[];
-  tutorial: { jobs: string; track: string };
+  tutorial: { jobs: string; line: string };
   /** Extra data attribution shown on the map (licence requirements). */
   attribution?: string;
   /**

@@ -11,8 +11,6 @@ import { defaultFares, fareSummary, normalizeFares } from '../src/economy/fares'
 import { annuityMonthly, Finance, type FinanceData } from '../src/economy/finance';
 import { buildYearReview } from '../src/economy/yearReview';
 import { emptyStats } from '../src/sim/regularity';
-import { defaultControl } from '../src/routes/control';
-import type { Route } from '../src/routes/types';
 import type { FareBreakdown } from '../src/sim/protocol';
 import {
   bondLine,
@@ -39,8 +37,6 @@ import {
   regularityCards,
   regularityTag,
   regularityWithReport,
-  draftOf,
-  mergeDraft,
   saleText,
   scoreLine,
   scoreParts,
@@ -136,28 +132,6 @@ describe('route panel', () => {
     expect(recoveryAdvice({ ...d, yesterday: null }, 0.05)).toBe('Suggested: 10% — trains reached terminals 0.3 min late on average today so far');
     expect(recoveryAdvice(null, 0)).toBeNull();
     expect(holdingToast(true, 'A', 'Lexington')).toBe('Holding on for A Lexington');
-  });
-
-  it('a rebuilt route panel keeps unapplied edits and shows changes applied meanwhile (H)', () => {
-    const route = { id: 1, stops: [5, 6, 7, 8], cars: 8, headways: { night: 20, am: 4, midday: 8, pm: 4, evening: 10 }, control: { ...defaultControl(), hold: true, timepoints: [6] } } as unknown as Route;
-    const base = draftOf(route);
-    // The player sets a 3-minute peak and 10 cars, and a timepoint at stop 7, without applying...
-    const mine = draftOf(route);
-    mine.headways.am = 3;
-    mine.cars = 10;
-    mine.control.timepoints = [6, 7];
-    // ...then presses H: holding goes off on the route itself, and the panel is rebuilt.
-    const now = { ...route, control: { ...route.control, hold: false } } as Route;
-    const d = mergeDraft(base, mine, now);
-    expect(d.headways).toEqual({ ...route.headways, am: 3 });
-    expect(d.cars).toBe(10);
-    expect(d.control.hold).toBe(false);
-    expect(d.control.timepoints).toEqual([6, 7]);
-    expect(d.control.recoveryPct).toBe(route.control.recoveryPct);
-    // Nothing edited: the rebuilt draft is the route as it is now (so Apply and Revert come out clean).
-    expect(mergeDraft(base, draftOf(route), now)).toEqual(draftOf(now));
-    // Timepoints at stops the route no longer has are dropped.
-    expect(mergeDraft(base, mine, { ...now, stops: [5, 6, 8] } as Route).control.timepoints).toEqual([6]);
   });
 
   it('after a load, yesterday comes from the saved report (the worker forgets it)', () => {

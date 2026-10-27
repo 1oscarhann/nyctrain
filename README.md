@@ -29,7 +29,8 @@ the city (miles in New York, kilometres in London) until you pick some for that 
 or the menu. Saves remember
 their city, so loading a London save from the New York title screen switches over. A new game
 asks for the city chaos level (Off / Calm / Normal / Wild, remembered; Normal by default) and
-offers an 8-step tutorial. The city grows around good transit once a month ([Living City](#living-city);
+offers an 8-step tutorial (find the jobs, draw a line with the Line tool, build it, set its trains
+in Routes & stations, watch the rush, open a station, keep its gates open, make it pay). The city grows around good transit once a month ([Living City](#living-city);
 Steady by default). The light follows the game clock: dawn, day, dusk and night with each city's own
 sunrise and sunset, lit windows and glowing lines at night, a follow camera, photo mode and a
 timelapse of your network ([Cinematic](#cinematic)).
@@ -99,7 +100,7 @@ so London-bound commuters from the coast count). Every game starts with one free
 
 ## Train types and high-speed line
 
-Routes pick a train type (route panel → Trains); every type has its own capacity, acceleration,
+Routes pick a train type (route panel → Trains & frequency, or Routes & stations); every type has its own capacity, acceleration,
 top speed and price (`TRAINS` in `balance.ts`):
 
 | Type | Car | Cars | Comfortable / crush per car | Top speed | Per car |
@@ -232,14 +233,21 @@ and buy the trains they need; hover a button for the price first. The Stations t
 station with how full it is now and at its busiest yesterday, its level, a one-click upgrade and a
 car park, with filters (overcrowded, works) and an "Upgrade all overcrowded" button. Finances and
 Goals are full screen too; a station, route or train panel stays beside the map (with a link back).
+The route panel uses the same controls (train type, length, and peak / midday / evening / night
+frequency), and its Operations settings (holding, threshold, recovery, timepoints) apply at once
+too: there is no Apply button anywhere.
 
 ## Station upgrades
 
 Each station's platforms hold a comfortable number of people waiting: 12 per metre of platform at
 first (an 8-car metro station about 1,850). Past that the station is overcrowded: waiting there
 counts as discomfort in everyone's next mode choice (so some drive instead), and trains board more
-slowly. The station panel shows how full it is now and at its busiest yesterday, and a daily nudge
-names the worst overcrowded station.
+slowly. Past twice what it holds (`STATION_CROWD.closeAt`) the station shuts its gates: people
+arriving from the street are turned away and take a cab (the story reads "the station was too
+crowded to get in"); riders already inside can still change trains. The station panel shows how
+full it is now, at its busiest yesterday and how many were turned away, Routes & stations lists
+the turned-away count by station, and a daily nudge names the station that turned the most away
+(or the fullest one).
 
 Rebuild a station up four levels (each costs a share of its build cost by depth, takes weeks of
 works outside Sandbox, and holds 15% less during them):
@@ -433,7 +441,9 @@ To check each milestone by hand in `npm run dev`:
 3. **Routes and trains:** press **R** and click stations in order, set frequencies per period,
    then save. Trains appear, and lines shared by several routes are drawn side by side.
    Click a train for its load and lateness.
-4. **Commuters:** run to the next morning. Mode choice happens at 3 am. The top bar shows
+4. **Commuters:** run to the next morning. Mode choice happens at 3 am; a route that opens
+   during the day also wins over some of the people who haven't left home yet, so it carries
+   riders on day one, and 45% of the gap to the new shares closes each day after. The top bar shows
    riders, transit share and the average commute against the no-subway baseline. Station panels
    show boardings by hour, where riders come from and where they go.
 5. **Economy:** the finance panel (chart button or **M**) has four tabs: Overview (cash, debt,
@@ -451,8 +461,8 @@ To check each milestone by hand in `npm run dev`:
    dashed stretch.
 8. **Operations and money:** select a busy route. Service regularity shows yesterday's gaps
    (grade, bunched, extra wait, holds) and the headway spread stop by stop. In Operations,
-   **Suggest** timepoints (or click the clocks in the stop list), pick a recovery share and
-   **Apply**; **H** switches holding off and on. A train held at a timepoint reads "Held at…"
+   **Suggest** timepoints (or click the clocks in the stop list) and pick a recovery share (each
+   applies at once); **H** switches holding off and on. A train held at a timepoint reads "Held at…"
    in amber. In Finances, change the fares (a toast confirms), issue a bond, **Prepay…** it, and
    refinance when the market falls below its coupon. Lower a frequency and sell the idle cars
    (route panel or Fleet tab). Skip to a month end for the review (rating toast, rate history)
@@ -499,7 +509,7 @@ Every value is in `src/balance.ts`. Main values (spec values unless noted):
 | Stations | at-grade $25M, elevated $45M, cut-and-cover $80M, deep $200M, +$1M per car; spacing 400 m; interchange within 200 m; catchment 800 m |
 | Trains | heavy 18 m cars, 2–10 cars, 110/200 per car, 1.1/1.2 m/s², 90 km/h, $2.5M per car · light 20 m, 2–4 cars, 90/160, 1.3/1.3, 100 km/h, $2M |
 | Operations | turnaround 3 min; dwell 20 s + 1 s × (on + off) ÷ cars, max 90 s, ×1.5 above comfort; moving block = braking distance + 100 m; default headways night 20 / AM 4 / midday 8 / PM 4 / evening 10 min |
-| Commuters | 1 agent = 10 people (285,288 agents); depart 8:15 ± 45 min; walk ≤ 2.5 km; drive 14 km/h Manhattan, 24 elsewhere; CBD parking 20 min + $20; VOT $10/$20/$40 per h; logit scale 0.085; transfer penalty 5 min; 30% daily smoothing |
+| Commuters | 1 agent = 10 people (285,288 agents); depart 8:15 ± 45 min; walk ≤ 2.5 km; drive 14 km/h Manhattan, 24 elsewhere; CBD parking 20 min + $20; VOT $10/$20/$40 per h; logit scale 0.085; transfer penalty 5 min; 45% daily smoothing; a route opened during the day picks up riders that day |
 | Economy | $6B start; fare $3 all day ($0–5, step $0.25; peak and off-peak fares, low-income fare full/half/free for the lowest band); $4 per car-km; $8k per station per day; maintenance 1% of build cost per year; bonds $1B chunks up to $20B outstanding, 30 years; used cars sell for 40% |
 | Operations control | new routes hold at the first stop at 70% of the headway, 10% recovery; timepoint holds ≤ 90 s, yield to another route's train within 400 m; short turnaround 2 min when the next departure is due; bunched < ½ headway, gaps > 1.5× (of the headway the trains were dispatched under); regularity grades CV 0.25 / 0.45 |
 | Bond market | base rate starts at 2.5%, mean-reverting (12%/month, σ 0.2%), shocks ±0.75% (4%/month, 60% up), 1–6%; spread AAA 0 … BBB +0.6% … CCC +4.5%; prepay penalty 1%; refinance fee 1% (gain ≥ 0.05%) |
@@ -914,10 +924,10 @@ a month-end review counts for the Investment grade goal (a new game's AAA is a p
   *Operations* has Holding (Off / On, threshold 50–90% of the headway), Recovery (0–20%, with the
   minutes per terminal, the extra trains and, when yesterday's terminal lateness calls for more,
   a suggestion) and Timepoints (**Suggest**, **Clear**, and a clock toggle on every intermediate
-  stop in the stop list). These edit the same draft as Frequency and Train length; **Apply** in
-  the panel's footer commits them together and buys any trains. The fleet lines show the
-  recovery, and idle cars with a **Sell** button. **H** switches holding at once and keeps any
-  other unapplied edits in the draft. **Suggest** picks a stop near ⅓ and ⅔ along the line,
+  stop in the stop list). Each change applies at once, like *Trains & frequency* above it (the
+  Routes & stations steppers), and buys any trains it needs (refused with a toast if the money
+  isn't there). The fleet lines show the recovery, and idle cars with a **Sell** button. **H**
+  switches holding at once. **Suggest** picks a stop near ⅓ and ⅔ along the line,
   preferring stops no other route serves when one is close to the target, and never two stops
   side by side.
 - **Train panel.** A train held at a timepoint reads "Held at 110 St" in amber ("Waiting for an

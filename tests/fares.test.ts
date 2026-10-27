@@ -168,7 +168,8 @@ describe('mode choice by band and period', () => {
     };
     const offPeak = rate([0, 1]), peak = rate([2]);
     expect(offPeak.n).toBeGreaterThan(20);
-    expect(offPeak.share).toBeGreaterThan(peak.share + 0.05);
+    // (The gap narrows as transit's share grows: shares nearer 50% move less for the same odds.)
+    expect(offPeak.share).toBeGreaterThan(peak.share + 0.02);
     // One draw per agent either way: the same seed gives the same draws under the same policy.
     const again = run(p).c;
     expect(Array.from(again.aMode.slice(0, again.A))).toEqual(Array.from(tilted.aMode.slice(0, tilted.A)));

@@ -9,13 +9,15 @@ import type { Game } from '../core/game';
 import { purchaseFleet } from '../routes/fleet';
 import { routeTimetable, trainsNeeded } from '../routes/compile';
 import { maxCarsFor } from '../routes/routeSet';
-import { PERIOD_IDS, type PeriodId, type Route } from '../routes/types';
+import { PERIOD_IDS, type PeriodId, type Route, type RouteControl } from '../routes/types';
 import type { App } from './app';
 
 export interface RoutePatch {
   headways?: Partial<Record<PeriodId, number>>;
   cars?: number;
   stock?: StockId;
+  /** Operations control (holding, threshold, recovery, timepoints). Recovery can change the trains needed. */
+  control?: RouteControl;
 }
 
 export interface RoutePreview {
@@ -39,7 +41,7 @@ export function patched(r: Route, p: RoutePatch): Route {
   const swapped = stock !== r.stock;
   let cars = p.cars ?? r.cars;
   if (swapped) cars = Math.max(TRAINS[stock].minCars, Math.min(TRAINS[stock].maxCars, cars));
-  return { ...r, stock, cars, ownedCars: swapped ? 0 : r.ownedCars, headways: { ...r.headways, ...(p.headways ?? {}) } };
+  return { ...r, stock, cars, ownedCars: swapped ? 0 : r.ownedCars, headways: { ...r.headways, ...(p.headways ?? {}) }, control: p.control ? structuredClone(p.control) : r.control };
 }
 
 /** Run times are the expensive part (a route compile): cached per route shape and train type. */
@@ -91,10 +93,10 @@ export function applyRouteChange(app: App, routeId: number, p: RoutePatch): bool
     return false;
   }
   const next = patched(r, p);
-  const before = { stock: r.stock, cars: r.cars, ownedCars: r.ownedCars, headways: { ...r.headways } };
+  const before = { stock: r.stock, cars: r.cars, ownedCars: r.ownedCars, headways: { ...r.headways }, control: structuredClone(r.control) };
   const swapped = next.stock !== r.stock;
   if (swapped) game.routes.spareCars[r.stock] += r.ownedCars;
-  game.routes.update(r.id, { stock: next.stock, cars: next.cars, ownedCars: next.ownedCars, headways: next.headways });
+  game.routes.update(r.id, { stock: next.stock, cars: next.cars, ownedCars: next.ownedCars, headways: next.headways, control: next.control });
   const res = purchaseFleet(game, r);
   if (!res.ok) {
     if (swapped) game.routes.spareCars[before.stock] -= before.ownedCars;

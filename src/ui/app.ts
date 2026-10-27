@@ -613,15 +613,20 @@ export class App implements AppContext {
     this.checkGoals(r);
     // Station crowding: point at the worst overcrowded station that can still be upgraded.
     if (r.stationPeak) {
-      let worst: { id: number; peak: number } | null = null;
+      // The worst: most people turned away, else the fullest.
+      let worst: { id: number; peak: number; turned: number } | null = null;
       for (const [k, v] of Object.entries(r.stationPeak)) {
         const st = g.network.stations.get(Number(k));
         if (!st || v < STATION_CROWD.warnAt || nextTier(st) === null) continue;
-        if (!worst || v > worst.peak) worst = { id: st.id, peak: v };
+        const turned = r.stationTurnedAway?.[st.id] ?? 0;
+        if (!worst || turned > worst.turned || (turned === worst.turned && v > worst.peak)) worst = { id: st.id, peak: v, turned };
       }
       if (worst) {
         const st = g.network.stations.get(worst.id)!;
-        this.toasts.show(`${st.name} is overcrowded`, `${Math.round(worst.peak * 100)}% full at its busiest yesterday. Upgrade it (station panel) to hold more people and board faster.`, 'amber', 8000, () => g.select({ kind: 'station', id: st.id }));
+        const body = worst.turned
+          ? `Its gates shut and ${fmtCount(worst.turned)} people were turned away yesterday. Upgrade it (N → Stations) to hold more people.`
+          : `${Math.round(worst.peak * 100)}% full at its busiest yesterday. Upgrade it (N → Stations) to hold more people and board faster.`;
+        this.toasts.show(`${st.name} is overcrowded`, body, worst.turned ? 'red' : 'amber', 9000, () => g.select({ kind: 'station', id: st.id }));
       }
     }
     this.panel?.dayEnd?.();
@@ -753,13 +758,11 @@ export class App implements AppContext {
     }
     if (!sel) return this.showPanel(null);
     this.nextPanelKey = JSON.stringify(sel);
-    // A rebuild of the same panel (a routes event, the H key, a day end) keeps its unapplied edits.
-    const carry = this.nextPanelKey === this.panelKey ? this.panel?.carry?.() : undefined;
     switch (sel.kind) {
       case 'station':
         return this.showPanel(this.withBack(stationPanel(this, sel.id), 'stations'));
       case 'route':
-        return this.showPanel(this.withBack(routePanel(this, sel.id, carry), 'routes'));
+        return this.showPanel(this.withBack(routePanel(this, sel.id), 'routes'));
       case 'train':
         return this.showPanel(trainPanel(this, sel.id));
       case 'tract':
@@ -786,7 +789,7 @@ export class App implements AppContext {
 
   private nextPanelKey = '';
   private showPanel(p: Panel | null): void {
-    // A rebuild of the same panel (after Apply, a day end, a money change) keeps its scroll position.
+    // A rebuild of the same panel (after a change, a day end, a money change) keeps its scroll position.
     const key = this.nextPanelKey;
     this.nextPanelKey = '';
     const same = !!p && !!key && key === this.panelKey;

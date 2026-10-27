@@ -8,8 +8,6 @@ export interface Panel {
   /** Called after a day closes. */
   dayEnd?(): void;
   destroy?(): void;
-  /** State a rebuild of the same panel starts from (the route panel's unapplied edits). */
-  carry?(): unknown;
   /** Full screen (stats and management screens); panels tied to the map stay beside it. */
   full?: boolean;
 }

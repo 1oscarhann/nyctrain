@@ -43,7 +43,7 @@ export const SOUTHEAST: CityConfig = {
   ],
   tutorial: {
     jobs: 'Open Overlays (the layers button on the left) and choose Jobs density. Central London dwarfs everything, but Brighton, Southampton, Portsmouth, Reading, Oxford and Crawley glow too.',
-    track: 'Press T for the track tool and pick Main line. Start from the end of the elevated track south of Victoria, keep it elevated over the river (a bridge), then click points south towards Croydon and Gatwick. Double-click to finish; switch to At-grade beyond the river to save money.',
+    line: 'Press L for the Line tool. Start on Victoria, then click where each station goes south towards Croydon and Gatwick, kilometres apart. Keep it elevated over the river (a bridge) and at-grade beyond to save money. Press Enter to finish: the track, stations and route are planned together.',
   },
   attribution: 'Commuting data: ONS / Nomis, Open Government Licence v3.0',
 };

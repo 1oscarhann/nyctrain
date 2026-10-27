@@ -189,7 +189,7 @@ export class RouteTool implements Tool {
         this.ctx.toast("Can't afford the trains", `${fmtMoney(res.cost)} needed — issue a bond or run fewer trains`, 'red');
         return false;
       }
-      this.ctx.toast(`Route ${route.bullet} created`, res.cost ? `${fmtMoney(res.cost)} spent on trains` : undefined, 'green');
+      this.ctx.toast(`Route ${route.bullet} is open`, `${res.cost ? `${fmtMoney(res.cost)} spent on trains. ` : ''}Riders start today and build up over the next few days as people change their habits.`, 'green');
     }
     game.events.emit('routes', undefined);
     this.draft = null;

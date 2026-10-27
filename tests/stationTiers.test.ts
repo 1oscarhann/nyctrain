@@ -62,16 +62,20 @@ describe('station upgrades', () => {
     expect(stationCapacity(game.network, s)).toBe(Math.round(baseCapacity(game.network, s) * STATION_TIERS[1].capacity));
   });
 
-  it('upgrading crowded stations eases the crush and brings riders', () => {
+  it('overcrowded stations turn people away; upgrading them brings riders back', () => {
     const before = line(true);
     const r0 = runDays(before.game, 4, { agentScale: 20 }).reports.at(-1)!;
     const after = line(true);
     for (const id of after.stops) for (let t = 0; t < MAX_TIER; t++) after.game.upgradeStation(id);
     const r1 = runDays(after.game, 4, { agentScale: 20 }).reports.at(-1)!;
     const peak = (r: typeof r0) => Math.max(0, ...Object.values(r.stationPeak ?? {}));
-    if (process.env.PRINT) console.log('TIERS', JSON.stringify({ peak0: peak(r0), peak1: peak(r1), riders0: r0.riders, riders1: r1.riders, share0: r0.transitShare, share1: r1.transitShare }));
-    expect(peak(r0)).toBeGreaterThan(1); // basic 4-car stations overcrowd
-    expect(peak(r1)).toBeLessThan(peak(r0) / 3);
-    expect(r1.riders).toBeGreaterThan(r0.riders);
+    const turned = (r: typeof r0) => Object.values(r.stationTurnedAway ?? {}).reduce((a, b) => a + b, 0);
+    if (process.env.PRINT) console.log('TIERS', JSON.stringify({ peak0: peak(r0), peak1: peak(r1), riders0: r0.riders, riders1: r1.riders, turned0: turned(r0), turned1: turned(r1), share0: r0.transitShare, share1: r1.transitShare }));
+    // Basic 4-car stations overcrowd until they shut their gates and turn people away.
+    expect(peak(r0)).toBeGreaterThan(1.5);
+    expect(turned(r0)).toBeGreaterThan(5000);
+    // Upgraded, nobody is turned away and the line carries clearly more.
+    expect(turned(r1)).toBe(0);
+    expect(r1.riders).toBeGreaterThan(r0.riders * 1.08);
   }, 240_000);
 });

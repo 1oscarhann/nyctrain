@@ -154,10 +154,10 @@ describe('logit mode split', () => {
     expect(lowDrop).toBeGreaterThan(highDrop);
   });
 
-  it('moves shares 30% of the way each day', () => {
+  it('moves shares 45% of the way each day', () => {
     const s = smoothShares([0.5, 0.5, 0], [0, 0, 1]);
-    expect(s[2]).toBeCloseTo(0.3, 12);
-    expect(s[0]).toBeCloseTo(0.35, 12);
+    expect(s[2]).toBeCloseTo(0.45, 12);
+    expect(s[0]).toBeCloseTo(0.275, 12);
   });
 });
 

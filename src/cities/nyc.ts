@@ -33,6 +33,6 @@ export const NYC: CityConfig = {
   ],
   tutorial: {
     jobs: 'Open Overlays (the layers button on the left) and choose Jobs density. Midtown and Lower Manhattan light up — that’s where your trains need to go.',
-    track: 'Press T for the track tool. Deep tunnel is the sensible level under Manhattan. Click points from Lower Manhattan up towards Midtown, then double-click to finish.',
+    line: 'Press L for the Line tool and click where each station goes, from Lower Manhattan up towards Midtown (keep stops at least 400 m apart). Deep tunnel is the sensible level under Manhattan. Press Enter to finish: the track, stations and route are planned together.',
   },
 };

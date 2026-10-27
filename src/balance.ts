@@ -261,11 +261,13 @@ export const STATION_CROWD = {
   /** While works are on, the platforms hold this share of their capacity. */
   worksCapacity: 0.85,
   /** Discomfort (minutes of generalised cost) per minute waited, per 100% over capacity. */
-  overWeight: 1.2,
+  overWeight: 2,
   /** Overfill is counted up to this multiple of capacity. */
   maxOver: 3,
   /** Dwell grows by this share per 100% over capacity (crowded platforms board slowly). */
   dwellPerOver: 0.4,
+  /** Past this multiple of capacity a station shuts its gates: people arriving from the street are turned away. */
+  closeAt: 2,
   /** Yesterday's peak crowding above this nudges you to upgrade (once a day, the worst station). */
   warnAt: 1.25,
 };
@@ -524,7 +526,7 @@ export const COMMUTERS = {
   /** In-vehicle time multiplier per unit of load factor above comfortable capacity. */
   crowdingWeight: 0.6,
   /** Each day mode shares move this far toward the new logit result. */
-  dailySmoothing: 0.3,
+  dailySmoothing: 0.45,
   /** An agent waiting on a platform longer than this gives up and takes a cab. */
   maxPlatformWait: 45 * MIN,
   /** Trips with transit cost more than this × drive cost count as unserved. */

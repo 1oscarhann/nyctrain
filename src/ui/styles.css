@@ -1431,21 +1431,20 @@ input[type='checkbox'] {
   flex-wrap: wrap;
   min-width: 0;
 }
-/* Route panel footer: Apply sits under the scrolling body so timepoint toggles far down the stop list can be applied. */
-.side-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border-top: 1px solid var(--panel-line);
-  font-size: 12px;
+/* Route panel trains & frequency: the Routes & stations steppers, hours to the right. */
+.rp-trains .ops-row {
+  grid-template-columns: 74px minmax(150px, 180px) 1fr;
 }
-.side-foot .grow {
-  flex: 1;
-  min-width: 0;
+.rp-trains .ops-row > .note {
+  grid-column: 3;
+  white-space: nowrap;
 }
-.side-foot .dirty {
-  color: var(--amber);
+.rp-trains .mgr-select {
+  height: 28px;
+}
+.rp-instant {
+  font-size: 11.5px;
+  margin: 2px 0 4px;
 }
 /* Bond rows (Borrowing tab). */
 .bond-row {

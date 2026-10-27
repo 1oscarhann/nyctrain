@@ -151,5 +151,12 @@ describe('one-click route changes', () => {
     expect(stepHeadway(2, -1, false)).toBeNull();
     // No service at all is refused.
     expect(previewRouteChange(game, r, { headways: { am: 0, pm: 0, midday: 0, evening: 0, night: 0 } }).ok).toBe(false);
+    // Operations settings go through the same preview (the route panel applies them at once):
+    // lots of recovery time at the terminals needs more trains, and the real route is untouched.
+    const slack = previewRouteChange(game, r, { control: { ...r.control, recoveryPct: 0.3 } });
+    expect(slack.ok).toBe(true);
+    expect(slack.trainsAfter).toBeGreaterThanOrEqual(now);
+    expect(patched(r, { control: { ...r.control, hold: !r.control.hold } }).control.hold).toBe(!r.control.hold);
+    expect(r.control.recoveryPct).not.toBe(0.3);
   });
 });

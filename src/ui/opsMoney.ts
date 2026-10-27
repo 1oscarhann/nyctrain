@@ -14,7 +14,6 @@ import { annuityMonthly, type Bond, type MarketData } from '../economy/finance';
 import type { YearReview } from '../economy/yearReview';
 import { grade, suggestRecovery } from '../sim/regularity';
 import type { DayReport, RegularityStats, RouteRegularityDetail } from '../sim/protocol';
-import { PERIOD_IDS, type PeriodId, type Route, type RouteControl } from '../routes/types';
 
 export type Tone = 'green' | 'amber' | 'red' | undefined;
 
@@ -183,39 +182,6 @@ export function regularityTag(s: RegularityStats | null | undefined): { text: st
   return g === 'even' ? { text: 'gaps even', tone: 'green' } : g === 'uneven' ? { text: 'uneven', tone: 'amber' } : { text: 'bunching', tone: 'red' };
 }
 
-/** "Suggested: 10% — trains reached terminals 1.4 min late on average yesterday" (only above the current setting). */
-/** The route panel's editable settings (frequency, train length, operations control). */
-export interface RouteDraft {
-  headways: Record<PeriodId, number>;
-  cars: number;
-  control: RouteControl;
-}
-export const draftOf = (r: Route): RouteDraft => ({ headways: { ...r.headways }, cars: r.cars, control: structuredClone(r.control) as RouteControl });
-
-/**
- * Unapplied edits carried into a rebuilt panel (three-way: what the panel started from, the
- * player's draft, the route now). A setting the player changed keeps the draft's value; one they
- * didn't takes the route's, so a change applied meanwhile (H switching holding, Apply) shows.
- */
-export function mergeDraft(base: RouteDraft, mine: RouteDraft, r: Route): RouteDraft {
-  const pick = <T>(b: T, m: T, now: T, eq = (x: T, y: T) => x === y) => (eq(m, b) ? now : m);
-  const sameSet = (a: number[], b: number[]) => a.length === b.length && a.every((x) => b.includes(x));
-  const headways = { ...r.headways };
-  for (const p of PERIOD_IDS) headways[p] = pick(base.headways[p], mine.headways[p], r.headways[p]);
-  const c = r.control;
-  return {
-    headways,
-    cars: pick(base.cars, mine.cars, r.cars),
-    control: {
-      hold: pick(base.control.hold, mine.control.hold, c.hold),
-      holdFraction: pick(base.control.holdFraction, mine.control.holdFraction, c.holdFraction),
-      timepoints: pick(base.control.timepoints, mine.control.timepoints, c.timepoints, sameSet).filter((s) => r.stops.includes(s)),
-      recoveryPct: pick(base.control.recoveryPct, mine.control.recoveryPct, c.recoveryPct),
-      shortTurn: pick(base.control.shortTurn, mine.control.shortTurn, c.shortTurn),
-    },
-  };
-}
-
 /**
  * The route panel's regularity: the worker's, with yesterday's figures taken from the saved last
  * report when the worker has none (it doesn't keep yesterday across a load or Continue), so the
@@ -231,6 +197,7 @@ export function regularityWithReport(
   return { ...d, yesterday: saved, suggestRecovery: runTime ? suggestRecovery(saved.termLate, runTime) : d.suggestRecovery, fromReport: true };
 }
 
+/** "Suggested: 10% — trains reached terminals 1.4 min late on average yesterday" (only above the current setting). */
 export function recoveryAdvice(d: Pick<RouteRegularityDetail, 'suggestRecovery' | 'today' | 'yesterday'> | null | undefined, current: number): string | null {
   if (!d || !(d.suggestRecovery > current + 1e-9)) return null;
   const s = d.yesterday ?? d.today;

@@ -16,15 +16,17 @@ import { carSaleValue, fleetPlan, purchaseFleet } from '../../routes/fleet';
 import type { RouteTool } from '../../routes/routeTool';
 import { allStopsPattern, expressPattern, serveStops, skipStops, stationsAlongRoute, type AlongStation } from '../../routes/express';
 import { lineRows, OVERTAKES_TIP, overtakesValue, pairWord, routeOnQuad, sameStopList, SERVICE_TIP, serviceEditNoop, skipsText, type LineRow } from '../express';
-import { carsFitting, maxCarsFor, validStock } from '../../routes/routeSet';
+import { carsFitting, validStock } from '../../routes/routeSet';
 import { BULLET_SHAPES, PERIOD_IDS, routePalette, type BulletShape, type PeriodId, type Route, type RouteControl } from '../../routes/types';
 import { city } from '../../cities';
 import type { RouteRegularityDetail } from '../../sim/protocol';
 import type { App } from '../app';
 import { loadChart, regularityChart } from '../charts';
+import { headwayStepper, trainLengthStepper, trainTypePicker } from '../routeControls';
+import { applyRouteChange } from '../routeOps';
 import { bullet, h, svgIcon } from '../dom';
 import { ICONS } from '../icons';
-import { draftOf, fmtMoneyFine, HOLD_TIP, LATENESS_TIP, mergeDraft, RECOVERY_TIP, recoveryAdvice, regularityCards, regularityTag, regularityWithReport, TIMEPOINT_TIP, type RouteDraft } from '../opsMoney';
+import { fmtMoneyFine, HOLD_TIP, LATENESS_TIP, RECOVERY_TIP, recoveryAdvice, regularityCards, regularityTag, regularityWithReport, TIMEPOINT_TIP } from '../opsMoney';
 import { attachTip } from '../widgets';
 import { kv, section, shell, statCard, type Panel } from './common';
 
@@ -80,7 +82,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`;
  * and owned, what must be bought, and idle cars. `sell` (the route panel, with nothing unapplied)
  * offers the idle cars for sale.
  */
-function fleetLine(app: App, r: Route, opts: { sell?: boolean; dirty?: boolean } = {}): HTMLElement {
+function fleetLine(app: App, r: Route, opts: { sell?: boolean } = {}): HTMLElement {
   const plan = fleetPlan(app.game, r);
   if (!plan.runTimes) return h('div', { class: 'hw-muted' }, 'Trains needed: — (no path yet)');
   const owned = Math.floor(r.ownedCars / r.cars);
@@ -94,8 +96,8 @@ function fleetLine(app: App, r: Route, opts: { sell?: boolean; dirty?: boolean }
     idle = h(
       'div',
       { class: 'ev-service', style: 'margin-top:6px' },
-      h('span', { class: 'grow hw-muted' }, `Idle: ${what}${opts.dirty ? ' · Apply first to sell' : ''}`),
-      opts.sell && !opts.dirty ? h('button', { class: 'hw-btn small', onclick: () => app.sellIdleCars(r.id) }, `Sell for ${fmtMoneyFine(carSaleValue(r.cls, plan.idleCars))}`) : null,
+      h('span', { class: 'grow hw-muted' }, `Idle: ${what}`),
+      opts.sell ? h('button', { class: 'hw-btn small', onclick: () => app.sellIdleCars(r.id) }, `Sell for ${fmtMoneyFine(carSaleValue(r.cls, plan.idleCars))}`) : null,
     );
   }
   return h(
@@ -111,7 +113,7 @@ function fleetLine(app: App, r: Route, opts: { sell?: boolean; dirty?: boolean }
   );
 }
 
-export function routePanel(app: App, id: number, carry?: unknown): Panel {
+export function routePanel(app: App, id: number): Panel {
   const game = app.game;
   const r = game.routes.get(id);
   if (!r) return { el: document.createElement('div') };
@@ -136,13 +138,16 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
   const stats = h('div', { class: 'stat-grid', style: 'margin-top:6px' });
   body.append(incidents, stats);
 
-  // ---- the draft: frequency, train length and operations control are applied together
-  const base = draftOf(r);
-  const prev = carry as { id: number; base: RouteDraft; draft: RouteDraft } | undefined;
-  const draft: RouteDraft = prev && prev.id === r.id ? mergeDraft(prev.base, prev.draft, r) : draftOf(r);
-  const sameControl = (a: RouteControl, b: RouteControl) => JSON.stringify({ ...a, timepoints: [...a.timepoints].sort() }) === JSON.stringify({ ...b, timepoints: [...b.timepoints].sort() });
-  const dirty = () => draft.cars !== r.cars || PERIOD_IDS.some((p) => draft.headways[p] !== r.headways[p]) || !sameControl(draft.control, r.control);
-  const draftRoute = (): Route => ({ ...r, headways: draft.headways, cars: draft.cars, control: draft.control });
+  // ---- trains, frequency and operations all apply at once, the same as Routes & stations (N)
+  const c: RouteControl = structuredClone(r.control);
+  /** Commit the operations settings now (recovery can need more trains: bought, or refused with a toast). */
+  const commitControl = () => {
+    if (!applyRouteChange(app, r.id, { control: structuredClone(c) })) {
+      Object.assign(c, structuredClone(r.control));
+      renderOps();
+      renderStops();
+    }
+  };
 
   // The Line list (v2): every station along the line in direction-0 order, served or skipped,
   // with timepoint toggles on served stops while holding is on.
@@ -156,8 +161,8 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
     stops.replaceChildren();
     const timepointToggle = (sid: number, name: string, i: number) => {
       const mid = i > 0 && i < r.stops.length - 1;
-      if (!mid || !draft.control.hold) return null;
-      const on = draft.control.timepoints.includes(sid);
+      if (!mid || !c.hold) return null;
+      const on = c.timepoints.includes(sid);
       const toggle = h(
         'button',
         {
@@ -166,11 +171,9 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
           'aria-label': `Timepoint at ${name}`,
           onclick: (e: Event) => {
             e.stopPropagation();
-            const tps = draft.control.timepoints;
-            draft.control.timepoints = on ? tps.filter((x) => x !== sid) : r.stops.filter((x) => x === sid || tps.includes(x));
-            renderStops();
-            renderOps();
-            renderFoot();
+            const tps = c.timepoints;
+            c.timepoints = on ? tps.filter((x) => x !== sid) : r.stops.filter((x) => x === sid || tps.includes(x));
+            commitControl();
           },
         },
         svgIcon(ICONS.clock),
@@ -190,7 +193,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
     for (const row of rows) {
       const sid = row.station;
       const i = row.served ? row.stopNo - 1 : -1;
-      const on = row.served && draft.control.timepoints.includes(sid);
+      const on = row.served && c.timepoints.includes(sid);
       let action: HTMLElement | null = null;
       if (row.served && row.terminal) {
         action = h('span', { class: 'line-term' }, 'terminal');
@@ -203,7 +206,7 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
       stops.append(
         h(
           'div',
-          { class: `list-item line-row${row.served ? '' : ' skipped'}${on && draft.control.hold ? ' tp-on' : ''}`, onclick: () => game.select({ kind: 'station', id: sid }) },
+          { class: `list-item line-row${row.served ? '' : ' skipped'}${on && c.hold ? ' tp-on' : ''}`, onclick: () => game.select({ kind: 'station', id: sid }) },
           h('span', { class: 'line-mark' }),
           h('span', { class: 'hw-muted num', style: 'width:18px' }, row.served ? String(row.stopNo) : ''),
           h('span', { class: 'grow' }, row.name, row.tag ? h('span', { class: 'line-tag' }, ` ${row.tag}`) : null),
@@ -251,12 +254,20 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
   const charts = h('div');
   body.append(reg, section('Peak-hour load (8–9 am)'), charts);
 
-  // Frequency editor
+  // Trains and frequency: the Routes & stations controls, priced on hover, applied at once.
   const fleetWrap = h('div');
-  const maxCars = maxCarsFor(net, r);
-  const carsWrap = h('div');
-  const renderCars = () => carsWrap.replaceChildren(carsPicker(TRAINS[r.stock].minCars, Math.max(TRAINS[r.stock].minCars, maxCars), draft.cars, (c) => { draft.cars = c; renderCars(); changed(); }));
-  const renderFleet = () => fleetWrap.replaceChildren(fleetLine(app, draftRoute(), { sell: true, dirty: dirty() }));
+  const row = (label: string, ctl: HTMLElement, note?: string) => h('div', { class: 'ops-row' }, h('span', { class: 'lbl' }, label), h('div', { class: 'ctl' }, ctl), note ? h('div', { class: 'note' }, note) : null);
+  const trainsSec = h(
+    'div',
+    { class: 'rp-trains' },
+    row('Train type', trainTypePicker(app, r)),
+    row('Length', trainLengthStepper(app, r)),
+    row('Peak', headwayStepper(app, r, 'peak', ['am', 'pm'], false), '6–10, 16–20'),
+    row('Midday', headwayStepper(app, r, 'midday', ['midday'], false), '10–16'),
+    row('Evening', headwayStepper(app, r, 'evening', ['evening'], false), '20–24'),
+    row('Night', headwayStepper(app, r, 'no trains', ['night'], true), '0–6'),
+  );
+  const renderFleet = () => fleetWrap.replaceChildren(fleetLine(app, r, { sell: true }));
 
   // Operations control (§2.1)
   let detail: RouteDetail | null = null;
@@ -265,14 +276,13 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
   const regDetail = () => regularityWithReport(detail?.regularity, app.report?.routeRegularity?.[r.id], runTimes ? (runTimes[0] + runTimes[1]) / 2 : null);
   const ops = h('div');
   const renderOps = () => {
-    const c = draft.control;
-    const hold = choiceSeg([0, 1], c.hold ? 1 : 0, (v) => (v ? 'On' : 'Off'), (v) => { c.hold = v === 1; renderOps(); renderStops(); changed(); });
+    const hold = choiceSeg([0, 1], c.hold ? 1 : 0, (v) => (v ? 'On' : 'Off'), (v) => { c.hold = v === 1; commitControl(); });
     const holdLbl = h('span', { class: 'lbl' }, 'Holding');
     tip(holdLbl, 'Holding', HOLD_TIP, 'H');
     tip(hold, 'Holding', HOLD_TIP, 'H');
     const rows: HTMLElement[] = [h('div', { class: 'ops-row' }, holdLbl, h('div', { class: 'ctl' }, hold))];
     if (c.hold) {
-      const thr = choiceSeg(OPS_CONTROL.holdFractionChoices, c.holdFraction, (v) => String(Math.round(v * 100)), (v) => { c.holdFraction = v; renderOps(); changed(); });
+      const thr = choiceSeg(OPS_CONTROL.holdFractionChoices, c.holdFraction, (v) => String(Math.round(v * 100)), (v) => { c.holdFraction = v; commitControl(); });
       rows.push(
         h(
           'div',
@@ -284,14 +294,14 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
       );
     }
     // Recovery
-    const plan = fleetPlan(game, draftRoute());
-    const rec = choiceSeg(OPS_CONTROL.recoveryChoices, c.recoveryPct, (v) => pct(v), (v) => { c.recoveryPct = v; renderOps(); changed(); });
+    const plan = fleetPlan(game, r);
+    const rec = choiceSeg(OPS_CONTROL.recoveryChoices, c.recoveryPct, (v) => pct(v), (v) => { c.recoveryPct = v; commitControl(); });
     const recLbl = h('span', { class: 'lbl' }, 'Recovery');
     tip(recLbl, 'Recovery time', RECOVERY_TIP);
     tip(rec, 'Recovery time', RECOVERY_TIP);
     let recNote = 'No slack in the timetable';
     if (plan.runTimes && c.recoveryPct > 0) {
-      const extra = plan.trainsNeeded - trainsNeeded({ headways: draft.headways, control: { recoveryPct: 0 } }, plan.runTimes);
+      const extra = plan.trainsNeeded - trainsNeeded({ headways: r.headways, control: { recoveryPct: 0 } }, plan.runTimes);
       recNote = `≈ ${(plan.recovery / 60).toFixed(1)} min per terminal · ${extra > 0 ? `+${extra} train${extra > 1 ? 's' : ''}` : 'no extra trains'}`;
     }
     const advice = recoveryAdvice(regDetail(), c.recoveryPct);
@@ -303,13 +313,11 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
         class: 'hw-btn small',
         onclick: () => {
           c.timepoints = suggestTimepoints({ id: r.id, stops: r.stops }, game.routes.list());
-          renderOps();
-          renderStops();
-          changed();
+          commitControl();
         },
       }, 'Suggest');
       tip(suggest, 'Suggest timepoints', `Stops near ⅓ and ⅔ along the line, preferring stops no other route serves.`);
-      const clear = h('button', { class: 'hw-btn small ghost', disabled: !c.timepoints.length, onclick: () => { c.timepoints = []; renderOps(); renderStops(); changed(); } }, 'Clear');
+      const clear = h('button', { class: 'hw-btn small ghost', disabled: !c.timepoints.length, onclick: () => { c.timepoints = []; commitControl(); } }, 'Clear');
       const tpLbl = h('span', { class: 'lbl' }, 'Timepoints');
       tip(tpLbl, 'Timepoints', `${TIMEPOINT_TIP}. Toggle the clock next to a stop below.`);
       rows.push(
@@ -325,51 +333,9 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
     ops.replaceChildren(...rows);
   };
 
-  // Footer: Apply commits frequency, train length and operations together.
-  const footNote = h('span', { class: 'grow' });
-  const revert = h('button', {
-    class: 'hw-btn small ghost',
-    onclick: () => {
-      draft.headways = { ...r.headways };
-      draft.cars = r.cars;
-      draft.control = structuredClone(r.control);
-      game.select({ kind: 'route', id: r.id });
-    },
-  }, 'Revert');
-  const apply = h('button', {
-    class: 'hw-btn small',
-    onclick: () => {
-      const before = { headways: { ...r.headways }, cars: r.cars, control: structuredClone(r.control) };
-      game.routes.update(r.id, { headways: { ...draft.headways }, cars: draft.cars, control: structuredClone(draft.control) });
-      const res = purchaseFleet(game, r);
-      if (!res.ok) {
-        game.routes.update(r.id, before);
-        app.toast("Can't afford the trains", `${fmtMoney(res.cost)} needed`, 'red');
-        return;
-      }
-      if (res.cost) app.toast('Trains bought', fmtMoney(res.cost), 'amber');
-      game.events.emit('routes', undefined);
-      game.select({ kind: 'route', id: r.id });
-    },
-  }, 'Apply');
-  const foot = h('div', { class: 'side-foot' }, footNote, revert, apply);
-  const renderFoot = () => {
-    const d = dirty();
-    footNote.className = `grow ${d ? 'dirty' : 'hw-muted'}`;
-    footNote.textContent = d ? 'Changes not applied yet' : 'Frequency, train length and operations';
-    apply.className = `hw-btn small${d ? ' primary' : ''}`;
-    revert.style.display = d ? '' : 'none';
-  };
-  function changed(): void {
-    renderFleet();
-    renderFoot();
-  }
-
-  renderCars();
   renderFleet();
   renderOps();
   renderStops();
-  renderFoot();
   // Event service planned on this route (temporary headway overrides).
   const service = h('div');
   // Only service still to run or running (ended windows go at 3 am and midnight).
@@ -413,11 +379,10 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
   }
   body.append(
     serviceSec,
-    section('Frequency'),
+    section('Trains & frequency'),
     service,
-    frequencyTable(draft.headways, (p, v) => { draft.headways[p] = v; changed(); }),
-    section('Train length'),
-    carsWrap,
+    trainsSec,
+    h('div', { class: 'hw-muted rp-instant' }, 'Changes apply at once. Hover a button for what it costs.'),
     section('Operations'),
     ops,
     h('div', { style: 'margin-top:8px' }, fleetWrap),
@@ -439,7 +404,6 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
       }, 'Delete route'),
     ),
   );
-  sh.el.append(foot);
 
   let chartObjs: { destroy(): void }[] = [];
   const renderStats = () => {
@@ -512,11 +476,11 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
   const fetch = () => {
     if (!op.ok) return;
     app.sim.query<RouteDetail | null>({ kind: 'route', route: r.id }).then((d) => {
-      const hadAdvice = recoveryAdvice(regDetail(), draft.control.recoveryPct);
+      const hadAdvice = recoveryAdvice(regDetail(), c.recoveryPct);
       detail = d;
       renderStats();
       renderCharts();
-      if (recoveryAdvice(regDetail(), draft.control.recoveryPct) !== hadAdvice) renderOps();
+      if (recoveryAdvice(regDetail(), c.recoveryPct) !== hadAdvice) renderOps();
     });
   };
   renderStats();
@@ -536,7 +500,6 @@ export function routePanel(app: App, id: number, carry?: unknown): Panel {
     },
     dayEnd: fetch,
     destroy: () => chartObjs.forEach((c) => c.destroy()),
-    carry: () => ({ id: r.id, base, draft: structuredClone(draft) }),
   };
 }
 
