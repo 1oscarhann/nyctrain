@@ -103,8 +103,10 @@ export function tractPanel(app: App, index: number): Panel {
   // London MSOAs carry names ("Camden 028"); NYC tracts are numbered within the borough. The
   // name the toasts and the month report use (a map label or "around <station>", §2.4) is the
   // title when there is one, with the formal name below it.
-  const words = city().tractWords;
-  const head = tractPanelTitle(app.tractName(index), formalTractName(t), words ? 'Municipality' : t.name ? 'Neighbourhood area' : 'Census tract', t.id, t.borough);
+  // A railway terminal (Tokyo): its "residents" arrive by suburban train, its "jobs" leave on one.
+  const words = t.terminal ? { residents: 'Arrive by train', jobs: 'Leave by train' } : city().tractWords;
+  const kind = t.terminal ? 'Railway terminal' : city().tractWords ? 'Municipality' : city().id === 'tokyo' ? 'Town' : t.name ? 'Neighbourhood area' : 'Census tract';
+  const head = tractPanelTitle(app.tractName(index), formalTractName(t), kind, t.id, t.borough);
   const sh = shell(head.sub, head.title, () => app.game.select(null));
   const body = sh.body;
   const stats = h('div', { class: 'stat-grid' });
@@ -137,9 +139,11 @@ export function tractPanel(app: App, index: number): Panel {
       h(
         'div',
         { class: 'hw-muted', style: 'font-size:11.5px;margin-top:8px' },
-        words && t.pop !== undefined
-          ? `${fmtCount(t.pop)} people (${fmtDensity(t.density)}). Travellers are people from here making a trip to another part of ${city().name} and back in a day; visitors come here from elsewhere.`
-          : `Density ${fmtDensity(t.density)} (residents + jobs). Residents and jobs count commuters who live and work in ${city().name}.`,
+        t.terminal
+          ? `${t.terminal}. Every weekday morning ${fmtCount(t.residents)} commuters get off here and go on to work across the city; ${fmtCount(t.jobs)} of the city's own residents come here to catch a train out. Until through-running (research), riding on means changing trains here.`
+          : words && t.pop !== undefined
+            ? `${fmtCount(t.pop)} people (${fmtDensity(t.density)}). Travellers are people from here making a trip to another part of ${city().name} and back in a day; visitors come here from elsewhere.`
+            : `Density ${fmtDensity(t.density)} (residents + jobs). Residents and jobs count commuters who live and work in ${city().name}.`,
       ),
     );
   };

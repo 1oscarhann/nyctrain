@@ -20,7 +20,7 @@ const load = (): SchoolsFile => JSON.parse(readFileSync(join(__dirname, '..', 'p
 const MIN: Record<string, number> = { nyc: 1500, london: 2500, southeast: 6000, manchester: 900, birmingham: 900, leeds: 800, bristol: 350 };
 
 /** Maps without a school run: Japan's high-speed map (pupils don't take the Shinkansen to school). */
-const NO_SCHOOLS = new Set<string>(['japan']);
+const NO_SCHOOLS = new Set<string>(['japan', 'tokyo']);
 
 describe('schools data', () => {
   for (const id of CITY_IDS.filter((c) => !NO_SCHOOLS.has(c))) {

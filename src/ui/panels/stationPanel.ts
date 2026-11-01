@@ -19,7 +19,8 @@ import { fmtDate } from '../../core/calendar';
 import { toLocal } from '../../core/geo';
 import type { App } from '../app';
 import { barChart } from '../charts';
-import { bullet, h } from '../dom';
+import { bullet, h, stationSign } from '../dom';
+import { stationNumber } from '../../routes/types';
 import { kv, section, shareBar, shell, statCard, type Panel } from './common';
 import { stationValueCaptureText, stationValueCaptureTip } from '../livingCity';
 import { attachTip } from '../widgets';
@@ -86,7 +87,9 @@ export function stationPanel(app: App, id: number): Panel {
     ...(routes.length
       ? routes.map((r) => {
           const pl = platformOf(r);
-          return h('span', { style: 'display:inline-flex;align-items:center;gap:6px;cursor:pointer', onclick: () => game.select({ kind: 'route', id: r.id }) }, bullet(r.color, r.bullet, 20, r.express, r.shape), r.name, pl ? h('span', { class: 'hw-muted', style: 'font-size:11px' }, pl) : null);
+          // Tokyo: the station's number on each route ("G" over "09"), as on the signs.
+          const mark = city().theme === 'tokyo' && !r.express ? stationSign(r.color, r.bullet, stationNumber(r, ids), 28) : bullet(r.color, r.bullet, 20, r.express, r.shape);
+          return h('span', { style: 'display:inline-flex;align-items:center;gap:6px;cursor:pointer', onclick: () => game.select({ kind: 'route', id: r.id }) }, mark, r.name, pl ? h('span', { class: 'hw-muted', style: 'font-size:11px' }, pl) : null);
         })
       : [h('span', { class: 'hw-muted' }, 'No routes serve this station yet')]),
   );

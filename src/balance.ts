@@ -715,7 +715,8 @@ export type ResearchId =
   | 'psd' | 'gates'
   | 'regen' | 'tbm' | 'viaducts'
   | 'labs-2'
-  | 'eew' | 'snowproof';
+  | 'eew' | 'snowproof'
+  | 'through-running';
 
 export type ResearchBranch = 'trains' | 'track' | 'stations' | 'costs';
 
@@ -764,7 +765,18 @@ export const RESEARCH: ResearchDef[] = [
   { id: 'labs-2', branch: 'costs', name: 'Second design team', blurb: 'Run two research projects at once', cost: 0.02, days: 20 },
   { id: 'eew', branch: 'track', name: 'Earthquake early warning', blurb: 'Seismometers along the coast cut the power before the shaking arrives: earthquake stops are half as long', cost: 0.03, days: 40, only: ['japan'] },
   { id: 'snowproof', branch: 'track', name: 'Snow sprinklers and heated points', blurb: 'Snow and storms slow your trains half as much', cost: 0.03, days: 40, only: ['japan'] },
+  { id: 'through-running', branch: 'stations', name: 'Through-running', blurb: 'The suburban railways run their trains on into your subway: commuters from the terminals no longer change trains there', cost: 0.05, days: 60, only: ['tokyo'] },
 ];
+
+/**
+ * Railway terminals (Tokyo, TractRecord.terminal): commuters arriving by suburban train change onto
+ * the subway there, which costs them this many transfers and minutes of hassle on top of the walk,
+ * until through-running (research) lets the suburban trains run on into the subway.
+ */
+export const TERMINALS = {
+  changeTransfers: 1,
+  changeMinutes: 3,
+};
 
 export const RESEARCH_TUNING = {
   /** Projects at once, and with the second design team. */
@@ -1313,7 +1325,7 @@ const LONDON_CHAOS: CityChaos = {
 
 // ---------------------------------------------------------------------------
 // Cities
-export type CityId = 'nyc' | 'london' | 'southeast' | 'manchester' | 'birmingham' | 'leeds' | 'bristol' | 'japan';
+export type CityId = 'nyc' | 'london' | 'southeast' | 'manchester' | 'birmingham' | 'leeds' | 'bristol' | 'japan' | 'tokyo';
 type LL = [number, number];
 
 /** Where a job counts as being in the CBD (parking penalty). */
@@ -1336,7 +1348,7 @@ export interface CityBalance {
     Pick<
       typeof COMMUTERS,
       | 'driveSpeedCore' | 'driveSpeedOther' | 'driveLongAfter' | 'driveSpeedLong' | 'maxAccessWalk' | 'parkingCbdTime' | 'parkingCbdCost' | 'parkingOtherTime' | 'valueOfTime' | 'driveCostPerKm' | 'modeConstant'
-      | 'walkSpeed' | 'walkDetour' | 'walkMaxDistance' | 'accessRadiusTractShare' | 'departMean' | 'departSd' | 'departMin' | 'departMax' | 'workDuration' | 'returnJitter' | 'logitScale' | 'waitCap' | 'transferPenalty'
+      | 'walkSpeed' | 'walkDetour' | 'walkMaxDistance' | 'accessRadiusTractShare' | 'departMean' | 'departSd' | 'departMin' | 'departMax' | 'workDuration' | 'returnJitter' | 'logitScale' | 'waitCap' | 'transferPenalty' | 'crowdingWeight'
     >
   >;
   economy: Partial<Pick<typeof ECONOMY, 'startingCash' | 'fareDefault' | 'fareMin' | 'fareMax' | 'fareStep' | 'fareDistanceKm' | 'fareFreeKm' | 'staffingPerStationDay' | 'operatingPerCarKm' | 'bondChunk' | 'bondMax'>>;
@@ -1367,6 +1379,8 @@ export interface CityBalance {
   events?: Partial<Pick<typeof EVENTS, 'originDecay' | 'venueAccess' | 'maxPeoplePerDay'>>;
   /** Incident rates that differ from CHAOS (per track-km, train-km or station a day). */
   incidents?: { signal?: number; breakdown?: number; sick?: number; police?: number };
+  /** Train capacities that differ from TRAINS (Tokyo: cars are packed far past the comfortable load). */
+  trains?: Partial<Record<StockId, Partial<Pick<TrainSpec, 'capacityComfort' | 'capacityCrush'>>>>;
   /** The school run: values that differ from SCHOOLS, and the term calendar ('uk' or 'us'). */
   schools?: Partial<Pick<typeof SCHOOLS, 'originDecay' | 'childFare'>> & { terms?: 'uk' | 'us' };
   /**
@@ -1594,6 +1608,65 @@ const JAPAN_CHAOS: CityChaos = {
   },
 };
 
+/**
+ * Tokyo (the subway map): ball games, sumo, the trade fairs and fan conventions on the bay, concerts,
+ * the Sumida fireworks and Shibuya at Halloween; a rainy June and typhoon autumns, scorching
+ * Augusts, hardly any snow; and the Kanto earthquakes that stop every train in the city.
+ */
+const TOKYO_CHAOS: CityChaos = {
+  venues: [
+    { key: 'suidobashi-dome', name: 'Suidobashi dome', lon: 139.7519, lat: 35.7056, region: 'Bunkyo', parkingTime: 30 * MIN, parkingCost: 30 },
+    { key: 'jingu', name: 'Jingu ballpark', lon: 139.717, lat: 35.6745, region: 'Shinjuku', parkingTime: 30 * MIN, parkingCost: 30 },
+    { key: 'national-stadium', name: 'National stadium', lon: 139.7146, lat: 35.6778, region: 'Shinjuku', parkingTime: 35 * MIN, parkingCost: 35 },
+    { key: 'ryogoku', name: 'Ryogoku sumo hall', lon: 139.7933, lat: 35.6969, region: 'Sumida', parkingTime: 30 * MIN, parkingCost: 30 },
+    { key: 'kudan-hall', name: 'Kudan martial-arts hall', lon: 139.7497, lat: 35.6933, region: 'Chiyoda', parkingTime: 30 * MIN, parkingCost: 35 },
+    { key: 'ariake', name: 'Ariake exhibition centre', lon: 139.7946, lat: 35.6299, region: 'Koto', parkingTime: 25 * MIN, parkingCost: 25 },
+    { key: 'sumida-river', name: 'Sumida riverside', lon: 139.804, lat: 35.714, region: 'Sumida', parkingTime: 45 * MIN, parkingCost: 30 },
+    { key: 'shibuya-crossing', name: 'Shibuya crossing', lon: 139.7005, lat: 35.6595, region: 'Shibuya', parkingTime: 40 * MIN, parkingCost: 40 },
+    { key: 'senso-ji', name: 'Senso-ji, Asakusa', lon: 139.7967, lat: 35.7148, region: 'Taito', parkingTime: 40 * MIN, parkingCost: 30 },
+  ],
+  kinds: [
+    { venue: 'suidobashi-dome', label: 'Night baseball at the dome', months: [2, 3, 4, 5, 6, 7, 8], weekdays: [2, 3, 4, 5], chance: 0.45, attendance: [38_000, 43_000],
+      starts: [[18, 1]], duration: 3.25 * HOUR, arrive: [-80 * MIN, 0], leave: [-10 * MIN, 30 * MIN] },
+    { venue: 'jingu', label: 'Night baseball at Jingu', months: [2, 3, 4, 5, 6, 7, 8], weekdays: [2, 3, 4, 5], chance: 0.4, attendance: [24_000, 31_000],
+      starts: [[18, 1]], duration: 3.25 * HOUR, arrive: [-80 * MIN, 0], leave: [-10 * MIN, 30 * MIN] },
+    { venue: 'national-stadium', label: 'Stadium concert', months: [3, 4, 5, 6, 7, 8, 9, 10], chance: 0.06, attendance: [55_000, 68_000],
+      starts: [[18, 1]], duration: 3 * HOUR, arrive: [-2 * HOUR, 0], leave: [0, 40 * MIN] },
+    { venue: 'ryogoku', label: 'Grand sumo tournament', months: [0, 4, 8], chance: 0.7, attendance: [8_000, 11_000],
+      starts: [[13, 1]], duration: 5 * HOUR, arrive: [-60 * MIN, 120 * MIN], leave: [-15 * MIN, 30 * MIN] },
+    { venue: 'kudan-hall', label: 'Concert at the Kudan hall', months: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], chance: 0.2, attendance: [10_000, 14_000],
+      starts: [[18.5, 1]], duration: 2.75 * HOUR, arrive: [-75 * MIN, 0], leave: [0, 30 * MIN] },
+    { venue: 'ariake', label: 'Trade fair', months: [0, 1, 2, 3, 4, 5, 6, 8, 9, 10], chance: 0.25, attendance: [30_000, 60_000],
+      starts: [[10, 1]], duration: 7 * HOUR, arrive: [-30 * MIN, 150 * MIN], leave: [-150 * MIN, 30 * MIN] },
+    { venue: 'ariake', label: 'Summer fan convention', months: [7], window: [7, 9, 7, 16], chance: 0.3, attendance: [120_000, 170_000],
+      starts: [[10, 1]], duration: 6 * HOUR, arrive: [-3 * HOUR, 90 * MIN], leave: [-150 * MIN, 30 * MIN], announce: 30 },
+    { venue: 'ariake', label: 'Winter fan convention', months: [11], window: [11, 27, 11, 31], chance: 0.24, attendance: [120_000, 170_000],
+      starts: [[10, 1]], duration: 6 * HOUR, arrive: [-3 * HOUR, 90 * MIN], leave: [-150 * MIN, 30 * MIN], announce: 30 },
+    { venue: 'sumida-river', label: 'Sumida river fireworks', months: [6], window: [6, 24, 6, 31], weekdays: [5], chance: 0.9, attendance: [400_000, 550_000],
+      starts: [[19, 1]], duration: 1.5 * HOUR, arrive: [-4 * HOUR, 0], leave: [0, 40 * MIN], announce: 30 },
+    { venue: 'senso-ji', label: 'Sanja festival', months: [4], window: [4, 14, 4, 20], weekdays: [5], chance: 0.9, attendance: [250_000, 400_000],
+      starts: [[13, 1]], duration: 6 * HOUR, arrive: [-60 * MIN, 4 * HOUR], leave: [-4 * HOUR, 30 * MIN], announce: 30 },
+    { venue: 'shibuya-crossing', label: 'Halloween in Shibuya', months: [9], window: [9, 29, 9, 31], chance: 0.8, attendance: [60_000, 100_000],
+      starts: [[19, 1]], duration: 3.5 * HOUR, arrive: [-2 * HOUR, 60 * MIN], leave: [-60 * MIN, 40 * MIN], announce: 14 },
+  ],
+  climate: {
+    snow: [0.02, 0.03, 0.01, 0, 0, 0, 0, 0, 0, 0, 0, 0.005],
+    rain: [0.03, 0.04, 0.07, 0.07, 0.08, 0.2, 0.12, 0.08, 0.15, 0.12, 0.05, 0.03],
+    heat: [0, 0, 0, 0, 0.01, 0.04, 0.18, 0.24, 0.08, 0.01, 0, 0],
+  },
+  /**
+   * A few tremors a year strong enough (shindo 4 or more) that every line in the wards stops and
+   * crawls until it is checked: under Tokyo Bay and north Chiba, south-west Ibaraki and Kanagawa.
+   */
+  quakes: {
+    chance: 0.012,
+    zones: [[139.9, 35.6, 2], [140.1, 35.75, 2], [140.0, 36.1, 3], [139.3, 35.4, 1]],
+    scatter: 0.12,
+    radius: [35_000, 70_000],
+    duration: [10 * MIN, 30 * MIN],
+  },
+};
+
 /** Each city's events and weather (the shared chaos tunables are CHAOS, WEATHER and EVENTS above). */
 export const CHAOS_BY_CITY: Record<CityId, CityChaos> = {
   nyc: NYC_CHAOS,
@@ -1604,7 +1677,17 @@ export const CHAOS_BY_CITY: Record<CityId, CityChaos> = {
   leeds: LEEDS_CHAOS,
   bristol: BRISTOL_CHAOS,
   japan: JAPAN_CHAOS,
+  tokyo: TOKYO_CHAOS,
 };
+
+/** The Yamanote loop's stations, clockwise from Tokyo (the Tokyo map's tunnel zone and CBD). */
+const TOKYO_LOOP: LL[] = [
+  [139.7671, 35.6812], [139.7709, 35.6918], [139.7731, 35.6984], [139.7774, 35.7134], [139.7713, 35.7281], [139.7608, 35.7381],
+  [139.7468, 35.7365], [139.7393, 35.7334], [139.7286, 35.7317], [139.7109, 35.7295], [139.7065, 35.7212], [139.7038, 35.7128],
+  [139.7003, 35.7012], [139.7006, 35.69], [139.702, 35.683], [139.7027, 35.6702], [139.7016, 35.658], [139.7101, 35.6467],
+  [139.7158, 35.634], [139.7238, 35.6262], [139.7284, 35.6197], [139.7387, 35.6285], [139.7476, 35.6457], [139.757, 35.6553],
+  [139.7583, 35.6663], [139.7631, 35.6751],
+];
 
 /** Central London: roughly the congestion-charge zone, inside the inner ring road (London and the South East). */
 const CITY_BALANCE_LONDON_CBD: ZoneRule = {
@@ -2040,6 +2123,79 @@ export const CITY_BALANCE: Record<CityId, CityBalance> = {
       taxRateJobs: 0.014,
       /** Station-area development: a quarter of the tax increment (the Tsukuba Express precedent). */
       captureShare: 0.25,
+    },
+  },
+  tokyo: {
+    /** Inside the Yamanote loop: too dense for new surface railway (as the London map's inner zone). */
+    tunnelZone: { name: 'Inside the Yamanote loop', poly: TOKYO_LOOP },
+    origin: [139.7671, 35.6812], // Tokyo station
+    map: { startCenter: [139.745, 35.69], startZoom: 11.7, bounds: [139.48, 35.46, 140.0, 35.9] },
+    titleCamera: { center: [139.6935, 35.6905], zoom: 14.7, bearing: -20 }, // the Shinjuku towers
+    /** The centre and the sub-centres: congested streets, slow driving. */
+    coreRegions: ['Chiyoda', 'Chuo', 'Minato', 'Shinjuku', 'Shibuya', 'Bunkyo', 'Taito', 'Toshima'],
+    /** Inside the Yamanote loop: parking is dear and slow. */
+    cbd: { kind: 'polygon', ring: TOKYO_LOOP },
+    commuters: {
+      driveSpeedCore: 13 * KMH,
+      driveSpeedOther: 20 * KMH,
+      parkingCbdTime: 20 * MIN,
+      /** A day's parking in the centre: ¥3,000 and up. */
+      parkingCbdCost: 30,
+      parkingOtherTime: 6 * MIN,
+      /** Hundreds of yen an hour by modelled income band: ¥1,000, ¥1,700, ¥3,200. */
+      valueOfTime: [10, 17, 32],
+      /** Fuel and the Shuto expressway's tolls: ¥25 a km. */
+      driveCostPerKm: 0.25,
+      /** Few ward households keep a car (a parking space at home is ¥30,000 a month): driving is a last resort. */
+      modeConstant: { walk: 0, drive: 40, transit: 0 },
+      /** Tokyoites put up with a packed train: crowding weighs on them two-thirds as much. */
+      crowdingWeight: 0.4,
+    },
+    /**
+     * Tokyo's rush hour: cars are 20 m long and packed to twice their seated-and-standing load
+     * (the "200%" of the rail companies' figures), with staff on the platforms pushing the last
+     * people in.
+     */
+    trains: { heavy: { capacityComfort: 130, capacityCrush: 290 }, light: { capacityComfort: 100, capacityCrush: 210 } },
+    economy: {
+      /** ¥700 billion: about 25 km of deep subway with its stations. */
+      startingCash: 7e9,
+      /** ¥180 for the first few km, rising with distance (straight line): ¥210 at 6 km, ¥300 at 20. */
+      fareDefault: 1.8,
+      fareMin: 0,
+      fareMax: 5,
+      fareStep: 0.1,
+      fareDistanceKm: 25,
+      fareFreeKm: 3,
+    },
+    /** One fare all day. */
+    fares: { peak: 1.8, offPeak: 1.8, lowIncome: 1 },
+    credit: {
+      farebox: { x: [0.5, 1.0, 1.5, 2.0], y: [0, 50, 80, 100] },
+      coverage: { x: [-0.5, 0, 0.5, 1.0, 2.5], y: [0, 30, 55, 75, 100] },
+    },
+    goals: {
+      riderMilestones: [500_000, 1_000_000, 2_000_000, 4_000_000],
+      /** Shinjuku to Otemachi, door to door. */
+      tripMinutes: 20,
+      tripFrom: [139.6993, 35.6896],
+      tripTo: [139.7633, 35.6866],
+      valueCaptureMonth: 10e6,
+    },
+    chaos: CHAOS_BY_CITY.tokyo,
+    /** The wards grew ≈ 0.6% a year through the 2010s; their jobs a little faster. */
+    growth: { cityGrowthPerYear: 0.007 },
+    valueCapture: {
+      /**
+       * Hundreds of yen of property per commuter (rough): ≈ ¥140T of homes over 3.45M ward residents
+       * who commute (¥40M each), ≈ ¥150T of offices and shops over 5.9M jobs (¥25M).
+       */
+      valuePerResident: 400_000,
+      valuePerJob: 250_000,
+      /** Fixed asset (1.4%) and city planning (0.3%) taxes on assessed value; homes' land is taxed at a sixth. */
+      taxRateHomes: 0.006,
+      taxRateJobs: 0.012,
+      captureShare: 0.15,
     },
   },
 };

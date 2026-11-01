@@ -43,6 +43,11 @@ export interface TractRecord {
    * prices building through town and colours the residents overlay. Absent: residents + jobs.
    */
   pop?: number;
+  /**
+   * A railway terminal (Tokyo): commuters from outside the map arrive here ("residents") and the
+   * map's residents working outside leave from here ("jobs"). The railways that end here, for copy.
+   */
+  terminal?: string;
 }
 
 export interface TractsFile {

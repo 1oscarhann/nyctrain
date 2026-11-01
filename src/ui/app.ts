@@ -205,6 +205,7 @@ export class App implements AppContext {
     this.settings = { ...opts.settings };
     setUnits(this.settings.units);
     this.tractIndex = new TractIndex(world.tracts);
+    this.destinations.setTerminals(world.tracts);
     this.terrain = new WorldTerrain(new LandMask(land, MAP.landCell, MAP.landClose), this.tractIndex, world.relief ?? null);
     this.game = new Game(world, this.terrain, { sandbox: opts.sandbox, fares: defaultFares() });
     this.goals = emptyGoals();
@@ -425,6 +426,18 @@ export class App implements AppContext {
   }
   nameStation(x: number, y: number): string {
     const taken = new Set([...this.game.network.stations.values()].map((s) => s.name));
+    if (city().naming === 'town') {
+      // Tokyo: a railway terminal next door names it ("Shinjuku"), else the town it is in, else the
+      // nearest free town name ("Otemachi", "Nishi-Shinjuku").
+      const near = this.tractIndex.within(x, y, 1500).map((t) => ({ t, d: Math.hypot(t.x - x, t.y - y) })).sort((a, b) => a.d - b.d);
+      const plain = (n: string) => n.replace(/ Terminal$/, '').replace(/ \([^)]*\)$/, '');
+      const term = near.find((c) => c.t.terminal && c.d < 400);
+      for (const c of term ? [term, ...near] : near) {
+        if (c.t.terminal && c !== term) continue;
+        const n = plain(c.t.name ?? '');
+        if (n && !taken.has(n)) return n;
+      }
+    }
     return nameStationAt(this.view.map, x, y, taken, (px, py) => !this.terrain.isWater(px, py), (px, py) => city().regions.find((r) => r.code === this.terrain.borough(px, py))?.name ?? null);
   }
   redraw(): void {
@@ -768,6 +781,7 @@ export class App implements AppContext {
   /** A tract's name for toasts, reports and hover (§2.4): a map label, "around <station>", or its formal name. */
   tractName(i: number): string {
     const t = this.world.tracts[i];
+    if (t?.name && city().ownTractNames) return t.name;
     // Labels and stations in the tract's own borough only (not across a river).
     return t ? tractName(t, this.places, this.servedList(), this.terrain.borough(t.x, t.y)) : `Tract ${i}`;
   }

@@ -8,10 +8,11 @@ import { PARK_RIDE, STATION_CROWD, STATION_TIERS } from '../../balance';
 import { fmtDate } from '../../core/calendar';
 import { fmtCount, fmtDistance, fmtMoney } from '../../core/units';
 import { MAX_TIER, nextTier, stationCapacity, tierCost, tierInfo, tierOf } from '../../construction/stationTiers';
+import { city } from '../../cities';
 import type { Station } from '../../construction/types';
-import type { PeriodId, Route } from '../../routes/types';
+import { stationNumber, type PeriodId, type Route } from '../../routes/types';
 import type { App } from '../app';
-import { bullet, h, svgIcon } from '../dom';
+import { bullet, h, stationSign, svgIcon } from '../dom';
 import { ICONS } from '../icons';
 import { quickPlan } from '../routeOps';
 import { headwayStepper, lazyTip, refitButton, trainLengthStepper, trainTypePicker } from '../routeControls';
@@ -233,7 +234,7 @@ export function networkPanel(app: App, tab: NetworkTab = 'routes'): Panel {
           h('div', { class: 'route-cell' },
             h('div', null,
               h('div', { class: 'name' }, s.name),
-              h('div', { class: 'sub' }, ...routesAt(s.id).map((r) => bullet(r.color, r.bullet, 16, r.express, r.shape)), routesAt(s.id).length ? null : h('span', { class: 'hw-amber' }, 'No route yet ·'), h('span', { class: 'hw-muted' }, ` ${game.network.stationLevel(s).replace('-', ' ')} · ${s.cars}-car`)),
+              h('div', { class: 'sub' }, ...routesAt(s.id).map((r) => (city().theme === 'tokyo' && !r.express ? stationSign(r.color, r.bullet, stationNumber(r, [s.id]), 22) : bullet(r.color, r.bullet, 16, r.express, r.shape))), routesAt(s.id).length ? null : h('span', { class: 'hw-amber' }, 'No route yet ·'), h('span', { class: 'hw-muted' }, ` ${game.network.stationLevel(s).replace('-', ' ')} · ${s.cars}-car`)),
             ),
           ),
           h('div', null, pips, h('div', { class: 'sub' }, tierInfo(tier).name)),

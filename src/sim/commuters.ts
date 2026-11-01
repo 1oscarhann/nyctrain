@@ -3,7 +3,8 @@
  * pathfinding, and an event-driven simulation of every transit trip (walk → platform queue →
  * train with capacity → transfers → walk) whose observed times feed the next day's choice.
  */
-import { STATION_CROWD, STATION_TIERS, CHAOS, COMMUTERS, EVENTS, FARES, GOALS, OPERATIONS, PARK_RIDE, QUAD, SCHOOLS, SPECIAL, TIME } from '../balance';
+import { STATION_CROWD, STATION_TIERS, CHAOS, COMMUTERS, EVENTS, FARES, GOALS, OPERATIONS, PARK_RIDE, QUAD, SCHOOLS, SPECIAL, TERMINALS, TIME } from '../balance';
+import { hasTech } from '../core/tech';
 import { distanceFareMult, expectedFare, fareAt, isPeakTime, isPeakTod, tripFare, variesByTime, type FarePolicy } from '../economy/fares';
 import { emptyStats } from './regularity';
 import { SECONDS_PER_DAY, dayIndex } from '../core/calendar';
@@ -397,6 +398,8 @@ export class Commuters implements PassengerHooks {
   private readonly seed: number;
   // Groups (home tract, work tract, band); set by adoptGroups
   gHome!: Int32Array;
+  /** 1 where the group's home or work is a railway terminal (Tokyo): a change of trains there. */
+  private gTerm: Uint8Array = new Uint8Array(0);
   gWork!: Int32Array;
   gBand!: Uint8Array;
   gStart!: Int32Array;
@@ -601,6 +604,8 @@ export class Commuters implements PassengerHooks {
     const zones = cityBalance();
     const core = new Set(zones.coreRegions);
     const cbd = tr.map((t) => inZone(zones.cbd, t.lon, t.lat, t.borough));
+    this.gTerm = new Uint8Array(G);
+    if (tr.some((t) => t.terminal)) for (let g = 0; g < G; g++) this.gTerm[g] = tr[tbl.home[g]].terminal || tr[tbl.work[g]].terminal ? 1 : 0;
     this.gWalk = new Float32Array(G);
     this.gDrive = new Float32Array(G);
     this.gDriveHome = new Float32Array(G);
@@ -1294,7 +1299,11 @@ export class Commuters implements PassengerHooks {
     // Observed times include waits and crowding delays; blend toward schedule if stale.
     const time = this.obsTime[g] > 0 ? this.obsTime[g] : sched;
     // Park & ride: a car park that was full yesterday puts drivers off (as minutes of hassle).
-    const transfers = (am.transfers + pm.transfers) / 2, crowdMinutes = this.obsCrowd[g] + (am.pnr ? this.gParkFull[g] * PARK_RIDE.fullPenalty : 0), fare = this.groupFare(g);
+    // A terminal's commuters change from the suburban train first, until through-running.
+    const term = this.gTerm[g] === 1 && !hasTech('through-running');
+    const transfers = (am.transfers + pm.transfers) / 2 + (term ? TERMINALS.changeTransfers : 0),
+      crowdMinutes = this.obsCrowd[g] + (am.pnr ? this.gParkFull[g] * PARK_RIDE.fullPenalty : 0) + (term ? TERMINALS.changeMinutes : 0),
+      fare = this.groupFare(g);
     if (!out) return { time, transfers, crowdMinutes, fare };
     // (Filled in place by loops over every group that only read it: no allocation per group.)
     out.time = time;

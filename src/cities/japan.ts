@@ -35,6 +35,7 @@ export const JAPAN: CityConfig = {
   areas: JP_AREAS,
   areaColors: ['#4FA3E0', '#E8452C', '#3FB68B', '#F2B035', '#A77BDB'],
   naming: 'place',
+  ownTractNames: true,
   blurb:
     'Japan, but the Shinkansen was never built. You get one terminal at Tokyo, ¥5 trillion and 2 million real journeys a weekday between 1,657 towns and cities, from Kagoshima to Wakkanai. Bore through the mountains, bridge the straits, and connect the airports, where hundreds of thousands come and go every day.',
   people: 'travellers',

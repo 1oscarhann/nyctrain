@@ -1,7 +1,8 @@
 # Headway
 
 A metro builder set in real cities where nobody ever built one. Pick a mode on the title screen:
-**Metro** (**New York**, the five boroughs; **London**, all 33 boroughs; or one of four English
+**Metro** (**New York**, the five boroughs; **London**, all 33 boroughs; **Tokyo**, the 23 wards
+and their railway terminals, see [Subway: Tokyo](#subway-tokyo); or one of four English
 city regions: **Manchester**, **Birmingham**, **Leeds** and **Bristol**, see
 [More cities](#more-cities-manchester-birmingham-leeds-bristol)) or **Intertown**
 (**South East**: London and the whole ONS South East region, a railway builder at regional
@@ -222,13 +223,78 @@ viaduct, pointing south-west and north), a high-speed station at each of 16 airp
 * **Balance** (headless, `npx tsx scripts/japan-tokaido.ts`, agent scale 20): a Tokaido-style line
   from Tokyo to Shin-Osaka (485 km, 14 stations, mostly viaduct, tunnels at Hakone, Shizuoka and
   Sekigahara) costs ¥4.2T in track. An all-stations train every 30 min and a fast one every
-  10–15 min carry 216,000 riders on day 3 and 292,000 by day 28 (¥2.7B of fares a day against
+  10–15 min carry 239,000 riders on day 3 (216,000 at the old ¥1,500 base fare) and 292,000 by day 28 (¥2.7B of fares a day against
   ¥0.75B to run and ¥0.19B of upkeep): two-thirds of the 200–600 km journeys between its stations
   ride, a sixth of those under 100 km. The first month's value capture is ¥230M.
 * **Simplifications**: there is no air mode (the user's call: airports are where people come and
   go, not rivals), so the expressway is the only other way and long journeys favour the train more
   than in reality; the survey leaves out regular commuting, so Shinkansen commuters are missing.
   `tests/japan.test.ts` covers the data, projection, relief, rules, a Tokaido line and earthquakes.
+
+## Subway: Tokyo
+
+A metro map, separate from the high-speed one and a different problem: in Tokyo the riders are
+never the issue, carrying them is. The suburban railways were built, as they really were by the
+1930s, but they stop at **eight terminals** on the edge of the centre (Shinjuku, Shibuya,
+Ikebukuro, Ueno, Shinagawa, Ryogoku, Asakusa, Shin-Kiba) and nothing crosses the city: no subway,
+no Yamanote loop, no through-running. **2.8 million suburban commuters** get off at the terminals
+every morning and **3.1 million** more travel between the 23 wards: 6.2 million in all, twice New
+York. ¥700 billion (about 25 km of deep subway with its stations); one fare all day, ¥180 for the
+first few km.
+
+* **Data**: `npm run data:tokyo` (`scripts/build-data-tokyo.ts`, wards and terminals in
+  `src/cities/tokyoRegions.ts`; needs `mapshaper`). Commuting is the 2020 Census as published by the
+  Tokyo Metropolitan Government (東京都の昼間人口, table 7-2): commuters 15+ not working at home, by
+  ward of residence and workplace, with the residents of each neighbouring prefecture and the Tama
+  area working in each ward, and the wards' residents working outside. Tracts are the **925 towns**
+  (町, their chome merged) of the 2020 Census small-area boundaries (e-Stat), named from Japan
+  Post's romanised address list ("Nishi-Shinjuku", "Ikebukuro-Honcho", "Kudan-Minami"). Each ward
+  pair's commuters are spread over its town pairs by night-time population at home × a jobs proxy
+  at work × exp(−d / 5 km); the jobs proxy is max(5% of D, D − 0.55 N) from each chome's daytime
+  (D) and night-time (N) population (table 11), which puts 186,000 jobs in Nishi-Shinjuku and
+  133,000 in Marunouchi. Commuters from outside the wards arrive at a terminal chosen by where they
+  come from (Kanagawa: Shinagawa, Shibuya, Shinjuku; Saitama: Ikebukuro, Ueno, Asakusa; Chiba:
+  Ryogoku, Ueno, Shin-Kiba; the Tama area: Shinjuku, Ikebukuro, Shibuya) and by how near it is to
+  their office; the wards' own outbound commuters leave from one. Earnings bands (30/40/30) come
+  from approximate taxable income per taxpayer of the home ward (MIC, 2020, rounded) with London's
+  ordered logit. The land is the census polygons less their water areas, with the rivers (the
+  Sumida, the Arakawa, the canals) cut out from MLIT's 100 m land-use squares (国土数値情報 L03-b).
+* **Terminals** are tracts with `terminal` set (src/data/types.ts): their "residents" are the
+  arriving commuters, their "jobs" the residents leaving for the suburbs, at a 250 m radius, so
+  they show as teal rings on the map ("Shinjuku Terminal · 527k arrive a day") with their own
+  panel. Riding on from a terminal means changing trains: one transfer and 3 minutes of hassle on
+  every terminal commuter's subway trip (`TERMINALS`), until **Through-running** (Tokyo-only
+  research) lets the suburban trains run on into the subway. Terminals pay no value capture.
+* **Packed trains**: Tokyo's cars are packed to 200% (`CITY_BALANCE.tokyo.trains`: 130 people
+  comfortably, 290 at crush, against 110 and 200 elsewhere), and Tokyoites mind a crowd less
+  (`crowdingWeight` 0.4). The first lines still overflow: stations shut their gates and people are
+  left behind, so the game is capacity: more lines, longer platforms, upgrades, moving-block
+  signalling.
+* **Rules**: a metro (`naming: 'town'`: a station is named after its town or the terminal next
+  door), inside the Yamanote loop tunnels only (and parking dear), 10-car platforms, Haneda with a
+  station under its terminals, 16 university campuses, agent scale at least 1 : 20. Fares ¥180 +
+  ¥72 per 10 km beyond the first 3 (straight line): ¥210 at 6 km, ¥300 at 20. Values of time
+  ¥1,000 / ¥1,700 / ¥3,200 an hour; driving at 13 km/h in the centre, 20 elsewhere, ¥3,000 to park
+  in the loop and a 40-minute pull away from the car.
+* **Chaos**: night baseball at the Suidobashi dome and Jingu, stadium concerts, the Kudan hall,
+  grand sumo at Ryogoku (January, May, September), trade fairs and the summer and winter fan
+  conventions at Ariake, the Sumida river fireworks, the Sanja festival, Halloween in Shibuya; a
+  rainy June and typhoon autumn, scorching Augusts, hardly any snow; and about three earthquakes a
+  year that stop every train in the city for 10–30 minutes (Kanto zones, 35–70 km reach).
+* **Look**: `theme: 'tokyo'`: sumi-ink panels, a teal primary action, white **ring bullets** in
+  the line colour and the city's palette, and **station-number signs** ("A" over "03": the route's
+  letter over the station's place along it) in the station panel and the stations table.
+* **Goals**: cross the Sumida; reach all 23 wards (stretch); Shinjuku to Otemachi in under 20
+  minutes. Rider milestones 0.5M to 4M a day.
+* **Balance** (headless, `npx tsx scripts/tokyo-core.ts`, agent scale 20): three deep lines from
+  the terminals into the centre (Ikebukuro–Otemachi–Ginza–Shinjuku, Shibuya–Ginza–Ueno–Asakusa,
+  Nakano–Otemachi–Toyocho; 45 km, ¥1.27T of track) carry 1.9 million riders on day 3 and 2.25
+  million by day 8: 43–54% of each served terminal's commuters and 15% of the wards' own. Fares are
+  ¥440M a day against ¥97M to run, ¥26M of staff and ¥81M of upkeep. Every station on them is full
+  at the peak and 0.9 million people a day are turned away at the gates: build more. The first
+  month's value capture is ¥93M.
+* `tests/tokyo.test.ts` covers the data, the land and rivers, the rules, the Line tool's straight
+  platforms, a line from Shinjuku terminal with through-running, and the earthquakes.
 
 ## Train types and high-speed line
 
@@ -310,7 +376,11 @@ exactly as before.
 - **Line tool (L).** Click where each station goes; the track follows with curves between them,
   with a straight platform section at every stop. Start on an existing station or track end to
   extend it. Enter or double-click plans the track and stations, names the stations and (with
-  "Make a route along it" ticked) opens a route along them with the city's default trains.
+  "Make a route along it" ticked) opens a route along them with the city's default trains. Each
+  platform is fenced by straight-through vertices at its ends, and the curves beyond them get legs
+  long enough for the turn actually made there (solved over a few passes, with room for 30° at the
+  minimum radius), so a sharp turn at a stop or a line doubling back off existing track no longer
+  bends the platform or comes out under the minimum radius.
 - **Demand dots (Overlays → Demand: by home / by work).** About 12,000 dots, each a fixed number of
   commuters, coloured by how they travel: green walk, red drive, blue transit. Updated each morning.
 - **Airports and universities.** Heathrow, Gatwick, London City, Southampton, JFK and LaGuardia

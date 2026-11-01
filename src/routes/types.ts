@@ -1,8 +1,8 @@
 import type { StockId, TrackClass } from '../balance';
 
 /** Bullet shapes the player can pick for a route. */
-export type BulletShape = 'circle' | 'square' | 'diamond' | 'bar';
-export const BULLET_SHAPES: BulletShape[] = ['circle', 'square', 'diamond', 'bar'];
+export type BulletShape = 'circle' | 'square' | 'diamond' | 'bar' | 'ring';
+export const BULLET_SHAPES: BulletShape[] = ['circle', 'square', 'diamond', 'bar', 'ring'];
 export const isBulletShape = (v: unknown): v is BulletShape => BULLET_SHAPES.includes(v as BulletShape);
 
 export type PeriodId = 'night' | 'am' | 'midday' | 'pm' | 'evening';
@@ -113,9 +113,35 @@ export const ROUTE_COLORS_HSR = [
   '#9AA5B1', // silver
 ];
 
-/** The palette for a theme ('tfl' London style, 'hsr' the high-speed map; else New York style). */
+/**
+ * Tokyo (theme 'tokyo'): the city's subway palette, bright and many (a dozen lines share the
+ * centre), in the spirit of its line colours.
+ */
+export const ROUTE_COLORS_TOKYO = [
+  '#F39700', // orange
+  '#E60012', // red
+  '#00A7DB', // sky
+  '#009944', // green
+  '#9B7CB6', // purple
+  '#00ADA9', // emerald
+  '#D7C447', // gold
+  '#BB641D', // brown
+  '#E85298', // rose
+  '#0079C2', // blue
+  '#6CBB5A', // leaf
+  '#B6007A', // magenta
+  '#9CAEB7', // silver
+];
+
+/** The palette for a theme ('tfl' London style, 'hsr' the high-speed map, 'tokyo'; else New York style). */
 export function routePalette(theme: string): string[] {
-  return theme === 'tfl' ? ROUTE_COLORS_TFL : theme === 'hsr' ? ROUTE_COLORS_HSR : ROUTE_COLORS;
+  return theme === 'tfl' ? ROUTE_COLORS_TFL : theme === 'hsr' ? ROUTE_COLORS_HSR : theme === 'tokyo' ? ROUTE_COLORS_TOKYO : ROUTE_COLORS;
+}
+
+/** A station's number on a route ("G09" style): its place along the route, from 1. */
+export function stationNumber(route: { stops: number[] }, ids: readonly number[]): number {
+  const i = route.stops.findIndex((x) => ids.includes(x));
+  return i < 0 ? 0 : i + 1;
 }
 
 export const ROUTE_COLORS = [

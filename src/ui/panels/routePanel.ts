@@ -596,9 +596,9 @@ export function routeEditor(app: App, tool: RouteTool): Panel {
   });
   colors.append(custom);
   const shapes = h('div', { class: 'shape-row' }, h('span', { class: 'hw-muted', style: 'font-size:12px;margin-right:4px' }, 'Shape'));
-  const SHAPE_NAME: Record<BulletShape, string> = { circle: 'Disc', square: 'Square', diamond: 'Diamond', bar: 'Line bar' };
+  const SHAPE_NAME: Record<BulletShape, string> = { circle: 'Disc', square: 'Square', diamond: 'Diamond', bar: 'Line bar', ring: 'Ring' };
   for (const sh of BULLET_SHAPES)
-    shapes.append(h('button', { class: (d.shape ?? (city().theme !== 'mta' ? 'bar' : 'circle')) === sh ? 'on' : '', title: SHAPE_NAME[sh], onclick: () => { d.shape = sh; tool.recompute(); } }, bullet(d.color, d.bullet || '?', 22, false, sh)));
+    shapes.append(h('button', { class: (d.shape ?? (city().theme === 'mta' ? 'circle' : city().theme === 'tokyo' ? 'ring' : 'bar')) === sh ? 'on' : '', title: SHAPE_NAME[sh], onclick: () => { d.shape = sh; tool.recompute(); } }, bullet(d.color, d.bullet || '?', 22, false, sh)));
   body.append(section('Name and bullet'), h('div', { style: 'display:flex;gap:6px' }, name, bul), section('Colour and shape'), colors, shapes);
   // Train length and frequency
   if (d.cls) {

@@ -47,8 +47,13 @@ export interface CityConfig {
   /** Up to five region groups for charts (boroughs in NYC, sub-regions in London). */
   areas: string[];
   areaColors: string[];
-  /** Station names: "8th Av & W 42nd St" or a single place/street name ("Camden Road"). */
-  naming: 'cross-streets' | 'place';
+  /**
+   * Station names: "8th Av & W 42nd St", a single place/street name from the map ("Camden Road"),
+   * or the town the station is in, from the city's own data ('town': Tokyo's "Otemachi").
+   */
+  naming: 'cross-streets' | 'place' | 'town';
+  /** Tract names in the data are what people call the places (Japan, Tokyo): toasts and panels use them as they are. */
+  ownTractNames?: boolean;
   /** Title screen and loading copy. */
   blurb: string;
   people: string;
@@ -99,9 +104,14 @@ export interface CityConfig {
   relief?: boolean;
   /** What a tract's residents and jobs are, when not commuters (Japan: travellers from it, visitors to it). */
   tractWords?: { residents: string; jobs: string };
+  /** Fewest real people per agent (Tokyo's 6 million commuters run at 1 : 20 or coarser). */
+  minAgentScale?: number;
   /** Residents and jobs overlay ramps (per km²) and the least drawn, where they differ from the cities'. */
   overlayDensity?: { residents: [number, number]; jobs: [number, number]; min: number };
 }
 
-/** 'hsr': the national high-speed map (indigo panels, vermilion actions, line bars). */
-export type CityTheme = 'mta' | 'tfl' | 'hsr';
+/**
+ * 'hsr': the national high-speed map (indigo panels, vermilion actions, line bars). 'tokyo': ink
+ * panels, a teal primary action, ring bullets and station-number signs.
+ */
+export type CityTheme = 'mta' | 'tfl' | 'hsr' | 'tokyo';

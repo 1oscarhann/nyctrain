@@ -13,11 +13,12 @@ import { NYC } from './nyc';
 import { SOUTHEAST } from './southeast';
 import { BIRMINGHAM, BRISTOL, LEEDS, MANCHESTER } from './ukMetros';
 import { JAPAN } from './japan';
+import { TOKYO } from './tokyo';
 import type { CityConfig } from './types';
 
 export type { CityConfig, CityId };
 
-export const CITIES: Record<CityId, CityConfig> = { nyc: NYC, london: LONDON, southeast: SOUTHEAST, manchester: MANCHESTER, birmingham: BIRMINGHAM, leeds: LEEDS, bristol: BRISTOL, japan: JAPAN };
+export const CITIES: Record<CityId, CityConfig> = { nyc: NYC, london: LONDON, southeast: SOUTHEAST, manchester: MANCHESTER, birmingham: BIRMINGHAM, leeds: LEEDS, bristol: BRISTOL, japan: JAPAN, tokyo: TOKYO };
 export const CITY_IDS = Object.keys(CITIES) as CityId[];
 
 // New York's values as written in balance.ts, captured before any city is applied.
@@ -36,6 +37,7 @@ const DEFAULTS = {
   EVENTS: structuredClone(EVENTS),
   INCIDENTS: { signal: CHAOS.signal.perTrackKmDay, breakdown: CHAOS.breakdown.perTrainKm, sick: CHAOS.sick.perTrainKm, police: CHAOS.police.perStationDay },
   TRAIN_NAMES: Object.fromEntries(STOCK_IDS.map((s) => [s, TRAINS[s].name])) as Record<string, string>,
+  TRAIN_CAPACITY: Object.fromEntries(STOCK_IDS.map((s) => [s, { capacityComfort: TRAINS[s].capacityComfort, capacityCrush: TRAINS[s].capacityCrush }])) as Record<string, { capacityComfort: number; capacityCrush: number }>,
   DEFAULT_HEADWAYS: { ...OPERATIONS.defaultHeadways },
   HEADWAY_CHOICES: [...OPERATIONS.headwayChoices],
 };
@@ -70,7 +72,10 @@ export function applyCity(id: CityId): CityConfig {
   OPERATIONS.headwayChoices = [...(b.operations?.headwayChoices ?? DEFAULTS.HEADWAY_CHOICES)];
   setOrigin(b.origin[0], b.origin[1], b.projection);
   current = CITIES[id];
-  for (const s of STOCK_IDS) TRAINS[s].name = current.stockNames?.[s] ?? DEFAULTS.TRAIN_NAMES[s];
+  for (const s of STOCK_IDS) {
+    TRAINS[s].name = current.stockNames?.[s] ?? DEFAULTS.TRAIN_NAMES[s];
+    Object.assign(TRAINS[s], DEFAULTS.TRAIN_CAPACITY[s], b.trains?.[s] ?? {});
+  }
   setCurrency(current.currency, current.currencyScale ?? 1);
   // The look follows the city (CSS custom properties under [data-theme]); no DOM in the worker.
   if (typeof document !== 'undefined') document.documentElement.dataset.theme = current.theme;

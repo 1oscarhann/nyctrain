@@ -52,6 +52,19 @@ export function svgIcon(path: string, viewBox = '0 0 24 24'): SVGSVGElement {
  */
 import type { BulletShape } from '../routes/types';
 
+/**
+ * A station-number sign (Tokyo style): the route's letter over the station's number in a ring of
+ * the line colour ("G" over "09").
+ */
+export function stationSign(color: string, letter: string, num: number, size = 26): HTMLElement {
+  return h(
+    'span',
+    { class: 'station-sign', title: `${letter}${String(num).padStart(2, '0')}`, style: { width: size + 'px', height: size + 'px', borderColor: color, borderWidth: Math.max(2, Math.round(size * 0.12)) + 'px' } },
+    h('span', { class: 'l', style: { fontSize: Math.round(size * 0.34) + 'px' } }, letter),
+    h('span', { class: 'n', style: { fontSize: Math.round(size * 0.38) + 'px' } }, String(num).padStart(2, '0')),
+  );
+}
+
 export function bullet(color: string, text: string, size = 22, express = false, shape?: BulletShape): HTMLElement {
   const fontSize = Math.round(size * (text.length > 1 ? 0.48 : 0.6)) + 'px';
   if (!express && (shape === 'square' || shape === 'diamond')) {
@@ -61,9 +74,14 @@ export function bullet(color: string, text: string, size = 22, express = false, 
     const inner = Math.round(size * 0.74) + 'px';
     return h('span', { class: 'bullet diamond', style: { width: size + 'px', height: size + 'px', fontSize, color: ink } }, h('span', { class: 'diamond-bg', style: { background: color, width: inner, height: inner } }), h('span', { class: 'diamond-text' }, text));
   }
+  // Tokyo style: a white disc in a thick ring of the line colour.
+  const theme = document.documentElement.dataset.theme;
+  if (!express && (shape === 'ring' || (!shape && theme === 'tokyo'))) {
+    return h('span', { class: 'bullet ring', style: { width: size + 'px', height: size + 'px', fontSize, borderWidth: Math.max(2, Math.round(size * 0.16)) + 'px', borderColor: color } }, text);
+  }
   // London style: a line bar (a rounded rectangle in the line colour) instead of a disc; express
   // services keep the lozenge so they still read as different at a glance.
-  const barTheme = document.documentElement.dataset.theme === 'tfl' || document.documentElement.dataset.theme === 'hsr';
+  const barTheme = theme === 'tfl' || theme === 'hsr';
   if (!express && shape !== 'circle' && (shape === 'bar' || barTheme)) {
     return h(
       'span',

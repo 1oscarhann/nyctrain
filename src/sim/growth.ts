@@ -218,6 +218,8 @@ export class Growth {
   private readonly odWork: Uint16Array;
   /** All bands of each OD pair. */
   private readonly tot: Float32Array;
+  /** Railway terminals (Tokyo): their "residents" arrive by train and own no property here, so no value capture. */
+  private readonly terminal: Uint8Array;
 
   constructor(world: World, pace: GrowthPace = GROWTH.defaultPace) {
     const T = world.tracts.length;
@@ -243,6 +245,7 @@ export class Growth {
     this.tx = Float64Array.from(world.tracts, (t) => t.x);
     this.ty = Float64Array.from(world.tracts, (t) => t.y);
     this.tr = Float64Array.from(world.tracts, (t) => t.radius);
+    this.terminal = Uint8Array.from(world.tracts, (t) => (t.terminal ? 1 : 0));
     this.mRes = new Float32Array(T).fill(1);
     this.mJobs = new Float32Array(T).fill(1);
     this.fHome = new Float32Array(T).fill(1);
@@ -546,7 +549,7 @@ export class Growth {
         }
         sh = inside / DISTRICT_SAMPLES;
       }
-      if (sh <= 0) continue;
+      if (sh <= 0 || this.terminal[i]) continue;
       district[i] = 1;
       share[i] = sh;
       tracts++;

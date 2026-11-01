@@ -198,8 +198,10 @@ async function showTitle(root: HTMLElement, notice: string | null = null, skipCa
 
 function startGame(root: HTMLElement, view: MapView, p: { sandbox: boolean; save: SaveFile | null; tutorial: boolean; chaos?: ChaosLevel; company?: Omit<Company, 'founded'> }): void {
   const settings = loadSettings();
-  // Intertown has 6.35M commuters (twice a metro city): at least 1 : 20 keeps the agent count where New York's is at 1 : 10.
+  // Intertown has 6.35M commuters (twice a metro city), Tokyo 6.2M: at least 1 : 20 keeps the agent
+  // count where New York's is at 1 : 10.
   if (city().intertown) settings.agentScale = Math.max(settings.agentScale, 20);
+  settings.agentScale = Math.max(settings.agentScale, city().minAgentScale ?? 0);
   current = new App(root, view, world, land, {
     sandbox: p.sandbox,
     save: p.save,

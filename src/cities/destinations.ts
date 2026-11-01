@@ -73,6 +73,9 @@ const JAPAN_AIRPORTS: Airport[] = [
   jp('Hakodate Airport', 140.821, 41.7715, 4_000, [140.82, 41.768], [140.8215, 41.7755]),
 ];
 
+/** Tokyo (the subway map): Haneda, its station under the domestic terminals. */
+const HANEDA: Airport = { name: 'Haneda Airport', lon: 139.784, lat: 35.5505, perDay: 216_000, stub: { a: [139.7843, 35.5478], b: [139.7832, 35.5532], level: 'deep', station: 'Haneda Airport' } };
+
 export const AIRPORTS: Record<CityId, Airport[]> = {
   nyc: [
     { name: 'JFK Airport', lon: -73.7781, lat: 40.6413, perDay: 170_000, stub: { a: [-73.7855, 40.6455], b: [-73.7765, 40.6423], level: 'elevated', station: 'JFK Airport' } },
@@ -84,12 +87,32 @@ export const AIRPORTS: Record<CityId, Airport[]> = {
   leeds: [{ name: 'Leeds Bradford Airport', lon: -1.6606, lat: 53.8659, perDay: 11_000, stub: { a: [-1.6652, 53.8668], b: [-1.6562, 53.8656], level: 'at-grade', station: 'Leeds Bradford Airport' } }],
   bristol: [{ name: 'Bristol Airport', lon: -2.7191, lat: 51.3827, perDay: 27_000, stub: { a: [-2.7237, 51.3832], b: [-2.7148, 51.3824], level: 'at-grade', station: 'Bristol Airport' } }],
   japan: JAPAN_AIRPORTS,
+  tokyo: [HANEDA],
   southeast: [HEATHROW, CITY_AIRPORT, { name: 'Gatwick Airport', lon: -0.1821, lat: 51.1537, perDay: 118_000, stub: { a: [-0.1606, 51.1615], b: [-0.1616, 51.1515], level: 'at-grade', station: 'Gatwick Airport' } }, { name: 'Southampton Airport', lon: -1.3568, lat: 50.9503, perDay: 2_000, stub: { a: [-1.3628, 50.9555], b: [-1.3602, 50.9457], level: 'at-grade', station: 'Southampton Airport Parkway' } }],
 };
 
 export const CAMPUSES: Record<CityId, Campus[]> = {
   /** No students on the high-speed map: they don't commute by Shinkansen. */
   japan: [],
+  /** Main campuses in the wards (students counted where most of them study). */
+  tokyo: [
+    { name: 'University of Tokyo', lon: 139.7621, lat: 35.7126, students: 28_000 },
+    { name: 'Waseda University', lon: 139.7193, lat: 35.709, students: 47_000 },
+    { name: 'Meiji University', lon: 139.7612, lat: 35.6975, students: 22_000 },
+    { name: 'Nihon University', lon: 139.7578, lat: 35.6993, students: 20_000 },
+    { name: 'Hosei University', lon: 139.7393, lat: 35.6946, students: 22_000 },
+    { name: 'Toyo University', lon: 139.7489, lat: 35.7222, students: 22_000 },
+    { name: 'Rikkyo University', lon: 139.7037, lat: 35.7302, students: 17_000 },
+    { name: 'Keio University', lon: 139.7425, lat: 35.649, students: 15_000 },
+    { name: 'Aoyama Gakuin University', lon: 139.7108, lat: 35.6609, students: 14_000 },
+    { name: 'Komazawa University', lon: 139.6624, lat: 35.6301, students: 14_000 },
+    { name: 'Sophia University', lon: 139.7311, lat: 35.6838, students: 13_000 },
+    { name: 'Tokyo University of Science', lon: 139.7413, lat: 35.6997, students: 10_000 },
+    { name: 'Kokugakuin University', lon: 139.7135, lat: 35.6545, students: 10_000 },
+    { name: 'Gakushuin University', lon: 139.7066, lat: 35.7189, students: 9_000 },
+    { name: 'Institute of Science Tokyo', lon: 139.6837, lat: 35.605, students: 8_000 },
+    { name: 'Shibaura Institute of Technology', lon: 139.7965, lat: 35.6608, students: 8_000 },
+  ],
   nyc: [
     { name: 'New York University', lon: -73.9965, lat: 40.7295, students: 59_000 },
     { name: 'Columbia University', lon: -73.9626, lat: 40.8075, students: 36_000 },

@@ -17,6 +17,7 @@ type Scene = SceneData & { commuters: number; areas: number; source: string };
 const MAPS: { id: CityId; mode: string }[] = [
   { id: 'london', mode: 'Metro' },
   { id: 'nyc', mode: 'Metro' },
+  { id: 'tokyo', mode: 'Metro' },
   { id: 'manchester', mode: 'Metro' },
   { id: 'birmingham', mode: 'Metro' },
   { id: 'leeds', mode: 'Metro' },
